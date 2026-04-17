@@ -25,20 +25,16 @@ If `whoami` shows a different account, **stop** — fix the auth before proceedi
 
 ---
 
-## 1. Initialise git and push to GitHub
+## 1. Push to GitHub
+
+The repo is already initialised and the v1 build (P1–P9) has been committed
+on `main` locally. Just create the remote and push:
+
+Create the repo on GitHub (UI: https://github.com/new — name it `printlay`, private), then:
 
 ```bash
 cd /Users/anthonymagic/Sites/PrintLay
-git init
-git add .
-git commit -m "P1: project skeleton (FastAPI + Vite + Tailwind + GH Actions)"
-```
-
-Then create the repo on GitHub (UI: https://github.com/new — name it `printlay`, private), and:
-
-```bash
 git remote add origin git@github.com:<YOUR_GITHUB_USERNAME>/printlay.git
-git branch -M main
 git push -u origin main
 ```
 
@@ -135,9 +131,20 @@ export DATABASE_URL='postgresql+psycopg://postgres.<id>:<password>@aws-0-eu-west
 alembic upgrade head
 ```
 
-You should see all four migrations applied (`0001_users`, `0002_templates`, `0003_jobs_assets_outputs`). Verify in the Supabase dashboard → Table Editor that the tables `users`, `templates`, `jobs`, `asset_categories`, `assets`, `outputs` now exist.
+You should see all four migrations applied (`0001_users`, `0002_templates`, `0003_jobs_assets_outputs`, `0004_audit_events`). Verify in the Supabase dashboard → Table Editor that the tables `users`, `templates`, `jobs`, `asset_categories`, `assets`, `outputs`, `audit_events` now exist.
 
 For future schema changes, run `alembic revision --autogenerate -m "..."` after editing models, review the generated file, then `alembic upgrade head`.
+
+### 4c.1. Optional new env vars
+
+Two new optional secrets you may want to set:
+
+```bash
+fly secrets set CORS_EXTRA_ORIGINS='https://app.example.com' -a printlay   # if SPA is hosted off-Fly
+fly secrets set RATE_LIMIT_GENERATE_PER_HOUR=120 -a printlay              # default is 60/user/hour
+```
+
+If left unset, defaults are: same-origin only for CORS, 60 PDF generations/user/hour.
 
 ### 4d. First Fly deploy
 

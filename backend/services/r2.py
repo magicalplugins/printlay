@@ -1,0 +1,82 @@
+"""Cloudflare R2 client - S3-compatible API via boto3."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import BinaryIO
+
+import boto3
+from botocore.client import Config
+
+from backend.config import get_settings
+
+
+class R2NotConfigured(RuntimeError):
+    pass
+
+
+@lru_cache(maxsize=1)
+def _client():
+    settings = get_settings()
+    if not (settings.r2_endpoint and settings.r2_access_key and settings.r2_secret_key):
+        raise R2NotConfigured(
+            "R2 is not configured. Set R2_ENDPOINT, R2_ACCESS_KEY, R2_SECRET_KEY via fly secrets."
+        )
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.r2_endpoint,
+        aws_access_key_id=settings.r2_access_key,
+        aws_secret_access_key=settings.r2_secret_key,
+        region_name="auto",
+        config=Config(signature_version="s3v4", retries={"max_attempts": 3}),
+    )
+
+
+def _bucket() -> str:
+    settings = get_settings()
+    if not settings.r2_bucket:
+        raise R2NotConfigured("R2_BUCKET not set")
+    return settings.r2_bucket
+
+
+def put_bytes(key: str, body: bytes, content_type: str = "application/octet-stream") -> str:
+    _client().put_object(Bucket=_bucket(), Key=key, Body=body, ContentType=content_type)
+    return key
+
+
+def put_stream(key: str, fileobj: BinaryIO, content_type: str = "application/octet-stream") -> str:
+    _client().upload_fileobj(
+        Fileobj=fileobj,
+        Bucket=_bucket(),
+        Key=key,
+        ExtraArgs={"ContentType": content_type},
+    )
+    return key
+
+
+def get_bytes(key: str) -> bytes:
+    obj = _client().get_object(Bucket=_bucket(), Key=key)
+    return obj["Body"].read()
+
+
+def delete(key: str) -> None:
+    _client().delete_object(Bucket=_bucket(), Key=key)
+
+
+def presigned_get(key: str, expires_in: int = 3600, download_filename: str | None = None) -> str:
+    params: dict = {"Bucket": _bucket(), "Key": key}
+    if download_filename:
+        params["ResponseContentDisposition"] = (
+            f'attachment; filename="{download_filename}"'
+        )
+    return _client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
+
+
+def is_configured() -> bool:
+    settings = get_settings()
+    return bool(
+        settings.r2_endpoint
+        and settings.r2_access_key
+        and settings.r2_secret_key
+        and settings.r2_bucket
+    )

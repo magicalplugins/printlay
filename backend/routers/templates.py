@@ -11,7 +11,7 @@ from backend.auth import AuthenticatedUser, get_current_user
 from backend.database import get_db
 from backend.models import Template, User
 from backend.schemas.template import GenerateRequest, TemplateOut
-from backend.services import pdf_generator, pdf_parser, r2
+from backend.services import pdf_generator, pdf_parser, storage
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
@@ -93,8 +93,8 @@ async def upload_template(
     template_id = uuid.uuid4()
     r2_key = f"users/{user.id}/templates/{template_id}/source.pdf"
     try:
-        r2.put_bytes(r2_key, body, content_type="application/pdf")
-    except r2.R2NotConfigured as exc:
+        storage.put_bytes(r2_key, body, content_type="application/pdf")
+    except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
     tpl = Template(
@@ -153,8 +153,8 @@ def generate_template(
     template_id = uuid.uuid4()
     r2_key = f"users/{user.id}/templates/{template_id}/source.pdf"
     try:
-        r2.put_bytes(r2_key, gen.pdf_bytes, content_type="application/pdf")
-    except r2.R2NotConfigured as exc:
+        storage.put_bytes(r2_key, gen.pdf_bytes, content_type="application/pdf")
+    except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
     tpl = Template(
@@ -190,7 +190,7 @@ def delete_template(
     if tpl is None:
         raise HTTPException(404, "Template not found")
     try:
-        r2.delete(tpl.r2_key)
+        storage.delete(tpl.r2_key)
     except Exception:
         pass
     db.delete(tpl)
@@ -210,5 +210,5 @@ def download_template(
     if tpl is None:
         raise HTTPException(404, "Template not found")
     safe_name = "".join(c if c.isalnum() or c in "-_." else "-" for c in tpl.name)
-    url = r2.presigned_get(tpl.r2_key, expires_in=3600, download_filename=f"{safe_name}.pdf")
+    url = storage.presigned_get(tpl.r2_key, expires_in=3600, download_filename=f"{safe_name}.pdf")
     return {"url": url, "expires_in": 3600}

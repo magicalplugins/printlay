@@ -12,7 +12,7 @@ from backend.database import get_db
 from backend.models import Asset, AssetCategory, User
 from backend.routers.templates import _resolve_user
 from backend.schemas.asset import AssetOut, CategoryCreate, CategoryOut
-from backend.services import asset_pipeline, catalogue_bundle, r2
+from backend.services import asset_pipeline, catalogue_bundle, storage
 
 router = APIRouter(prefix="/api", tags=["catalogue"])
 
@@ -69,7 +69,7 @@ def delete_category(
         for k in (a.r2_key, a.r2_key_original, a.thumbnail_r2_key):
             if k:
                 try:
-                    r2.delete(k)
+                    storage.delete(k)
                 except Exception:
                     pass
     db.delete(cat)
@@ -95,7 +95,7 @@ def list_assets(
         thumb_url = None
         if r.thumbnail_r2_key:
             try:
-                thumb_url = r2.presigned_get(r.thumbnail_r2_key, expires_in=3600)
+                thumb_url = storage.presigned_get(r.thumbnail_r2_key, expires_in=3600)
             except Exception:
                 thumb_url = None
         out.append(
@@ -145,12 +145,12 @@ async def upload_asset(
     key_orig = f"{base}/original.{norm.kind}" if norm.original_kept else None
 
     try:
-        r2.put_bytes(key_pdf, norm.pdf_bytes, content_type="application/pdf")
+        storage.put_bytes(key_pdf, norm.pdf_bytes, content_type="application/pdf")
         if norm.thumbnail_jpg:
-            r2.put_bytes(key_thumb, norm.thumbnail_jpg, content_type="image/jpeg")
+            storage.put_bytes(key_thumb, norm.thumbnail_jpg, content_type="image/jpeg")
         if key_orig:
-            r2.put_bytes(key_orig, body, content_type=file.content_type or "application/octet-stream")
-    except r2.R2NotConfigured as exc:
+            storage.put_bytes(key_orig, body, content_type=file.content_type or "application/octet-stream")
+    except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
     asset = Asset(
@@ -173,7 +173,7 @@ async def upload_asset(
     thumb_url = None
     if asset.thumbnail_r2_key:
         try:
-            thumb_url = r2.presigned_get(asset.thumbnail_r2_key, expires_in=3600)
+            thumb_url = storage.presigned_get(asset.thumbnail_r2_key, expires_in=3600)
         except Exception:
             thumb_url = None
 
@@ -206,12 +206,12 @@ def export_category(
     )
 
     def load_pdf(a: Asset) -> bytes:
-        return r2.get_bytes(a.r2_key)
+        return storage.get_bytes(a.r2_key)
 
     def load_thumb(a: Asset) -> bytes | None:
         if not a.thumbnail_r2_key:
             return None
-        return r2.get_bytes(a.thumbnail_r2_key)
+        return storage.get_bytes(a.thumbnail_r2_key)
 
     bundle = catalogue_bundle.export_bundle(cat.name, assets, load_pdf, load_thumb)
     safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in cat.name).strip("_") or "category"
@@ -261,10 +261,10 @@ async def import_category(
         key_pdf = f"{base}/normalised.pdf"
         key_thumb = f"{base}/thumb.jpg"
         try:
-            r2.put_bytes(key_pdf, ba.pdf_bytes, content_type="application/pdf")
+            storage.put_bytes(key_pdf, ba.pdf_bytes, content_type="application/pdf")
             if ba.thumbnail_jpg:
-                r2.put_bytes(key_thumb, ba.thumbnail_jpg, content_type="image/jpeg")
-        except r2.R2NotConfigured as exc:
+                storage.put_bytes(key_thumb, ba.thumbnail_jpg, content_type="image/jpeg")
+        except storage.StorageNotConfigured as exc:
             raise HTTPException(503, str(exc))
 
         asset = Asset(
@@ -308,7 +308,7 @@ def delete_asset(
     for k in (asset.r2_key, asset.r2_key_original, asset.thumbnail_r2_key):
         if k:
             try:
-                r2.delete(k)
+                storage.delete(k)
             except Exception:
                 pass
     db.delete(asset)

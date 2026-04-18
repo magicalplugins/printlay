@@ -10,7 +10,7 @@ from backend.database import get_db
 from backend.models import Output
 from backend.routers.templates import _resolve_user
 from backend.schemas.output import OutputOut
-from backend.services import r2
+from backend.services import storage
 
 router = APIRouter(prefix="/api/outputs", tags=["outputs"])
 
@@ -42,7 +42,7 @@ def download_output(
     if out is None:
         raise HTTPException(404, "Output not found")
     safe = "".join(c if c.isalnum() or c in "-_." else "-" for c in out.name)
-    url = r2.presigned_get(out.r2_key, expires_in=3600, download_filename=safe)
+    url = storage.presigned_get(out.r2_key, expires_in=3600, download_filename=safe)
     return {"url": url, "expires_in": 3600}
 
 
@@ -59,7 +59,7 @@ def delete_output(
     if out is None:
         raise HTTPException(404, "Output not found")
     try:
-        r2.delete(out.r2_key)
+        storage.delete(out.r2_key)
     except Exception:
         pass
     db.delete(out)

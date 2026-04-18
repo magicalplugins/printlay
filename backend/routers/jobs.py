@@ -14,7 +14,7 @@ from backend.rate_limit import generate_limit, limiter
 from backend.routers.templates import _resolve_user
 from backend.schemas.job import FillRequest, JobCreate, JobOut, JobUpdate
 from backend.schemas.output import OutputOut
-from backend.services import pdf_compositor, r2
+from backend.services import pdf_compositor, storage
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -186,8 +186,8 @@ def generate_output(
     tpl = db.query(Template).filter(Template.id == job.template_id).one()
 
     try:
-        template_bytes = r2.get_bytes(tpl.r2_key)
-    except r2.R2NotConfigured as exc:
+        template_bytes = storage.get_bytes(tpl.r2_key)
+    except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
     asset_pdfs: dict[int, bytes] = {}
@@ -201,7 +201,7 @@ def generate_output(
         if asset is None:
             continue
         try:
-            asset_pdfs[int(slot_key)] = r2.get_bytes(asset.r2_key)
+            asset_pdfs[int(slot_key)] = storage.get_bytes(asset.r2_key)
         except Exception as exc:
             raise HTTPException(500, f"Failed to load asset {asset_id}: {exc}")
 
@@ -219,7 +219,7 @@ def generate_output(
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     name = f"{job.name} — {timestamp}.pdf"
     r2_key = f"users/{user.id}/outputs/{output_id}.pdf"
-    r2.put_bytes(r2_key, sheet.pdf_bytes, content_type="application/pdf")
+    storage.put_bytes(r2_key, sheet.pdf_bytes, content_type="application/pdf")
 
     out = Output(
         id=output_id,

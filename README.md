@@ -23,7 +23,7 @@ asset catalogue, and export a print-ready PDF whose artboard is preserved
 - **Raster pipeline:** Pillow → embedded JPEG @ 300 DPI
 - **SVG pipeline:** cairosvg → PDF (libcairo2 baked into the runtime image)
 - **Auth + DB:** Supabase (Auth + Postgres), JWT verified server-side
-- **File storage:** Cloudflare R2 (zero egress, S3-compatible via boto3)
+- **File storage:** Fly Tigris (S3-compatible, zero egress; auto-provisioned via `fly storage create`). Code is vendor-neutral S3 — drop in R2 / AWS S3 / MinIO by overriding `STORAGE_*` secrets.
 - **Rate limiting:** slowapi (in-memory; swap to Redis if we scale to N replicas)
 - **CI/CD:** GitHub Actions → `fly deploy` on push to `main`
 
@@ -73,10 +73,11 @@ SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_JWT_SECRET=
 DATABASE_URL=postgres://...                  # Supabase Postgres pooler URL
-R2_ENDPOINT=https://<account>.r2.cloudflarestorage.com
-R2_ACCESS_KEY=
-R2_SECRET_KEY=
-R2_BUCKET=printlay-files
+STORAGE_ENDPOINT=https://fly.storage.tigris.dev
+STORAGE_ACCESS_KEY=
+STORAGE_SECRET_KEY=
+STORAGE_BUCKET=printlay-files
+STORAGE_REGION=auto                          # ignored by Tigris; required by some S3 clients
 ENVIRONMENT=development                      # `production` locks down CORS
 CORS_EXTRA_ORIGINS=                          # CSV of allowed cross-origin SPA origins
 RATE_LIMIT_GENERATE_PER_HOUR=60              # ceiling per user on /jobs/{id}/generate
@@ -93,9 +94,10 @@ In production, set these via `fly secrets set KEY=value` — see `SETUP.md`.
   `Authorization: Bearer ...` to every API call. `backend.auth.jwt` verifies
   signatures with the project's JWT secret and JIT-creates a row in our
   `users` table on first request (`/api/auth/me`).
-- **Object storage.** Templates, assets, and outputs live in R2 under
-  `users/{uid}/...` keys. The API issues short-lived presigned URLs for
-  downloads so we never proxy large bytes through the app.
+- **Object storage.** Templates, assets, and outputs live in S3-compatible
+  storage (Fly Tigris in production) under `users/{uid}/...` keys. The API
+  issues short-lived presigned URLs for downloads so we never proxy large
+  bytes through the app.
 - **PDF pipeline.**
   - `pdf_parser` extracts page dimensions and the bounding boxes of any
     drawing on the `POSITIONS` OCG layer.
@@ -117,7 +119,7 @@ In production, set these via `fly secrets set KEY=value` — see `SETUP.md`.
 
 ## Build phases (delivered)
 
-- **P1** Skeleton + Fly + Supabase + R2 wiring
+- **P1** Skeleton + Fly + Supabase + S3-compatible storage wiring
 - **P2** Auth via Supabase JWT
 - **P2.5** Landing page (Gen-Z animated front door)
 - **P3** Template wizard — upload path (parse `POSITIONS` shapes)
@@ -133,5 +135,5 @@ In production, set these via `fly secrets set KEY=value` — see `SETUP.md`.
 ## Deploy
 
 Push to `main` → GitHub Actions runs `fly deploy`. See `SETUP.md` for the
-one-time bootstrap (Fly app, Supabase project, R2 bucket, GitHub secrets,
+one-time bootstrap (Fly app, Supabase project, Tigris bucket, GitHub secrets,
 Alembic migrations).

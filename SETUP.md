@@ -40,19 +40,16 @@ git push -u origin main
 
 ---
 
-## 2. Cloudflare R2 — bucket + token
+## 2. Object storage — Fly Tigris
 
-1. Sign in at https://dash.cloudflare.com → R2.
-2. Create bucket: name it `printlay-files` (location: Automatic).
-3. Manage R2 API Tokens → "Create API Token":
-   - Permissions: **Object Read & Write**
-   - Specify bucket: `printlay-files`
-   - TTL: leave blank (no expiry)
-4. Copy these four values somewhere safe:
-   - Access Key ID
-   - Secret Access Key
-   - Endpoint (looks like `https://<account-id>.r2.cloudflarestorage.com`)
-   - Bucket name (`printlay-files`)
+We use Fly's native S3-compatible storage (Tigris). It has zero egress fees,
+lives in the same edge as the app, and one CLI command provisions everything.
+
+You don't do this step now — it's done in step 4 below, after the Fly app is
+created, with a single command (`fly storage create`). Skip ahead to step 3.
+
+> The code is vendor-neutral S3 (boto3). If you ever want to swap to Cloudflare
+> R2, AWS S3, MinIO, etc., just override the `STORAGE_*` secrets — no code change.
 
 ---
 
@@ -95,7 +92,22 @@ fly apps list
 # You should still see tradeprint-shopify, murphys-magic-connector, AND now printlay.
 ```
 
-### 4b. Set all secrets in one shot
+### 4b. Provision Tigris storage (one command, auto-injects secrets)
+
+```bash
+fly storage create -a printlay
+```
+
+When prompted:
+- Bucket name: `printlay-files` (or accept the auto-generated one)
+- Public/Private: **Private** (we serve via presigned URLs)
+
+This creates an S3-compatible bucket and **automatically sets these secrets on
+the `printlay` app**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `BUCKET_NAME`. The backend's config layer
+picks these up automatically — no manual `fly secrets set` needed for storage.
+
+### 4c. Set the Supabase + app secrets
 
 ```bash
 fly secrets set \
@@ -105,10 +117,6 @@ fly secrets set \
   SUPABASE_SERVICE_ROLE_KEY='...' \
   SUPABASE_JWT_SECRET='...' \
   DATABASE_URL='postgresql+psycopg://postgres.<id>:<password>@aws-0-eu-west-2.pooler.supabase.com:6543/postgres' \
-  R2_ENDPOINT='https://<account>.r2.cloudflarestorage.com' \
-  R2_ACCESS_KEY='...' \
-  R2_SECRET_KEY='...' \
-  R2_BUCKET='printlay-files' \
   -a printlay
 ```
 
@@ -118,9 +126,10 @@ Verify secrets are set (digests only, no values shown):
 
 ```bash
 fly secrets list -a printlay
+# You should see SUPABASE_*, DATABASE_URL, AWS_*, BUCKET_NAME, ENVIRONMENT.
 ```
 
-### 4c. Run the database migrations (first deploy only, then on every schema change)
+### 4d. Run the database migrations (first deploy only, then on every schema change)
 
 The schema is managed by Alembic. Run migrations against the Supabase pooler URL from your laptop **before** the first Fly deploy:
 
@@ -135,7 +144,7 @@ You should see all four migrations applied (`0001_users`, `0002_templates`, `000
 
 For future schema changes, run `alembic revision --autogenerate -m "..."` after editing models, review the generated file, then `alembic upgrade head`.
 
-### 4c.1. Optional new env vars
+### 4d.1. Optional new env vars
 
 Two new optional secrets you may want to set:
 
@@ -146,7 +155,7 @@ fly secrets set RATE_LIMIT_GENERATE_PER_HOUR=120 -a printlay              # defa
 
 If left unset, defaults are: same-origin only for CORS, 60 PDF generations/user/hour.
 
-### 4d. First Fly deploy
+### 4e. First Fly deploy
 
 ```bash
 fly deploy -a printlay
@@ -154,7 +163,7 @@ fly deploy -a printlay
 
 Watch the build. On success, the app is live at `https://printlay.fly.dev`.
 
-### 4e. Verify
+### 4f. Verify
 
 ```bash
 fly status -a printlay
@@ -165,7 +174,7 @@ curl https://printlay.fly.dev/api/health
 
 Open https://printlay.fly.dev in a browser — you should see the placeholder hero with the green health check at the bottom.
 
-### 4f. Isolation check (run after deploy)
+### 4g. Isolation check (run after deploy)
 
 ```bash
 fly apps list                                # all 3 apps still listed
@@ -245,7 +254,7 @@ The repo already contains, end-to-end:
 - **P1**: FastAPI + Vite skeleton, Dockerfile, `fly.toml`, GitHub Actions auto-deploy.
 - **P2**: Supabase JWT verify, `/api/auth/me`, frontend `AuthProvider` + `RequireAuth`, login/register pages.
 - **P2.5**: Animated Gen-Z landing page (Hero + 4-step `KineticSteps` + `DemoClip` slot + `SignupBlock`).
-- **P3**: Templates table + Alembic migration, PyMuPDF parser (POSITIONS OCG detection), R2 client, upload endpoint, Templates list + detail (PDF.js renderer + slot overlay).
+- **P3**: Templates table + Alembic migration, PyMuPDF parser (POSITIONS OCG detection), S3-compatible storage client (Tigris in prod), upload endpoint, Templates list + detail (PDF.js renderer + slot overlay).
 - **P4**: PDF generator (auto-fit grid of rect/circles on POSITIONS OCG), generate endpoint, wizard generate-step with live SVG preview.
 - **P5**: Jobs table, JobProgrammer (click-to-number + auto-row-order), CRUD endpoints.
 - **P6**: Categories + assets tables, asset upload pipeline (PDF normalisation, JPEG thumbs, raster→PDF, SVG→PDF), Catalogue page.
@@ -256,9 +265,9 @@ The repo already contains, end-to-end:
 
 ## What I need from you to take it live
 
-1. Complete steps 1–5 above (git push, R2, Supabase, Fly secrets, GitHub Actions token).
-2. Run `alembic upgrade head` against the Supabase pooler URL (step 4c).
-3. `fly deploy -a printlay` (step 4d).
+1. Complete steps 1–5 above (git push, Supabase, Fly app + Tigris + secrets, GitHub Actions token).
+2. Run `alembic upgrade head` against the Supabase pooler URL (step 4d).
+3. `fly deploy -a printlay` (step 4e).
 4. Visit `https://printlay.fly.dev`, register an account, then walk:
    - Templates → New template → Generate (e.g. 297×210mm, 55mm circles, 5mm gap) → opens in detail view with overlay.
    - Catalogue → New category → upload a few PNGs/PDFs.
@@ -269,5 +278,5 @@ The repo already contains, end-to-end:
 Open items pre-launch:
 - **PyMuPDF licensing**. PyMuPDF is AGPL-3.0; using it in a hosted SaaS is generally fine if you're not distributing the binary, but Artifex (the upstream) sells commercial licences if you want to be conservative. Decide before public launch.
 - **Email confirmation**. Supabase defaults to requiring email confirmation. If you want to skip it during early testing, Authentication → Providers → Email → toggle "Confirm email" off.
-- **Free-tier rate limiting**. No per-user rate limit on `/jobs/{id}/generate` yet — fine for v1, worth adding once subscriber count grows.
+- **Billing**. Deferred until product validation. Plan: integrate `licensemanager.at` (already running on `magicalplugins.com`) so Printlay subscribers go through the same WooCommerce checkout / invoicing / VAT flow as your existing plugins. Code is structured so the entitlements layer can be added later without touching the core designer.
 

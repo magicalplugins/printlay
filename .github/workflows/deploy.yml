@@ -13,6 +13,10 @@ jobs:
   deploy:
     name: fly deploy
     runs-on: ubuntu-latest
+    # Skip the job entirely if the FLY_API_TOKEN secret isn't configured,
+    # so the workflow doesn't red-X every push during initial setup. Add the
+    # secret in Settings -> Secrets and variables -> Actions to enable.
+    if: ${{ vars.ENABLE_FLY_DEPLOY == 'true' }}
     steps:
       - uses: actions/checkout@v4
 

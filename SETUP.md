@@ -113,20 +113,28 @@ picks these up automatically — no manual `fly secrets set` needed for storage.
 fly secrets set \
   ENVIRONMENT=production \
   SUPABASE_URL='https://<id>.supabase.co' \
-  SUPABASE_ANON_KEY='...' \
-  SUPABASE_SERVICE_ROLE_KEY='...' \
-  SUPABASE_JWT_SECRET='...' \
+  SUPABASE_ANON_KEY='sb_publishable_...' \
+  SUPABASE_SERVICE_ROLE_KEY='sb_secret_...' \
   DATABASE_URL='postgresql+psycopg://postgres.<id>:<password>@aws-0-eu-west-2.pooler.supabase.com:6543/postgres' \
   -a printlay
 ```
 
 (The pooler hostname/port differs by Supabase region — paste exactly what Supabase shows you under Database → Connection string → Transaction.)
 
+> **JWT verification.** New Supabase projects sign user tokens with an
+> asymmetric key (ES256/RS256) published at
+> `<SUPABASE_URL>/auth/v1/.well-known/jwks.json`. The backend fetches and
+> caches that JWKS automatically — there is **no** `SUPABASE_JWT_SECRET`
+> to set. If you ever migrate to (or restore) a legacy HS256 project, set
+> `SUPABASE_JWT_SECRET=<hex>` and the verifier will fall back to it for
+> tokens missing a `kid` header.
+
 Verify secrets are set (digests only, no values shown):
 
 ```bash
 fly secrets list -a printlay
-# You should see SUPABASE_*, DATABASE_URL, AWS_*, BUCKET_NAME, ENVIRONMENT.
+# You should see SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
+# DATABASE_URL, AWS_*, BUCKET_NAME, ENVIRONMENT.
 ```
 
 ### 4d. Run the database migrations (first deploy only, then on every schema change)

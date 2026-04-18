@@ -69,9 +69,9 @@ Copy `.env.example` → `.env` and fill in:
 
 ```
 SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-SUPABASE_JWT_SECRET=
+SUPABASE_ANON_KEY=                           # `sb_publishable_...` (or legacy anon JWT)
+SUPABASE_SERVICE_ROLE_KEY=                   # `sb_secret_...` (or legacy service-role JWT)
+SUPABASE_JWT_SECRET=                         # only on legacy HS256 projects; modern projects use JWKS
 DATABASE_URL=postgres://...                  # Supabase Postgres pooler URL
 STORAGE_ENDPOINT=https://fly.storage.tigris.dev
 STORAGE_ACCESS_KEY=

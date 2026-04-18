@@ -8,6 +8,8 @@ export type Shape = {
   is_position_slot: boolean;
 };
 
+export type SpacingMode = "fixed" | "even";
+
 export type Template = {
   id: string;
   name: string;
@@ -50,6 +52,8 @@ export type GenerateRequest = {
     gap_x: number;
     gap_y: number;
     center: boolean;
+    edge_margin: number;
+    spacing_mode: SpacingMode;
   };
 };
 

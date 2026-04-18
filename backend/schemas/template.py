@@ -40,8 +40,20 @@ class GenerateShape(BaseModel):
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     gap_x: float = Field(ge=0, default=0)
+    """Horizontal spacing between shapes when ``spacing_mode='fixed'``."""
     gap_y: float = Field(ge=0, default=0)
+    """Vertical spacing between shapes when ``spacing_mode='fixed'``."""
     center: bool = True
+    """In fixed mode, centre the grid inside the available area."""
+    edge_margin: float = Field(ge=0, default=0)
+    """Inviolable margin (in template ``units``) on all four sides of the
+    artboard. No slot will be placed inside this margin. Increasing the
+    margin shrinks the available area and may drop a row/column."""
+    spacing_mode: Literal["fixed", "even"] = "fixed"
+    """``fixed``: slots are spaced exactly ``gap_x``/``gap_y`` apart.
+    ``even``: pack as many slots as fit edge-to-edge inside the available
+    area, then distribute the leftover space evenly between them so the
+    outermost slots sit flush against the safe-zone edges."""
 
 
 class GenerateRequest(BaseModel):

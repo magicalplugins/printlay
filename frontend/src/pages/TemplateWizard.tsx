@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   GenerateRequest,
+  SpacingMode,
   generateTemplate,
   uploadTemplate,
 } from "../api/templates";
@@ -146,10 +147,15 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
   const [sh, setSh] = useState(55);
   const [gx, setGx] = useState(5);
   const [gy, setGy] = useState(5);
+  const [edgeMargin, setEdgeMargin] = useState(0);
+  const [spacingMode, setSpacingMode] = useState<SpacingMode>("fixed");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const preview = useMemo(() => fitGrid(aw, ah, sw, sh, gx, gy), [aw, ah, sw, sh, gx, gy]);
+  const layout = useMemo(
+    () => fitLayout(aw, ah, sw, sh, gx, gy, edgeMargin, spacingMode),
+    [aw, ah, sw, sh, gx, gy, edgeMargin, spacingMode]
+  );
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -158,7 +164,16 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
     const req: GenerateRequest = {
       name: name || `Generated ${aw}x${ah}${units}`,
       artboard: { width: aw, height: ah, units },
-      shape: { kind, width: sw, height: sh, gap_x: gx, gap_y: gy, center: true },
+      shape: {
+        kind,
+        width: sw,
+        height: sh,
+        gap_x: gx,
+        gap_y: gy,
+        center: true,
+        edge_margin: edgeMargin,
+        spacing_mode: spacingMode,
+      },
     };
     try {
       const tpl = await generateTemplate(req);
@@ -216,35 +231,72 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
             <NumberField label="Width" value={sw} onChange={setSw} />
             <NumberField label="Height" value={sh} onChange={setSh} />
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
-            <NumberField label="Gap X" value={gx} onChange={setGx} />
-            <NumberField label="Gap Y" value={gy} onChange={setGy} />
+        </Section>
+
+        <Section title="Layout">
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label={`Edge margin (${units})`}
+              value={edgeMargin}
+              onChange={setEdgeMargin}
+            />
+            <Select
+              label="Spacing"
+              value={spacingMode}
+              onChange={(v) => setSpacingMode(v as SpacingMode)}
+              options={[
+                { v: "fixed", l: "Fixed gap" },
+                { v: "even", l: "Distribute evenly" },
+              ]}
+            />
           </div>
+          {spacingMode === "fixed" && (
+            <div className="grid grid-cols-2 gap-3 mt-3">
+              <NumberField label={`Gap X (${units})`} value={gx} onChange={setGx} />
+              <NumberField label={`Gap Y (${units})`} value={gy} onChange={setGy} />
+            </div>
+          )}
+          <p className="text-xs text-neutral-500 mt-3 leading-relaxed">
+            {spacingMode === "fixed"
+              ? `Slots are placed exactly ${gx}\u202F${units} apart horizontally and ${gy}\u202F${units} vertically. The grid is centred inside the safe zone; rows/columns that don't fit are dropped.`
+              : "Slots are packed flush against the safe-zone edges with leftover space distributed evenly between them. Slot size never changes."}
+            {edgeMargin > 0 && (
+              <>
+                {" "}No slot will appear within{" "}
+                <span className="text-neutral-300">
+                  {edgeMargin}&nbsp;{units}
+                </span>{" "}
+                of the artboard edge.
+              </>
+            )}
+          </p>
         </Section>
 
         {err && <div className="text-sm text-rose-400">{err}</div>}
 
         <button
           type="submit"
-          disabled={busy || preview.cols < 1 || preview.rows < 1}
+          disabled={busy || layout.cols < 1 || layout.rows < 1}
           className="rounded-lg bg-white px-6 py-3 font-semibold text-neutral-950 hover:bg-neutral-200 disabled:opacity-40"
         >
-          {busy ? "Generating…" : `Generate (${preview.cols}×${preview.rows} = ${preview.cols * preview.rows})`}
+          {busy
+            ? "Generating…"
+            : `Generate (${layout.cols}×${layout.rows} = ${layout.cols * layout.rows})`}
         </button>
       </div>
 
       <div className="lg:sticky lg:top-20 self-start">
         <div className="text-sm text-neutral-400 mb-2">
-          Preview: {preview.cols} × {preview.rows} = {preview.cols * preview.rows} slots
+          Preview: {layout.cols} × {layout.rows} = {layout.cols * layout.rows} slots
         </div>
         <GeneratorPreview
           artboardW={aw}
           artboardH={ah}
           shapeW={sw}
           shapeH={sh}
-          gapX={gx}
-          gapY={gy}
+          edgeMargin={edgeMargin}
           kind={kind}
+          layout={layout}
         />
       </div>
     </form>
@@ -327,18 +379,65 @@ function BackLink({ onBack }: { onBack: () => void }) {
   );
 }
 
-function fitGrid(
+type Layout = {
+  cols: number;
+  rows: number;
+  /** Slot leading-edge positions in artboard units (origin top-left). */
+  xs: number[];
+  ys: number[];
+};
+
+/** Pure-JS port of `pdf_generator._layout_axis`. Keep in sync with the backend. */
+function layoutAxis(
+  available: number,
+  size: number,
+  gap: number,
+  mode: SpacingMode
+): { count: number; starts: number[] } {
+  if (available <= 0 || size <= 0 || size > available) return { count: 0, starts: [] };
+  if (mode === "even") {
+    const count = Math.max(1, Math.floor(available / size));
+    if (count === 1) return { count: 1, starts: [(available - size) / 2] };
+    const leftover = available - count * size;
+    const spacing = leftover / (count - 1);
+    return {
+      count,
+      starts: Array.from({ length: count }, (_, i) => i * (size + spacing)),
+    };
+  }
+  const count = Math.max(0, Math.floor((available + gap) / (size + gap)));
+  if (count === 0) return { count: 0, starts: [] };
+  const grid = count * size + Math.max(0, count - 1) * gap;
+  const leading = (available - grid) / 2;
+  return {
+    count,
+    starts: Array.from({ length: count }, (_, i) => leading + i * (size + gap)),
+  };
+}
+
+function fitLayout(
   aw: number,
   ah: number,
   sw: number,
   sh: number,
   gx: number,
-  gy: number
-): { cols: number; rows: number } {
-  if (sw <= 0 || sh <= 0 || sw > aw || sh > ah) return { cols: 0, rows: 0 };
-  const cols = Math.max(1, Math.floor((aw + gx) / (sw + gx)));
-  const rows = Math.max(1, Math.floor((ah + gy) / (sh + gy)));
-  return { cols, rows };
+  gy: number,
+  edgeMargin: number,
+  mode: SpacingMode
+): Layout {
+  const availW = aw - 2 * edgeMargin;
+  const availH = ah - 2 * edgeMargin;
+  if (availW <= 0 || availH <= 0 || sw > availW || sh > availH) {
+    return { cols: 0, rows: 0, xs: [], ys: [] };
+  }
+  const x = layoutAxis(availW, sw, gx, mode);
+  const y = layoutAxis(availH, sh, gy, mode);
+  return {
+    cols: x.count,
+    rows: y.count,
+    xs: x.starts.map((s) => s + edgeMargin),
+    ys: y.starts.map((s) => s + edgeMargin),
+  };
 }
 
 function GeneratorPreview({
@@ -346,38 +445,31 @@ function GeneratorPreview({
   artboardH,
   shapeW,
   shapeH,
-  gapX,
-  gapY,
+  edgeMargin,
   kind,
+  layout,
 }: {
   artboardW: number;
   artboardH: number;
   shapeW: number;
   shapeH: number;
-  gapX: number;
-  gapY: number;
+  edgeMargin: number;
   kind: "rect" | "circle";
+  layout: Layout;
 }) {
-  const fit = fitGrid(artboardW, artboardH, shapeW, shapeH, gapX, gapY);
   const PREVIEW_W = 480;
   const aspect = artboardH / artboardW;
   const previewH = PREVIEW_W * aspect;
   const scale = PREVIEW_W / artboardW;
 
-  const gridW = fit.cols * shapeW + Math.max(0, fit.cols - 1) * gapX;
-  const gridH = fit.rows * shapeH + Math.max(0, fit.rows - 1) * gapY;
-  const offsetX = (artboardW - gridW) / 2;
-  const offsetY = (artboardH - gridH) / 2;
-
   const shapes: { x: number; y: number }[] = [];
-  for (let r = 0; r < fit.rows; r++) {
-    for (let c = 0; c < fit.cols; c++) {
-      shapes.push({
-        x: offsetX + c * (shapeW + gapX),
-        y: offsetY + r * (shapeH + gapY),
-      });
+  for (const y of layout.ys) {
+    for (const x of layout.xs) {
+      shapes.push({ x, y });
     }
   }
+
+  const showSafeZone = edgeMargin > 0;
 
   return (
     <div
@@ -390,6 +482,18 @@ function GeneratorPreview({
         viewBox={`0 0 ${PREVIEW_W} ${previewH}`}
         className="absolute inset-0"
       >
+        {showSafeZone && (
+          <rect
+            x={edgeMargin * scale}
+            y={edgeMargin * scale}
+            width={(artboardW - 2 * edgeMargin) * scale}
+            height={(artboardH - 2 * edgeMargin) * scale}
+            fill="none"
+            stroke="#a78bfa"
+            strokeWidth="0.8"
+            strokeDasharray="3 3"
+          />
+        )}
         {shapes.map((s, i) =>
           kind === "circle" ? (
             <circle
@@ -415,6 +519,11 @@ function GeneratorPreview({
           )
         )}
       </svg>
+      {showSafeZone && (
+        <div className="absolute bottom-2 right-2 text-[10px] uppercase tracking-widest text-violet-500/80 bg-white/70 px-2 py-0.5 rounded">
+          safe&nbsp;zone
+        </div>
+      )}
     </div>
   );
 }

@@ -86,6 +86,104 @@ def test_generator_rejects_oversized_shape():
         )
 
 
+def _bbox_mm(shape: dict) -> tuple[float, float, float, float]:
+    """Convert a generated shape's bbox from points back to mm for assertion."""
+    pt_per_mm = 72.0 / 25.4
+    x, y, w, h = shape["bbox"]
+    return (x / pt_per_mm, y / pt_per_mm, w / pt_per_mm, h / pt_per_mm)
+
+
+def test_edge_margin_keeps_slots_inside_safe_zone():
+    """No slot should encroach inside a 10 mm edge margin."""
+    g = pdf_generator.generate(
+        artboard_w=297, artboard_h=210, units="mm",
+        shape_kind="rect",
+        shape_w=50, shape_h=50,
+        gap_x=5, gap_y=5,
+        edge_margin=10,
+    )
+    margin = 10.0
+    for shape in g.shapes:
+        x, y, w, h = _bbox_mm(shape)
+        assert x >= margin - 1e-3, f"slot {shape['shape_index']} crosses left margin"
+        assert y >= margin - 1e-3, f"slot {shape['shape_index']} crosses top margin"
+        assert x + w <= 297 - margin + 1e-3, "slot crosses right margin"
+        assert y + h <= 210 - margin + 1e-3, "slot crosses bottom margin"
+
+
+def test_edge_margin_can_drop_a_column():
+    """A4: 5 columns of 50mm fit at 0mm margin (with 5mm gaps), but only
+    4 columns fit when 30mm of edge margin is carved off each side."""
+    no_margin = pdf_generator.generate(
+        artboard_w=297, artboard_h=210, units="mm",
+        shape_kind="rect", shape_w=50, shape_h=50,
+        gap_x=5, gap_y=5, edge_margin=0,
+    )
+    with_margin = pdf_generator.generate(
+        artboard_w=297, artboard_h=210, units="mm",
+        shape_kind="rect", shape_w=50, shape_h=50,
+        gap_x=5, gap_y=5, edge_margin=30,
+    )
+    # Per-row column count: count distinct x positions (rounded to mm).
+    def cols(g) -> int:
+        return len({round(_bbox_mm(s)[0], 1) for s in g.shapes})
+    assert cols(no_margin) == 5
+    assert cols(with_margin) == 4
+
+
+def test_even_mode_distributes_slots_flush_to_safe_edges():
+    """In even mode, the first slot's leading edge sits at the margin and the
+    last slot's trailing edge sits at (page - margin)."""
+    g = pdf_generator.generate(
+        artboard_w=200, artboard_h=200, units="mm",
+        shape_kind="rect", shape_w=40, shape_h=40,
+        edge_margin=10, spacing_mode="even",
+    )
+    xs = sorted({round(_bbox_mm(s)[0], 3) for s in g.shapes})
+    ys = sorted({round(_bbox_mm(s)[1], 3) for s in g.shapes})
+    # avail = 200 - 2*10 = 180; floor(180/40) = 4 cols/rows
+    assert len(xs) == 4
+    assert len(ys) == 4
+    assert xs[0] == pytest.approx(10.0, abs=0.05), "first slot must hug left safe edge"
+    assert xs[-1] + 40 == pytest.approx(190.0, abs=0.05), "last slot must hug right safe edge"
+    assert ys[0] == pytest.approx(10.0, abs=0.05)
+    assert ys[-1] + 40 == pytest.approx(190.0, abs=0.05)
+    # Spacing between slots should be uniform
+    gaps = [xs[i + 1] - (xs[i] + 40) for i in range(len(xs) - 1)]
+    assert all(abs(g - gaps[0]) < 0.05 for g in gaps), "even-mode gaps must be uniform"
+
+
+def test_even_mode_single_slot_centers_in_safe_zone():
+    g = pdf_generator.generate(
+        artboard_w=100, artboard_h=100, units="mm",
+        shape_kind="rect", shape_w=70, shape_h=70,
+        edge_margin=10, spacing_mode="even",
+    )
+    assert len(g.shapes) == 1
+    x, y, w, h = _bbox_mm(g.shapes[0])
+    # avail = 80, size = 70, leftover = 10 -> centred at margin + 5
+    assert x == pytest.approx(15.0, abs=0.05)
+    assert y == pytest.approx(15.0, abs=0.05)
+
+
+def test_edge_margin_too_large_raises():
+    with pytest.raises(ValueError, match="no room"):
+        pdf_generator.generate(
+            artboard_w=100, artboard_h=100, units="mm",
+            shape_kind="rect", shape_w=10, shape_h=10,
+            edge_margin=60,
+        )
+
+
+def test_shape_larger_than_safe_zone_raises():
+    with pytest.raises(ValueError, match="available area"):
+        pdf_generator.generate(
+            artboard_w=100, artboard_h=100, units="mm",
+            shape_kind="rect", shape_w=90, shape_h=90,
+            edge_margin=10,
+        )
+
+
 def test_parser_roundtrip_finds_positions_layer(template):
     parsed = pdf_parser.parse(template.pdf_bytes)
     assert parsed.has_positions_ocg is True

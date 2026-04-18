@@ -143,6 +143,8 @@ def generate_template(
             gap_x=payload.shape.gap_x,
             gap_y=payload.shape.gap_y,
             center=payload.shape.center,
+            edge_margin=payload.shape.edge_margin,
+            spacing_mode=payload.shape.spacing_mode,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc))

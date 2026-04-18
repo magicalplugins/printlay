@@ -4,6 +4,20 @@ Produces a single-page PDF whose page size matches the artboard exactly,
 with N rectangles or circles auto-fit and centred, all on an Optional Content
 Group (layer) named POSITIONS so the compositor can hide them in the final
 output without painting white over the page.
+
+Layout rules
+------------
+
+* The **artboard size is sacred** - we never resize the page to fit content.
+* The **shape size is sacred** - we never scale slots down to fit. If a row
+  or column doesn't fit, it's dropped.
+* ``edge_margin`` carves an inviolable safe area off all four sides. Slots
+  are computed against the inset rectangle ``page - 2*edge_margin``.
+* ``spacing_mode='fixed'``: cols/rows = ``floor((avail + gap) / (size + gap))``
+  with the resulting grid centred (when ``center=True``) inside the safe area.
+* ``spacing_mode='even'``: cols/rows = ``floor(avail / size)`` (zero-gap fit),
+  then leftover space is distributed evenly between slots so the outermost
+  ones sit flush against the safe-zone edges.
 """
 
 from __future__ import annotations
@@ -37,6 +51,42 @@ def units_to_pt(value: float, units: Literal["mm", "pt", "in"]) -> float:
     return value * (PT_PER_INCH / MM_PER_INCH)  # mm
 
 
+def _layout_axis(
+    available: float,
+    size: float,
+    gap: float,
+    mode: Literal["fixed", "even"],
+    center: bool,
+) -> tuple[int, list[float]]:
+    """Compute slot count and starting offsets along one axis.
+
+    Returns ``(count, starts)`` where ``starts`` is the position of each
+    slot's leading edge relative to the start of the *available* area
+    (i.e. **before** adding the edge margin offset).
+    """
+    if available <= 0 or size <= 0 or size > available:
+        return 0, []
+
+    if mode == "even":
+        count = max(1, math.floor(available / size))
+        if count == 1:
+            offset = (available - size) / 2.0 if center else 0.0
+            return 1, [offset]
+        # Distribute leftover space evenly *between* slots so the first
+        # one sits at 0 and the last one at (available - size).
+        leftover = available - count * size
+        spacing = leftover / (count - 1)
+        return count, [i * (size + spacing) for i in range(count)]
+
+    # fixed mode
+    count = max(0, math.floor((available + gap) / (size + gap)))
+    if count == 0:
+        return 0, []
+    grid = count * size + max(0, count - 1) * gap
+    leading = (available - grid) / 2.0 if center else 0.0
+    return count, [leading + i * (size + gap) for i in range(count)]
+
+
 def generate(
     *,
     artboard_w: float,
@@ -45,9 +95,11 @@ def generate(
     shape_kind: Literal["rect", "circle"],
     shape_w: float,
     shape_h: float,
-    gap_x: float,
-    gap_y: float,
+    gap_x: float = 0.0,
+    gap_y: float = 0.0,
     center: bool = True,
+    edge_margin: float = 0.0,
+    spacing_mode: Literal["fixed", "even"] = "fixed",
     positions_layer_name: str = "POSITIONS",
 ) -> GeneratedTemplate:
     page_w = units_to_pt(artboard_w, units)
@@ -56,24 +108,28 @@ def generate(
     sh = units_to_pt(shape_h, units)
     gx = units_to_pt(gap_x, units)
     gy = units_to_pt(gap_y, units)
+    margin = units_to_pt(edge_margin, units)
 
     if sw <= 0 or sh <= 0:
         raise ValueError("Shape width/height must be positive.")
-    if sw > page_w or sh > page_h:
-        raise ValueError("Shape larger than artboard.")
+    if margin < 0:
+        raise ValueError("Edge margin cannot be negative.")
+    if 2 * margin >= page_w or 2 * margin >= page_h:
+        raise ValueError(
+            f"Edge margin ({edge_margin} {units}) leaves no room on the artboard."
+        )
 
-    cols = max(1, math.floor((page_w + gx) / (sw + gx)))
-    rows = max(1, math.floor((page_h + gy) / (sh + gy)))
+    avail_w = page_w - 2 * margin
+    avail_h = page_h - 2 * margin
 
-    grid_w = cols * sw + max(0, cols - 1) * gx
-    grid_h = rows * sh + max(0, rows - 1) * gy
+    if sw > avail_w or sh > avail_h:
+        raise ValueError("Shape larger than the available area inside the edge margin.")
 
-    if center:
-        offset_x = (page_w - grid_w) / 2.0
-        offset_y_top = (page_h - grid_h) / 2.0
-    else:
-        offset_x = 0.0
-        offset_y_top = 0.0
+    cols, x_starts = _layout_axis(avail_w, sw, gx, spacing_mode, center)
+    rows, y_starts = _layout_axis(avail_h, sh, gy, spacing_mode, center)
+
+    if cols == 0 or rows == 0:
+        raise ValueError("Shape doesn't fit inside the available area.")
 
     doc = pymupdf.open()
     try:
@@ -85,8 +141,8 @@ def generate(
         idx = 0
         for r in range(rows):
             for c in range(cols):
-                x_top = offset_x + c * (sw + gx)
-                y_top = offset_y_top + r * (sh + gy)
+                x_top = margin + x_starts[c]
+                y_top = margin + y_starts[r]
                 rect = pymupdf.Rect(x_top, y_top, x_top + sw, y_top + sh)
 
                 if shape_kind == "circle":

@@ -13,6 +13,8 @@ class UserOut(BaseModel):
     tier: str
     is_active: bool
     created_at: datetime
+    license_status: str | None = None
+    license_expires_at: datetime | None = None
 
 
 class PublicConfig(BaseModel):

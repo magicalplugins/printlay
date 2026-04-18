@@ -14,7 +14,7 @@ from backend.rate_limit import generate_limit, limiter
 from backend.routers.templates import _resolve_user
 from backend.schemas.job import FillRequest, JobCreate, JobOut, JobUpdate
 from backend.schemas.output import OutputOut
-from backend.services import pdf_compositor, storage
+from backend.services import pdf_compositor, storage, telemetry
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -246,6 +246,16 @@ def generate_output(
             "slots_filled": sheet.slots_filled,
             "slots_total": sheet.slots_total,
             "file_size": out.file_size,
+        },
+    )
+    telemetry.emit(
+        user,
+        "pdf_exported",
+        {
+            "page_count": 1,
+            "template_id": str(tpl.id),
+            "slots_filled": sheet.slots_filled,
+            "slots_total": sheet.slots_total,
         },
     )
     return out

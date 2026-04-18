@@ -140,7 +140,7 @@ export DATABASE_URL='postgresql+psycopg://postgres.<id>:<password>@aws-0-eu-west
 alembic upgrade head
 ```
 
-You should see all four migrations applied (`0001_users`, `0002_templates`, `0003_jobs_assets_outputs`, `0004_audit_events`). Verify in the Supabase dashboard → Table Editor that the tables `users`, `templates`, `jobs`, `asset_categories`, `assets`, `outputs`, `audit_events` now exist.
+You should see all five migrations applied (`0001_users`, `0002_templates`, `0003_jobs_assets_outputs`, `0004_audit_events`, `0005_user_billing`). Verify in the Supabase dashboard → Table Editor that the tables `users`, `templates`, `jobs`, `asset_categories`, `assets`, `outputs`, `audit_events` now exist (the `users` table should have the new `license_*` columns).
 
 For future schema changes, run `alembic revision --autogenerate -m "..."` after editing models, review the generated file, then `alembic upgrade head`.
 
@@ -154,6 +154,47 @@ fly secrets set RATE_LIMIT_GENERATE_PER_HOUR=120 -a printlay              # defa
 ```
 
 If left unset, defaults are: same-origin only for CORS, 60 PDF generations/user/hour.
+
+### 4d.2. Licensing & billing (optional — leave blank during testing)
+
+Printlay integrates with **License Manager for WooCommerce (LMFWC)** on
+`magicalplugins.com` (same install used by the Murphy's Magic Connector). It
+is fully isolated: PrintLay licence keys carry a `PL-` prefix, telemetry uses
+its own `/wp-json/printlay/v1/` namespace, and the product-install ping
+identifies as `PrintLay`.
+
+While these secrets are blank, every signed-in user is treated as
+`internal_beta` (unlimited access). The Settings page in the SPA shows
+"License server isn't configured" and the activate button is disabled — which
+is exactly what you want during product validation.
+
+When you're ready to flip billing on (see "Billing prerequisites" below):
+
+```bash
+fly secrets set \
+  LICENSE_SERVER_URL='https://magicalplugins.com' \
+  LMFWC_CONSUMER_KEY='ck_xxxxxxxxxxxx' \
+  LMFWC_CONSUMER_SECRET='cs_xxxxxxxxxxxx' \
+  PRINTLAY_PRODUCT_NAME='PrintLay' \
+  TELEMETRY_ENABLED=true \
+  -a printlay
+```
+
+**Billing prerequisites (do these on `magicalplugins.com`, not in this repo):**
+
+1. **Create the WooCommerce product** "PrintLay" (Simple or Variable).
+2. **Create LMFWC generators** with the prefixes `PL-STR-`, `PL-PRO-`,
+   `PL-EXPERT-` (or whatever final tier names you decide). The PrintLay
+   server derives the plan from the prefix, so the exact prefix matters.
+3. **Install the telemetry WordPress plugin** (`printlay-telemetry.php`) so
+   `/wp-json/printlay/v1/telemetry` exists. The full snippet is in the
+   integration handoff doc; without it, telemetry POSTs will 404 silently.
+4. **VAT / tax**: confirm WooCommerce tax is configured for the regions
+   you'll sell into. The current setup is UK-only — that's fine if you
+   restrict initial sales to the UK, but EU/US sales need WooCommerce Tax,
+   TaxJar, or Quaderno on the WP side first.
+5. **Decide the per-tier limits** in `backend/services/entitlements.py`
+   (`PLAN_LIMITS` and `PLAN_FEATURES`) — currently placeholders.
 
 ### 4e. First Fly deploy
 
@@ -278,5 +319,11 @@ The repo already contains, end-to-end:
 Open items pre-launch:
 - **PyMuPDF licensing**. PyMuPDF is AGPL-3.0; using it in a hosted SaaS is generally fine if you're not distributing the binary, but Artifex (the upstream) sells commercial licences if you want to be conservative. Decide before public launch.
 - **Email confirmation**. Supabase defaults to requiring email confirmation. If you want to skip it during early testing, Authentication → Providers → Email → toggle "Confirm email" off.
-- **Billing**. Deferred until product validation. Plan: integrate `licensemanager.at` (already running on `magicalplugins.com`) so Printlay subscribers go through the same WooCommerce checkout / invoicing / VAT flow as your existing plugins. Code is structured so the entitlements layer can be added later without touching the core designer.
+- **Billing wiring (code complete, server-side prerequisites pending).** The
+  LMFWC integration is built (`backend/services/lmfwc.py` + `entitlements.py`,
+  Settings page in the SPA). To switch billing on you need to (1) create the
+  PrintLay WooCommerce product + LMFWC generators, (2) install the
+  `printlay-telemetry.php` WP plugin, (3) sort out VAT for non-UK regions, (4)
+  fill in the real per-tier limits in `entitlements.PLAN_LIMITS`, then (5)
+  set the four `LMFWC_*` / `LICENSE_SERVER_URL` secrets on Fly. See §4d.2.
 

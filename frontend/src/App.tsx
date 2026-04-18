@@ -21,6 +21,7 @@ const JobProgrammer = lazy(() => import("./pages/JobProgrammer"));
 const JobFiller = lazy(() => import("./pages/JobFiller"));
 const Catalogue = lazy(() => import("./pages/Catalogue"));
 const Outputs = lazy(() => import("./pages/Outputs"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 export default function App() {
   return (
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="jobs/:id/fill" element={<JobFiller />} />
               <Route path="catalogue" element={<Catalogue />} />
               <Route path="outputs" element={<Outputs />} />
+              <Route path="settings" element={<Settings />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

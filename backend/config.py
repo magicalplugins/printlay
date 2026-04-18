@@ -59,6 +59,19 @@ class Settings(BaseSettings):
     rate_limit_generate_per_hour: int = 60
     """Max calls to `POST /api/jobs/{id}/generate` per user per hour."""
 
+    # ---- Billing / licensing (LMFWC on magicalplugins.com) ----
+    license_server_url: str | None = None
+    """Base URL of the LMFWC host. Empty in dev = no validation, everyone is
+    treated as internal_beta. Set to https://magicalplugins.com in prod."""
+    lmfwc_consumer_key: str | None = None
+    lmfwc_consumer_secret: str | None = None
+    printlay_product_name: str = "PrintLay"
+    """Sent in the LMFWC product-install ping so PrintLay shows up under its
+    own name in the magicalplugins admin (separate from the Murphy's connector)."""
+    telemetry_enabled: bool = False
+    """When True, fire-and-forget product events to /wp-json/printlay/v1/telemetry.
+    Default off until the matching WP plugin is installed on magicalplugins.com."""
+
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"

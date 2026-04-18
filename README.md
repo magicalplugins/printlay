@@ -116,6 +116,13 @@ In production, set these via `fly secrets set KEY=value` — see `SETUP.md`.
   users without collision.
 - **Audit log.** `audit_events` records output generation, bundle import/export,
   and job duplication for support and basic usage analytics.
+- **Licensing & entitlements.** A thin `entitlements` layer reads the user's
+  `tier` (derived from a successfully validated LMFWC licence key on
+  magicalplugins.com) and returns per-plan limits + feature flags. With
+  `LICENSE_SERVER_URL` unset every user is on the unlimited `internal_beta`
+  plan, so deployments without billing infrastructure work out of the box.
+  Telemetry posts to a dedicated `printlay/v1` REST namespace, gated behind
+  `TELEMETRY_ENABLED`.
 
 ## Build phases (delivered)
 
@@ -131,6 +138,9 @@ In production, set these via `fly secrets set KEY=value` — see `SETUP.md`.
 - **P9** Polish: route-level code-split, error boundary, loading skeletons,
   rate-limit on PDF generation, audit log, job duplication, favicon, CORS
   lockdown, full backend test suite
+- **P10** Billing scaffolding: LMFWC client (validate/activate/deactivate/ping),
+  entitlements layer with 72h grace period, Settings page in the SPA,
+  telemetry pipeline (off by default until WP plugin is installed)
 
 ## Deploy
 

@@ -14,6 +14,7 @@ from backend.config import get_settings
 from backend.database import get_db
 from backend.models import User
 from backend.schemas.auth import PublicConfig, UserOut
+from backend.services import telemetry
 
 router = APIRouter(prefix="/api", tags=["auth"])
 
@@ -45,6 +46,7 @@ def me(
         db.add(row)
         db.commit()
         db.refresh(row)
+        telemetry.emit(row, "install", {"email_domain": user.email.split("@", 1)[-1]})
     elif row.email != user.email:
         # Email change in Supabase - keep our copy in sync.
         row.email = user.email

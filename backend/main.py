@@ -10,6 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from backend.config import get_settings
 from backend.rate_limit import limiter
 from backend.routers import auth as auth_router
+from backend.routers import billing as billing_router
 from backend.routers import catalogue as catalogue_router
 from backend.routers import jobs as jobs_router
 from backend.routers import outputs as outputs_router
@@ -38,6 +39,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router.router)
+app.include_router(billing_router.router)
 app.include_router(templates_router.router)
 app.include_router(jobs_router.router)
 app.include_router(catalogue_router.router)

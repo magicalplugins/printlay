@@ -15,9 +15,11 @@ Layout rules
   are computed against the inset rectangle ``page - 2*edge_margin``.
 * ``spacing_mode='fixed'``: cols/rows = ``floor((avail + gap) / (size + gap))``
   with the resulting grid centred (when ``center=True``) inside the safe area.
-* ``spacing_mode='even'``: cols/rows = ``floor(avail / size)`` (zero-gap fit),
-  then leftover space is distributed evenly between slots so the outermost
-  ones sit flush against the safe-zone edges.
+* ``spacing_mode='even'``: cols/rows = ``floor((avail + gap) / (size + gap))``
+  too, but here ``gap`` is the **minimum** spacing - leftover space is then
+  distributed evenly between slots so the outermost ones sit flush against
+  the safe-zone edges. Set ``gap_x = gap_y = 0`` for the densest packing;
+  set them higher to guarantee no two slots ever sit closer than that.
 """
 
 from __future__ import annotations
@@ -68,12 +70,15 @@ def _layout_axis(
         return 0, []
 
     if mode == "even":
-        count = max(1, math.floor(available / size))
+        # `gap` is treated as a *minimum* here. The formula below is the same
+        # one used in fixed mode; it gives the largest count whose enforced
+        # `gap` spacing still fits inside `available`. Leftover space (which
+        # is >= 0 by construction) is then distributed evenly *between*
+        # slots, so the resulting spacing is always >= gap.
+        count = max(1, math.floor((available + gap) / (size + gap)))
         if count == 1:
             offset = (available - size) / 2.0 if center else 0.0
             return 1, [offset]
-        # Distribute leftover space evenly *between* slots so the first
-        # one sits at 0 and the last one at (available - size).
         leftover = available - count * size
         spacing = leftover / (count - 1)
         return count, [i * (size + spacing) for i in range(count)]

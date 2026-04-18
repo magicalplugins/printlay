@@ -153,6 +153,31 @@ def test_even_mode_distributes_slots_flush_to_safe_edges():
     assert all(abs(g - gaps[0]) < 0.05 for g in gaps), "even-mode gaps must be uniform"
 
 
+def test_even_mode_respects_min_gap():
+    """In even mode, gap_x/gap_y act as a *minimum* gap. Bumping the minimum
+    high enough must drop a column rather than violate it."""
+    # 50 mm circles on A4 landscape (297 mm) with no edge margin.
+    # No min gap -> 5 columns fit, natural spacing = (297 - 5*50) / 4 = 11.75
+    loose = pdf_generator.generate(
+        artboard_w=297, artboard_h=210, units="mm",
+        shape_kind="rect", shape_w=50, shape_h=50,
+        gap_x=0, gap_y=0, spacing_mode="even",
+    )
+    assert len({round(_bbox_mm(s)[0], 1) for s in loose.shapes}) == 5
+
+    # Min gap of 12 mm > the natural 11.75 -> must drop to 4 columns.
+    tight = pdf_generator.generate(
+        artboard_w=297, artboard_h=210, units="mm",
+        shape_kind="rect", shape_w=50, shape_h=50,
+        gap_x=12, gap_y=0, spacing_mode="even",
+    )
+    xs = sorted({round(_bbox_mm(s)[0], 3) for s in tight.shapes})
+    assert len(xs) == 4
+    # Resulting spacing must be >= the requested minimum.
+    spacings = [xs[i + 1] - (xs[i] + 50) for i in range(len(xs) - 1)]
+    assert all(sp >= 12 - 0.05 for sp in spacings)
+
+
 def test_even_mode_single_slot_centers_in_safe_zone():
     g = pdf_generator.generate(
         artboard_w=100, artboard_h=100, units="mm",

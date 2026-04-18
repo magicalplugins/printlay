@@ -250,16 +250,30 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
               ]}
             />
           </div>
-          {spacingMode === "fixed" && (
-            <div className="grid grid-cols-2 gap-3 mt-3">
-              <NumberField label={`Gap X (${units})`} value={gx} onChange={setGx} />
-              <NumberField label={`Gap Y (${units})`} value={gy} onChange={setGy} />
-            </div>
-          )}
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <NumberField
+              label={
+                spacingMode === "fixed"
+                  ? `Gap X (${units})`
+                  : `Min gap X (${units})`
+              }
+              value={gx}
+              onChange={setGx}
+            />
+            <NumberField
+              label={
+                spacingMode === "fixed"
+                  ? `Gap Y (${units})`
+                  : `Min gap Y (${units})`
+              }
+              value={gy}
+              onChange={setGy}
+            />
+          </div>
           <p className="text-xs text-neutral-500 mt-3 leading-relaxed">
             {spacingMode === "fixed"
               ? `Slots are placed exactly ${gx}\u202F${units} apart horizontally and ${gy}\u202F${units} vertically. The grid is centred inside the safe zone; rows/columns that don't fit are dropped.`
-              : "Slots are packed flush against the safe-zone edges with leftover space distributed evenly between them. Slot size never changes."}
+              : `Slots pack flush against the safe-zone edges with leftover space distributed evenly between them. Spacing is never smaller than ${gx}\u202F${units} (X) or ${gy}\u202F${units} (Y) - increase these to drop a row/column when slots would otherwise sit too close.`}
             {edgeMargin > 0 && (
               <>
                 {" "}No slot will appear within{" "}
@@ -396,7 +410,8 @@ function layoutAxis(
 ): { count: number; starts: number[] } {
   if (available <= 0 || size <= 0 || size > available) return { count: 0, starts: [] };
   if (mode === "even") {
-    const count = Math.max(1, Math.floor(available / size));
+    // `gap` here is a *minimum* spacing (see backend `_layout_axis`).
+    const count = Math.max(1, Math.floor((available + gap) / (size + gap)));
     if (count === 1) return { count: 1, starts: [(available - size) / 2] };
     const leftover = available - count * size;
     const spacing = leftover / (count - 1);

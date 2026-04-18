@@ -16,14 +16,18 @@ if config.config_file_name is not None:
 settings = get_settings()
 if not settings.database_url:
     raise RuntimeError("DATABASE_URL must be set to run Alembic migrations.")
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# Don't pass through config.set_main_option: ConfigParser does %-interpolation
+# on values, which corrupts URL-encoded passwords (e.g. `%3F`). Hold the URL
+# in module scope instead and feed it directly into the engine factory.
+DATABASE_URL = settings.database_url
 
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -34,8 +38,10 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    section = config.get_section(config.config_ini_section, {}) or {}
+    section["sqlalchemy.url"] = DATABASE_URL
     connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
+        section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )

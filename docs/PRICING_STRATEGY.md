@@ -114,6 +114,28 @@ to keep a single account from cooking the box.
 - If the founder cancels and resubscribes after the offer closes, the
   discount does not reactivate.
 
+### How it appears on the pricing page
+
+While `FOUNDER_OFFER.ends_at` is in the future, `/api/billing/plans`
+returns:
+
+- `effective_monthly_display` and `effective_annual_display` per plan —
+  the post-discount price (e.g. Starter monthly: list `£25`, effective
+  `£12.50`).
+- `founder_offer = { active: true, code, discount_pct, ends_at,
+  ends_at_label }`.
+
+The frontend (`Pricing.tsx`, `PricingPreview.tsx`) renders the **list
+price with strike-through**, the **effective price as the headline**,
+and a **`−50%` pill** next to it. The Pricing page also auto-passes
+`coupon: FOUNDERS50` to `/api/billing/checkout`, so the price the
+customer sees is _exactly_ what Stripe charges. No bait-and-switch.
+
+When the offer expires, the API stops sending `effective_*` prices and
+sets `founder_offer.active = false`. The strike-through UI vanishes
+automatically — **no code change needed to retire the offer**, just
+move the `ends_at` date in `backend/routers/billing.py`.
+
 ### The unlock: percentage, not price
 
 The Founder Offer is structured in the Terms (§6) as a **percentage
@@ -342,3 +364,4 @@ Changing tier _limits_ (storage, exports, etc.):
 | 26 Apr 2026   | Starter exports 50 → 200                      | 50 was too tight; sent the wrong "this is restricted" signal |
 | 26 Apr 2026   | Storage caps added per tier (5/50/250 GB)     | Real server cost; previously unbounded                   |
 | 26 Apr 2026   | Trial storage capped at 1 GB                  | Stops trial accounts dumping a permanent library         |
+| 26 Apr 2026   | Pricing page shows list price with strike-through + effective Founder price | Conversion lever — anchoring + visible loss aversion. Backend exposes `effective_*` prices + `founder_offer.active` so retirement is one-line config. |

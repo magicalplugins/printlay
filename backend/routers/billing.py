@@ -215,18 +215,34 @@ class PlanItem(BaseModel):
     name: str
     monthly_price_id: str | None
     annual_price_id: str | None
-    monthly_price_display: str  # human-readable, e.g. "£25"
+    monthly_price_display: str  # canonical "list" price, e.g. "£25"
     annual_price_display: str
+    # Effective (post-discount) prices when a launch offer is active.
+    # `None` when no offer is running. Frontend uses these to render
+    # strike-through pricing and to auto-apply the coupon at checkout.
+    effective_monthly_display: str | None = None
+    effective_annual_display: str | None = None
     annual_save_pct: int        # marketing copy ("Save 17%")
     tagline: str
     features: list[str]
     most_popular: bool = False
 
 
+class FounderOfferOut(BaseModel):
+    """Represents the launch promotion to the frontend. Single source of
+    truth — flip `ends_at` in `FOUNDER_OFFER` below to retire it."""
+    active: bool
+    code: str
+    discount_pct: int
+    ends_at: str        # ISO 8601 (UTC)
+    ends_at_label: str  # human-readable, e.g. "30 July 2026"
+
+
 class PlansOut(BaseModel):
     plans: list[PlanItem]
     enterprise_contact_email: str
     founder_seats_remaining: int | None = None  # null when unknown / disabled
+    founder_offer: FounderOfferOut
 
 
 # Display prices live here, not in Stripe. Keeping them server-side means
@@ -287,12 +303,76 @@ _PLAN_DISPLAY: dict[str, dict] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Founder Offer — launch promotion
+# ---------------------------------------------------------------------------
+#
+# Single source of truth. The frontend reads this via /api/billing/plans
+# and renders strike-through pricing + auto-applies the coupon at
+# checkout. To retire the offer: set `ends_at` to a past date (or remove
+# the block once the strike-through UI is no longer wanted).
+#
+# IMPORTANT: the `code` here MUST match a Stripe Coupon (or Promotion
+# Code) that is configured for the same `discount_pct`. Stripe is the
+# authority on what's actually charged — we mirror it here for display.
+FOUNDER_OFFER: dict = {
+    "code": "FOUNDERS50",
+    "discount_pct": 50,
+    "ends_at": datetime(2026, 7, 30, 23, 59, 59, tzinfo=timezone.utc),
+    "ends_at_label": "30 July 2026",
+}
+
+
+def _founder_offer_active() -> bool:
+    return datetime.now(timezone.utc) < FOUNDER_OFFER["ends_at"]
+
+
+def _apply_pct_off(display: str, pct: int) -> str:
+    """Take a display price like ``"£25"`` and return it with ``pct``%
+    taken off, formatted to match the original symbol.
+
+    Examples:
+        "£25"  + 50% → "£12.50"
+        "£250" + 50% → "£125"
+        "£99"  + 50% → "£49.50"
+
+    Falls back to the input if it can't parse a number — defensive only,
+    we control the inputs in `_PLAN_DISPLAY`.
+    """
+    digit_chars: list[str] = []
+    seen_dot = False
+    for c in display:
+        if c.isdigit():
+            digit_chars.append(c)
+        elif c == "." and not seen_dot:
+            digit_chars.append(c)
+            seen_dot = True
+    if not digit_chars:
+        return display
+    try:
+        n = float("".join(digit_chars))
+    except ValueError:
+        return display
+    symbol = "".join(c for c in display if not c.isdigit() and c not in ".,")
+    discounted = n * (100 - pct) / 100.0
+    if discounted == int(discounted):
+        return f"{symbol}{int(discounted)}"
+    return f"{symbol}{discounted:.2f}"
+
+
 @router.get("/plans", response_model=PlansOut)
 def get_plans() -> PlansOut:
     """Return the marketing catalogue of plans and their Stripe price IDs.
     Public — no auth required (the pricing page is reachable when logged
     out)."""
     s = get_settings()
+
+    offer_active = _founder_offer_active()
+    pct = FOUNDER_OFFER["discount_pct"]
+
+    def discounted(display: str) -> str | None:
+        return _apply_pct_off(display, pct) if offer_active else None
+
     plans = [
         PlanItem(
             id="starter",
@@ -301,6 +381,8 @@ def get_plans() -> PlansOut:
             annual_price_id=s.stripe_price_starter_annual,
             monthly_price_display=_PLAN_DISPLAY["starter"]["monthly"],
             annual_price_display=_PLAN_DISPLAY["starter"]["annual"],
+            effective_monthly_display=discounted(_PLAN_DISPLAY["starter"]["monthly"]),
+            effective_annual_display=discounted(_PLAN_DISPLAY["starter"]["annual"]),
             annual_save_pct=_PLAN_DISPLAY["starter"]["save_pct"],
             tagline=_PLAN_DISPLAY["starter"]["tagline"],
             features=_PLAN_DISPLAY["starter"]["features"],
@@ -313,6 +395,8 @@ def get_plans() -> PlansOut:
             annual_price_id=s.stripe_price_pro_annual,
             monthly_price_display=_PLAN_DISPLAY["pro"]["monthly"],
             annual_price_display=_PLAN_DISPLAY["pro"]["annual"],
+            effective_monthly_display=discounted(_PLAN_DISPLAY["pro"]["monthly"]),
+            effective_annual_display=discounted(_PLAN_DISPLAY["pro"]["annual"]),
             annual_save_pct=_PLAN_DISPLAY["pro"]["save_pct"],
             tagline=_PLAN_DISPLAY["pro"]["tagline"],
             features=_PLAN_DISPLAY["pro"]["features"],
@@ -325,6 +409,8 @@ def get_plans() -> PlansOut:
             annual_price_id=s.stripe_price_studio_annual,
             monthly_price_display=_PLAN_DISPLAY["studio"]["monthly"],
             annual_price_display=_PLAN_DISPLAY["studio"]["annual"],
+            effective_monthly_display=discounted(_PLAN_DISPLAY["studio"]["monthly"]),
+            effective_annual_display=discounted(_PLAN_DISPLAY["studio"]["annual"]),
             annual_save_pct=_PLAN_DISPLAY["studio"]["save_pct"],
             tagline=_PLAN_DISPLAY["studio"]["tagline"],
             features=_PLAN_DISPLAY["studio"]["features"],
@@ -335,6 +421,13 @@ def get_plans() -> PlansOut:
         plans=plans,
         enterprise_contact_email="hello@printlay.io",
         founder_seats_remaining=None,
+        founder_offer=FounderOfferOut(
+            active=offer_active,
+            code=FOUNDER_OFFER["code"],
+            discount_pct=pct,
+            ends_at=FOUNDER_OFFER["ends_at"].isoformat(),
+            ends_at_label=FOUNDER_OFFER["ends_at_label"],
+        ),
     )
 
 

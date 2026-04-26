@@ -49,18 +49,33 @@ export type PlanItem = {
   name: string;
   monthly_price_id: string | null;
   annual_price_id: string | null;
+  /** Canonical "list" price (e.g. "£25"). Always present. */
   monthly_price_display: string;
   annual_price_display: string;
+  /** Post-discount price when a launch offer is active; null otherwise.
+   *  When set, render strike-through on the canonical price and show this
+   *  as the headline, then auto-pass `founder_offer.code` to checkout. */
+  effective_monthly_display: string | null;
+  effective_annual_display: string | null;
   annual_save_pct: number;
   tagline: string;
   features: string[];
   most_popular: boolean;
 };
 
+export type FounderOffer = {
+  active: boolean;
+  code: string;
+  discount_pct: number;
+  ends_at: string; // ISO 8601
+  ends_at_label: string; // e.g. "30 July 2026"
+};
+
 export type PlansResponse = {
   plans: PlanItem[];
   enterprise_contact_email: string;
   founder_seats_remaining: number | null;
+  founder_offer: FounderOffer;
 };
 
 export function getPlans() {

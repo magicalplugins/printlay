@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   changePlan,
+  FounderOffer,
   getPlans,
   PlanItem,
   PlansResponse,
@@ -57,6 +58,14 @@ export default function Pricing() {
     !!me.stripe_subscription_status &&
     ["active", "trialing", "past_due"].includes(me.stripe_subscription_status);
 
+  // The founder offer flag drives both the strike-through UI and the
+  // coupon we attach to checkout. Server is the source of truth: if the
+  // offer is active, we MUST pass the code so the price the customer
+  // sees matches what Stripe charges. Display without auto-apply would
+  // be a bait-and-switch.
+  const founderOffer: FounderOffer | null = data?.founder_offer ?? null;
+  const founderActive = !!founderOffer?.active;
+
   const onSelectPlan = async (plan: PlanItem) => {
     const priceId =
       cadence === "annual" ? plan.annual_price_id : plan.monthly_price_id;
@@ -96,6 +105,7 @@ export default function Pricing() {
         price_id: priceId,
         success_url: `${origin}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${origin}/pricing?canceled=1`,
+        coupon: founderActive ? founderOffer!.code : null,
       });
       window.location.href = url;
     } catch (e) {
@@ -185,6 +195,7 @@ export default function Pricing() {
                   key={p.id}
                   plan={p}
                   cadence={cadence}
+                  founderOffer={founderActive ? founderOffer : null}
                   busy={busyPlanId === p.id}
                   isCurrentPlan={
                     me?.stripe_subscription_status === "active" &&
@@ -238,34 +249,41 @@ export default function Pricing() {
         </div>
 
         {/* Founder strip */}
-        <div className="mt-10 rounded-2xl border border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/5 to-transparent p-6 sm:p-7">
-          <div className="flex items-start gap-4 flex-col sm:flex-row">
-            <div className="rounded-full bg-violet-500/20 border border-violet-400/40 px-3 py-1 text-xs font-semibold text-violet-200 shrink-0">
-              Launch offer
-            </div>
-            <div className="space-y-1.5">
-              <h3 className="font-semibold">
-                Founder Offer — 50% off forever
-              </h3>
-              <p className="text-sm text-neutral-400">
-                Subscribe before midnight on 30 July 2026 and we'll keep 50%
-                off your plan for the life of your subscription, plus a
-                permanent <span className="text-violet-300">Founder</span>{" "}
-                badge. Code{" "}
-                <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
-                  FOUNDERS50
-                </code>{" "}
-                applies automatically at checkout. The discount is a 50%
-                reduction off the published rate at the time of each renewal —
-                see our{" "}
-                <Link to="/terms" className="underline hover:text-neutral-200">
-                  terms
-                </Link>{" "}
-                for the full details. No second chances after 30 July.
-              </p>
+        {founderActive && founderOffer && (
+          <div className="mt-10 rounded-2xl border border-violet-500/30 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/5 to-transparent p-6 sm:p-7">
+            <div className="flex items-start gap-4 flex-col sm:flex-row">
+              <div className="rounded-full bg-violet-500/20 border border-violet-400/40 px-3 py-1 text-xs font-semibold text-violet-200 shrink-0">
+                Launch offer
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="font-semibold">
+                  Founder Offer — {founderOffer.discount_pct}% off forever
+                </h3>
+                <p className="text-sm text-neutral-400">
+                  Prices above already reflect the discount. Subscribe before
+                  midnight on {founderOffer.ends_at_label} and we'll keep{" "}
+                  {founderOffer.discount_pct}% off your plan for the life of
+                  your subscription, plus a permanent{" "}
+                  <span className="text-violet-300">Founder</span> badge. Code{" "}
+                  <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-200">
+                    {founderOffer.code}
+                  </code>{" "}
+                  applies automatically at checkout. The discount is a{" "}
+                  {founderOffer.discount_pct}% reduction off the published rate
+                  at the time of each renewal — see our{" "}
+                  <Link
+                    to="/terms"
+                    className="underline hover:text-neutral-200"
+                  >
+                    terms
+                  </Link>{" "}
+                  for the full details. No second chances after{" "}
+                  {founderOffer.ends_at_label}.
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         <div className="mt-10 text-center text-xs text-neutral-600">
           Prices shown in GBP, exclusive of local taxes. Card billing through
@@ -281,6 +299,7 @@ export default function Pricing() {
 function PlanCard({
   plan,
   cadence,
+  founderOffer,
   busy,
   isCurrentPlan,
   isExistingSubscriber,
@@ -288,26 +307,42 @@ function PlanCard({
 }: {
   plan: PlanItem;
   cadence: Cadence;
+  /** When set, we show strike-through pricing and the "−N%" pill. */
+  founderOffer: FounderOffer | null;
   busy: boolean;
   isCurrentPlan: boolean;
   isExistingSubscriber: boolean;
   onSelect: () => void;
 }) {
-  const price =
+  const listPrice =
     cadence === "annual"
       ? plan.annual_price_display
       : plan.monthly_price_display;
+  const effectivePrice =
+    founderOffer
+      ? cadence === "annual"
+        ? plan.effective_annual_display
+        : plan.effective_monthly_display
+      : null;
+  const headlinePrice = effectivePrice ?? listPrice;
   const periodLabel = cadence === "annual" ? "/year" : "/month";
 
+  // Compute "≈ £X / month, billed yearly" using whichever annual price
+  // the customer is actually charged (effective during a launch offer,
+  // list price otherwise). Prevents the helper text from contradicting
+  // the headline price.
   const monthlyEquivalent = useMemo(() => {
     if (cadence !== "annual") return null;
-    const cleaned = plan.annual_price_display.replace(/[^0-9.]/g, "");
+    const annualStr = effectivePrice ?? plan.annual_price_display;
+    const cleaned = annualStr.replace(/[^0-9.]/g, "");
     const annual = Number(cleaned);
     if (!annual || isNaN(annual)) return null;
-    const symbol = plan.annual_price_display.replace(/[0-9.,]/g, "").trim();
-    const perMonth = (annual / 12).toFixed(0);
-    return `${symbol}${perMonth} / month, billed yearly`;
-  }, [cadence, plan.annual_price_display]);
+    const symbol = annualStr.replace(/[0-9.,]/g, "").trim();
+    const perMonth = annual / 12;
+    const perMonthStr =
+      perMonth >= 100 ? perMonth.toFixed(0) : perMonth.toFixed(2);
+    return `${symbol}${perMonthStr} / month, billed yearly`;
+  }, [cadence, plan.annual_price_display, effectivePrice]);
 
   const popular = plan.most_popular;
 
@@ -337,13 +372,30 @@ function PlanCard({
       <p className="text-sm text-neutral-400 min-h-[2.5rem]">{plan.tagline}</p>
 
       <div className="mt-5">
+        {effectivePrice && founderOffer && (
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-base text-neutral-500 line-through decoration-neutral-600">
+              {listPrice}
+            </span>
+            <span className="rounded-full border border-violet-400/40 bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-200">
+              −{founderOffer.discount_pct}%
+            </span>
+          </div>
+        )}
         <div className="flex items-baseline gap-1">
-          <span className="text-4xl font-bold tracking-tight">{price}</span>
+          <span className="text-4xl font-bold tracking-tight">
+            {headlinePrice}
+          </span>
           <span className="text-neutral-500 text-sm">{periodLabel}</span>
         </div>
         {monthlyEquivalent && (
           <div className="text-xs text-neutral-500 mt-1">
             {monthlyEquivalent}
+          </div>
+        )}
+        {effectivePrice && founderOffer && (
+          <div className="text-[11px] text-violet-300/80 mt-1.5">
+            Founder pricing — code applied automatically at checkout
           </div>
         )}
       </div>

@@ -452,12 +452,47 @@ function UserDrawer({
                 <dt className="text-neutral-500">Trial ends</dt>
                 <dd className="text-neutral-200">{formatDate(data.trial_ends_at)}</dd>
                 <dt className="text-neutral-500">Stripe customer</dt>
-                <dd className="text-neutral-500 text-xs font-mono truncate">{data.stripe_customer_id || "—"}</dd>
+                <dd className="text-neutral-500 text-xs font-mono truncate">
+                  {data.stripe_customer_id ? (
+                    <a
+                      href={`https://dashboard.stripe.com/customers/${data.stripe_customer_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline"
+                      title="Open in Stripe dashboard"
+                    >
+                      {data.stripe_customer_id} ↗
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
                 <dt className="text-neutral-500">Stripe sub</dt>
-                <dd className="text-neutral-500 text-xs font-mono truncate">{data.stripe_subscription_id || "—"}</dd>
+                <dd className="text-neutral-500 text-xs font-mono truncate">
+                  {data.stripe_subscription_id ? (
+                    <a
+                      href={`https://dashboard.stripe.com/subscriptions/${data.stripe_subscription_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline"
+                      title="Open in Stripe dashboard — change plan, cancel, view invoices"
+                    >
+                      {data.stripe_subscription_id} ↗
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
                 <dt className="text-neutral-500">Price ID</dt>
                 <dd className="text-neutral-500 text-xs font-mono truncate">{data.stripe_price_id || "—"}</dd>
               </dl>
+              {data.stripe_subscription_id && (
+                <p className="mt-3 text-[11px] leading-relaxed text-neutral-500">
+                  To cancel or refund: open the subscription in Stripe ↗.
+                  Our DB updates automatically once the webhook fires
+                  (status flips to <code>canceled</code> within a few seconds).
+                </p>
+              )}
             </section>
 
             {/* Admin actions */}

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 export default function Hero() {
   return (
-    <section className="relative min-h-[92vh] flex items-center justify-center overflow-hidden px-6 pt-20 pb-32">
+    <section className="relative min-h-[92vh] flex items-center justify-center overflow-hidden px-6 pt-32 pb-32">
       <div className="absolute inset-0 -z-10">
         <div className="absolute -top-40 -left-40 h-[40rem] w-[40rem] rounded-full bg-fuchsia-700/20 blur-3xl" />
         <div className="absolute top-1/2 -right-40 h-[40rem] w-[40rem] rounded-full bg-indigo-600/20 blur-3xl" />
@@ -16,10 +16,10 @@ export default function Hero() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
-          className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-900/60 px-4 py-1.5 text-xs uppercase tracking-widest text-neutral-300"
+          className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-xs uppercase tracking-widest text-amber-200"
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Beta — free during build
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-300 animate-pulse" />
+          Founder offer · 50% off forever · Closes 30 July 2026
         </motion.div>
 
         <motion.h1
@@ -48,20 +48,25 @@ export default function Hero() {
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, delay: 0.3 }}
-          className="flex items-center justify-center gap-3"
+          className="flex flex-col items-center gap-4"
         >
-          <Link
-            to="/register"
-            className="rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
-          >
-            Start free →
-          </Link>
-          <Link
-            to="/login"
-            className="rounded-xl border border-neutral-700 px-6 py-3.5 font-medium text-neutral-200 hover:border-neutral-500 transition"
-          >
-            Log in
-          </Link>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Link
+              to="/register"
+              className="rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
+            >
+              Start 14-day trial →
+            </Link>
+            <Link
+              to="/pricing"
+              className="rounded-xl border border-neutral-700 px-6 py-3.5 font-medium text-neutral-200 hover:border-neutral-500 transition"
+            >
+              See pricing
+            </Link>
+          </div>
+          <p className="text-xs text-neutral-500">
+            No card required to start · Cancel any time
+          </p>
         </motion.div>
       </div>
     </section>

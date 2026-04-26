@@ -93,12 +93,20 @@ export default function Login() {
           Continue with Google
         </button>
 
-        <p className="text-center text-sm text-neutral-400">
-          New here?{" "}
-          <Link to="/register" className="text-white underline underline-offset-4">
-            Create an account
+        <div className="space-y-2 text-center">
+          <p className="text-sm text-neutral-400">
+            New here?{" "}
+            <Link to="/register" className="text-white underline underline-offset-4">
+              Start free trial
+            </Link>
+          </p>
+          <Link
+            to="/pricing"
+            className="block text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-4 transition"
+          >
+            View pricing →
           </Link>
-        </p>
+        </div>
       </div>
     </main>
   );

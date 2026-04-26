@@ -58,19 +58,46 @@ class Settings(BaseSettings):
 
     rate_limit_generate_per_hour: int = 60
     """Max calls to `POST /api/jobs/{id}/generate` per user per hour."""
+    rate_limit_generate_per_minute: int = 30
+    """Anti-burst cap on PDF generation. Stops automation abuse without
+    affecting humans (a real user never clicks 'Generate' 30 times a
+    minute). Stacked with the per-hour limit on the same endpoint."""
 
-    # ---- Billing / licensing (LMFWC on magicalplugins.com) ----
-    license_server_url: str | None = None
-    """Base URL of the LMFWC host. Empty in dev = no validation, everyone is
-    treated as internal_beta. Set to https://magicalplugins.com in prod."""
-    lmfwc_consumer_key: str | None = None
-    lmfwc_consumer_secret: str | None = None
-    printlay_product_name: str = "PrintLay"
-    """Sent in the LMFWC product-install ping so PrintLay shows up under its
-    own name in the magicalplugins admin (separate from the Murphy's connector)."""
-    telemetry_enabled: bool = False
-    """When True, fire-and-forget product events to /wp-json/printlay/v1/telemetry.
-    Default off until the matching WP plugin is installed on magicalplugins.com."""
+    # ---- Billing (Stripe) ----
+    stripe_secret_key: str | None = None
+    """Stripe secret key (sk_live_... or sk_test_...). Required for billing."""
+    stripe_webhook_secret: str | None = None
+    """Stripe webhook endpoint secret (whsec_...). Required for webhook verification."""
+    stripe_price_starter_monthly: str | None = None
+    stripe_price_starter_annual: str | None = None
+    stripe_price_pro_monthly: str | None = None
+    stripe_price_pro_annual: str | None = None
+    stripe_price_studio_monthly: str | None = None
+    stripe_price_studio_annual: str | None = None
+
+    # ---- Admin access ----
+    admin_emails: str = ""
+    """Comma-separated list of email addresses granted admin access (case
+    insensitive). Lets the owner manage the install without a separate user
+    role table - keep it small and secret. Example:
+        ADMIN_EMAILS=anthony@magicalplugins.com,ops@printlay.io"""
+
+    # ---- Bulk messaging (admin outreach) ----
+    resend_api_key: str | None = None
+    """Set to enable transactional email sending. Free tier 3k/month is plenty
+    for early-stage outreach."""
+    resend_from_email: str = "Printlay <hello@printlay.io>"
+    """Verified sender. Must match a domain you've verified in Resend."""
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_from_number: str | None = None
+    """E.164 number / Messaging Service SID. Optional - SMS is silently
+    disabled if any of these three are missing."""
+
+    @property
+    def admin_email_set(self) -> set[str]:
+        """Lower-cased set of admin emails for O(1) membership checks."""
+        return {e.strip().lower() for e in self.admin_emails.split(",") if e.strip()}
 
     @property
     def is_production(self) -> bool:

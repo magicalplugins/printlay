@@ -4,18 +4,24 @@ export type Category = {
   id: string;
   name: string;
   created_at: string;
+  is_official?: boolean;
+  subscribed?: boolean;
+  asset_count?: number | null;
 };
 
 export type Asset = {
   id: string;
-  category_id: string;
+  category_id: string | null;
+  job_id: string | null;
   name: string;
   kind: "pdf" | "svg" | "png" | "jpg";
   width_pt: number;
   height_pt: number;
   file_size: number;
   thumbnail_url: string | null;
+  preview_url: string | null;
   created_at: string;
+  is_official?: boolean;
 };
 
 export const listCategories = () => api<Category[]>("/api/categories");
@@ -76,3 +82,34 @@ export async function importCategory(
   if (targetCategoryId) fd.append("target_category_id", targetCategoryId);
   return api<Category>("/api/categories/import", { method: "POST", body: fd });
 }
+
+// ---- Official catalogues (opt-in subscriptions) ----
+
+export const listOfficialCatalogues = () =>
+  api<Category[]>("/api/catalogues/official");
+
+export const subscribeToCatalogue = (categoryId: string) =>
+  api<Category>(`/api/catalogues/${categoryId}/subscribe`, { method: "POST" });
+
+export const unsubscribeFromCatalogue = (categoryId: string) =>
+  api<void>(`/api/catalogues/${categoryId}/subscribe`, { method: "DELETE" });
+
+// ---- Admin: mark a catalogue as official + push subscriptions ----
+
+export const adminSetOfficial = (categoryId: string, isOfficial: boolean) =>
+  api<Category>(
+    `/api/admin/catalogues/${categoryId}?is_official=${isOfficial}`,
+    { method: "PATCH" }
+  );
+
+export const adminAssignSubscriber = (categoryId: string, userId: string) =>
+  api<void>(
+    `/api/admin/catalogues/${categoryId}/assign?user_id=${userId}`,
+    { method: "POST" }
+  );
+
+export const adminUnassignSubscriber = (categoryId: string, userId: string) =>
+  api<void>(
+    `/api/admin/catalogues/${categoryId}/assign?user_id=${userId}`,
+    { method: "DELETE" }
+  );

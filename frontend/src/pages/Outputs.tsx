@@ -6,6 +6,7 @@ import {
   listOutputs,
   Output,
 } from "../api/outputs";
+import UsageHint from "../components/app/UsageHint";
 
 export default function Outputs() {
   const [items, setItems] = useState<Output[] | null>(null);
@@ -19,8 +20,22 @@ export default function Outputs() {
   useEffect(load, []);
 
   async function onDownload(id: string) {
-    const { url } = await downloadOutputUrl(id);
-    window.open(url, "_blank");
+    // iPadOS / Safari blocks window.open() called after `await` because it's
+    // no longer attached to a user gesture. Open a blank tab synchronously,
+    // then redirect it once the presigned URL resolves. Falls back to a
+    // same-tab navigation if the popup was suppressed entirely.
+    const win = window.open("", "_blank");
+    try {
+      const { url } = await downloadOutputUrl(id);
+      if (win && !win.closed) {
+        win.location.href = url;
+      } else {
+        window.location.href = url;
+      }
+    } catch (e) {
+      if (win && !win.closed) win.close();
+      setErr(String(e));
+    }
   }
 
   async function onDelete(id: string) {
@@ -32,7 +47,10 @@ export default function Outputs() {
   return (
     <div className="max-w-5xl mx-auto px-6 py-12">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight">Outputs</h1>
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-3xl font-bold tracking-tight">Outputs</h1>
+          <UsageHint metric="exports_this_month" />
+        </div>
         <p className="text-neutral-400 mt-1">
           Print-ready PDFs you've generated. Artboard preserved exact, slot
           rectangles hidden.

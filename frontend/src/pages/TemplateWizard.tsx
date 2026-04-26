@@ -6,6 +6,8 @@ import {
   generateTemplate,
   uploadTemplate,
 } from "../api/templates";
+import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
+import { formatApiError, FormattedApiError } from "../utils/apiError";
 
 type Path = "choose" | "upload" | "generate";
 
@@ -13,10 +15,10 @@ export default function TemplateWizard() {
   const [path, setPath] = useState<Path>("choose");
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-12">
-      <div className="mb-10">
-        <h1 className="text-3xl font-bold tracking-tight">New template</h1>
-        <p className="text-neutral-400 mt-1">
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-12 overflow-x-hidden">
+      <div className="mb-8 sm:mb-10">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">New template</h1>
+        <p className="text-neutral-400 mt-1 text-sm sm:text-base">
           Two ways in: bring your own, or build one here.
         </p>
       </div>
@@ -77,7 +79,7 @@ function UploadStep({ onBack }: { onBack: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FormattedApiError | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -88,7 +90,7 @@ function UploadStep({ onBack }: { onBack: () => void }) {
       const tpl = await uploadTemplate(file, name || file.name);
       navigate(`/app/templates/${tpl.id}`);
     } catch (e) {
-      setErr(String(e));
+      setErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -124,7 +126,7 @@ function UploadStep({ onBack }: { onBack: () => void }) {
           className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 outline-none focus:border-neutral-600"
         />
       </div>
-      {err && <div className="text-sm text-rose-400">{err}</div>}
+      <QuotaErrorBanner error={err} />
       <button
         type="submit"
         disabled={!file || busy}
@@ -145,12 +147,13 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
   const [kind, setKind] = useState<"rect" | "circle">("circle");
   const [sw, setSw] = useState(55);
   const [sh, setSh] = useState(55);
+  const [cornerRadius, setCornerRadius] = useState(0);
   const [gx, setGx] = useState(5);
   const [gy, setGy] = useState(5);
   const [edgeMargin, setEdgeMargin] = useState(0);
   const [spacingMode, setSpacingMode] = useState<SpacingMode>("fixed");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<FormattedApiError | null>(null);
 
   const layout = useMemo(
     () => fitLayout(aw, ah, sw, sh, gx, gy, edgeMargin, spacingMode),
@@ -172,6 +175,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         gap_y: gy,
         center: true,
         edge_margin: edgeMargin,
+        corner_radius: kind === "rect" ? cornerRadius : 0,
         spacing_mode: spacingMode,
       },
     };
@@ -179,15 +183,18 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
       const tpl = await generateTemplate(req);
       navigate(`/app/templates/${tpl.id}`);
     } catch (e) {
-      setErr(String(e));
+      setErr(formatApiError(e));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="grid lg:grid-cols-2 gap-10">
-      <div className="space-y-6">
+    <form
+      onSubmit={onSubmit}
+      className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-8 sm:gap-10 min-w-0"
+    >
+      <div className="space-y-6 min-w-0">
         <BackLink onBack={onBack} />
         <div>
           <label className="block text-sm font-medium text-neutral-300 mb-2">Name</label>
@@ -218,19 +225,98 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         </Section>
 
         <Section title="Shape">
-          <div className="grid grid-cols-3 gap-3">
-            <Select
-              label="Type"
-              value={kind}
-              onChange={(v) => setKind(v as "rect" | "circle")}
-              options={[
-                { v: "rect", l: "Rectangle" },
-                { v: "circle", l: "Circle" },
-              ]}
-            />
-            <NumberField label="Width" value={sw} onChange={setSw} />
-            <NumberField label="Height" value={sh} onChange={setSh} />
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <ShapeTile
+              active={kind === "circle"}
+              onClick={() => setKind("circle")}
+              label="Circle"
+              hint="Round slot, perfect for stickers, badges, lids."
+            >
+              <svg viewBox="0 0 40 40" width="44" height="44">
+                <circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </ShapeTile>
+            <ShapeTile
+              active={kind === "rect"}
+              onClick={() => setKind("rect")}
+              label="Square / Rectangle"
+              hint="Use equal width & height for a square. Add corner radius for rounded corners."
+            >
+              <svg viewBox="0 0 40 40" width="44" height="44">
+                <rect
+                  x="6"
+                  y="6"
+                  width="28"
+                  height="28"
+                  rx={cornerRadius > 0 ? Math.min(8, cornerRadius * 0.4) : 0}
+                  ry={cornerRadius > 0 ? Math.min(8, cornerRadius * 0.4) : 0}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                />
+              </svg>
+            </ShapeTile>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label={kind === "circle" ? `Diameter (${units})` : `Width (${units})`}
+              value={sw}
+              onChange={(v) => {
+                setSw(v);
+                if (kind === "circle") setSh(v);
+              }}
+            />
+            <NumberField
+              label={kind === "circle" ? `Diameter (${units})` : `Height (${units})`}
+              value={sh}
+              onChange={(v) => {
+                setSh(v);
+                if (kind === "circle") setSw(v);
+              }}
+            />
+          </div>
+          {kind === "rect" && (
+            <div className="mt-3">
+              <label className="block text-xs text-neutral-400 mb-1.5">
+                Corner radius ({units}) ·{" "}
+                <span className="text-neutral-500">
+                  0 = sharp · max {(Math.min(sw, sh) / 2).toFixed(1)}
+                </span>
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.min(sw, sh) / 2}
+                  step={0.5}
+                  value={Math.min(cornerRadius, Math.min(sw, sh) / 2)}
+                  onChange={(e) => setCornerRadius(parseFloat(e.target.value))}
+                  className="flex-1 accent-violet-500"
+                />
+                <input
+                  type="number"
+                  min={0}
+                  max={Math.min(sw, sh) / 2}
+                  step={0.5}
+                  value={cornerRadius}
+                  onChange={(e) =>
+                    setCornerRadius(
+                      Math.max(
+                        0,
+                        Math.min(parseFloat(e.target.value) || 0, Math.min(sw, sh) / 2)
+                      )
+                    )
+                  }
+                  className="w-20 rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-base text-neutral-100 outline-none focus:border-neutral-600 font-mono"
+                />
+              </div>
+              {cornerRadius >= Math.min(sw, sh) / 2 && cornerRadius > 0 && (
+                <p className="text-[11px] text-violet-300 mt-1.5">
+                  Tip: at max radius this is effectively a circle/oval.
+                </p>
+              )}
+            </div>
+          )}
         </Section>
 
         <Section title="Layout">
@@ -286,7 +372,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
           </p>
         </Section>
 
-        {err && <div className="text-sm text-rose-400">{err}</div>}
+        <QuotaErrorBanner error={err} />
 
         <button
           type="submit"
@@ -299,7 +385,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         </button>
       </div>
 
-      <div className="lg:sticky lg:top-20 self-start">
+      <div className="lg:sticky lg:top-20 self-start min-w-0 max-w-full">
         <div className="text-sm text-neutral-400 mb-2">
           Preview: {layout.cols} × {layout.rows} = {layout.cols * layout.rows} slots
         </div>
@@ -310,10 +396,48 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
           shapeH={sh}
           edgeMargin={edgeMargin}
           kind={kind}
+          cornerRadius={kind === "rect" ? cornerRadius : 0}
           layout={layout}
         />
       </div>
     </form>
+  );
+}
+
+function ShapeTile({
+  active,
+  onClick,
+  label,
+  hint,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "text-left rounded-xl border p-4 transition flex gap-3 items-start " +
+        (active
+          ? "border-violet-500 bg-violet-500/10 text-white"
+          : "border-neutral-800 bg-neutral-900/40 text-neutral-300 hover:border-neutral-600")
+      }
+    >
+      <div className={active ? "text-violet-300" : "text-neutral-400"}>
+        {children}
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm font-semibold">{label}</div>
+        <div className="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+          {hint}
+        </div>
+      </div>
+    </button>
   );
 }
 
@@ -462,6 +586,7 @@ function GeneratorPreview({
   shapeH,
   edgeMargin,
   kind,
+  cornerRadius,
   layout,
 }: {
   artboardW: number;
@@ -470,12 +595,13 @@ function GeneratorPreview({
   shapeH: number;
   edgeMargin: number;
   kind: "rect" | "circle";
+  cornerRadius: number;
   layout: Layout;
 }) {
-  const PREVIEW_W = 480;
-  const aspect = artboardH / artboardW;
-  const previewH = PREVIEW_W * aspect;
-  const scale = PREVIEW_W / artboardW;
+  // Render purely in artboard units and let the SVG viewBox handle scaling
+  // to whatever width the container gives us. That keeps the preview
+  // responsive on mobile (where the parent column may only be ~340px wide)
+  // without ever forcing the page to scroll horizontally.
 
   const shapes: { x: number; y: number }[] = [];
   for (const y of layout.ys) {
@@ -485,51 +611,58 @@ function GeneratorPreview({
   }
 
   const showSafeZone = edgeMargin > 0;
+  // Stroke widths are in the same units as the artboard (e.g. mm). On a
+  // 297mm-wide A4, 0.4mm reads as a fine hairline at the typical preview
+  // size on both phone and desktop.
+  const strokeUnits = Math.max(0.15, Math.min(artboardW, artboardH) / 600);
 
   return (
     <div
-      className="rounded-xl border border-neutral-800 bg-white relative shadow-lg"
-      style={{ width: PREVIEW_W, height: previewH }}
+      className="rounded-xl border border-neutral-800 bg-white relative shadow-lg w-full max-w-full overflow-hidden"
+      style={{ aspectRatio: `${artboardW} / ${artboardH}` }}
     >
       <svg
-        width={PREVIEW_W}
-        height={previewH}
-        viewBox={`0 0 ${PREVIEW_W} ${previewH}`}
+        width="100%"
+        height="100%"
+        viewBox={`0 0 ${artboardW} ${artboardH}`}
+        preserveAspectRatio="xMidYMid meet"
         className="absolute inset-0"
       >
         {showSafeZone && (
           <rect
-            x={edgeMargin * scale}
-            y={edgeMargin * scale}
-            width={(artboardW - 2 * edgeMargin) * scale}
-            height={(artboardH - 2 * edgeMargin) * scale}
+            x={edgeMargin}
+            y={edgeMargin}
+            width={artboardW - 2 * edgeMargin}
+            height={artboardH - 2 * edgeMargin}
             fill="none"
             stroke="#a78bfa"
-            strokeWidth="0.8"
-            strokeDasharray="3 3"
+            strokeWidth={strokeUnits * 1.5}
+            strokeDasharray={`${strokeUnits * 5} ${strokeUnits * 5}`}
           />
         )}
         {shapes.map((s, i) =>
           kind === "circle" ? (
             <circle
               key={i}
-              cx={(s.x + shapeW / 2) * scale}
-              cy={(s.y + shapeH / 2) * scale}
-              r={(Math.min(shapeW, shapeH) / 2) * scale}
+              cx={s.x + shapeW / 2}
+              cy={s.y + shapeH / 2}
+              r={Math.min(shapeW, shapeH) / 2}
               fill="none"
               stroke="#0a0a0a"
-              strokeWidth="0.6"
+              strokeWidth={strokeUnits}
             />
           ) : (
             <rect
               key={i}
-              x={s.x * scale}
-              y={s.y * scale}
-              width={shapeW * scale}
-              height={shapeH * scale}
+              x={s.x}
+              y={s.y}
+              width={shapeW}
+              height={shapeH}
+              rx={Math.min(cornerRadius, Math.min(shapeW, shapeH) / 2)}
+              ry={Math.min(cornerRadius, Math.min(shapeW, shapeH) / 2)}
               fill="none"
               stroke="#0a0a0a"
-              strokeWidth="0.6"
+              strokeWidth={strokeUnits}
             />
           )
         )}

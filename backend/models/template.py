@@ -31,6 +31,12 @@ class Template(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     has_ocg: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Per-template print-tolerance settings, in millimetres. Apply uniformly
+    # to every shape on the template. Bleed never grows the artboard - it
+    # only allows artwork to extend past each slot's bbox by this amount.
+    bleed_mm: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    safe_mm: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
     shapes: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
     """List of `{shape_index, page_index, bbox: [x,y,w,h], layer, is_position_slot}`."""
 

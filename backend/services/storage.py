@@ -73,12 +73,25 @@ def delete(key: str) -> None:
     _client().delete_object(Bucket=_bucket(), Key=key)
 
 
-def presigned_get(key: str, expires_in: int = 3600, download_filename: str | None = None) -> str:
+def presigned_get(
+    key: str,
+    expires_in: int = 3600,
+    download_filename: str | None = None,
+    content_type: str | None = None,
+) -> str:
+    """Generate a presigned GET URL.
+
+    `content_type` forces the response Content-Type header (overriding
+    whatever the object was uploaded with). Useful for serving an
+    original SVG that may have been stored as octet-stream so the
+    browser renders it inline rather than downloading it."""
     params: dict = {"Bucket": _bucket(), "Key": key}
     if download_filename:
         params["ResponseContentDisposition"] = (
             f'attachment; filename="{download_filename}"'
         )
+    if content_type:
+        params["ResponseContentType"] = content_type
     return _client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
 
 

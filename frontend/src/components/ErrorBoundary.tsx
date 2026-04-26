@@ -3,6 +3,18 @@ import { Component, ErrorInfo, ReactNode } from "react";
 type Props = { children: ReactNode };
 type State = { error: Error | null };
 
+const RELOAD_KEY = "printlay:chunk-reload-attempted";
+
+function isChunkLoadError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /Importing a module script failed/i.test(msg) ||
+    /Loading chunk \d+ failed/i.test(msg) ||
+    /ChunkLoadError/i.test(msg)
+  );
+}
+
 export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
@@ -12,6 +24,21 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Printlay UI crashed:", error, info);
+    // Stale-bundle recovery: if a code-split chunk failed to load (typically
+    // because we just redeployed and the old hashed filename no longer
+    // exists), reload once to fetch the new bundle.
+    if (isChunkLoadError(error)) {
+      let alreadyTried = false;
+      try {
+        alreadyTried = sessionStorage.getItem(RELOAD_KEY) === "1";
+      } catch {}
+      if (!alreadyTried) {
+        try {
+          sessionStorage.setItem(RELOAD_KEY, "1");
+        } catch {}
+        window.location.reload();
+      }
+    }
   }
 
   reset = () => this.setState({ error: null });

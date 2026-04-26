@@ -24,9 +24,18 @@ class TemplateOut(BaseModel):
     page_height: float
     positions_layer: str
     has_ocg: bool
+    bleed_mm: float = 0.0
+    safe_mm: float = 0.0
     shapes: list[dict[str, Any]]
     generation_params: dict[str, Any] | None = None
     created_at: datetime
+
+
+class TemplateUpdate(BaseModel):
+    """Patch-style update for an existing template."""
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    bleed_mm: float | None = Field(default=None, ge=0, le=20)
+    safe_mm: float | None = Field(default=None, ge=0, le=20)
 
 
 class GenerateArtboard(BaseModel):
@@ -49,6 +58,9 @@ class GenerateShape(BaseModel):
     """Inviolable margin (in template ``units``) on all four sides of the
     artboard. No slot will be placed inside this margin. Increasing the
     margin shrinks the available area and may drop a row/column."""
+    corner_radius: float = Field(ge=0, default=0)
+    """Corner radius for rectangles, in template ``units``. Ignored when
+    ``kind='circle'``. Capped at half the smaller side server-side."""
     spacing_mode: Literal["fixed", "even"] = "fixed"
     """``fixed``: slots are spaced exactly ``gap_x``/``gap_y`` apart.
     ``even``: pack as many slots as fit edge-to-edge inside the available

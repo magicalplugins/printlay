@@ -44,8 +44,8 @@ export default function Register() {
           <Link to="/" className="text-xs uppercase tracking-widest text-neutral-500">
             Printlay
           </Link>
-          <h1 className="text-3xl font-bold tracking-tight">Create your account</h1>
-          <p className="text-sm text-neutral-400">Free during beta. No card required.</p>
+          <h1 className="text-3xl font-bold tracking-tight">Start your free trial</h1>
+          <p className="text-sm text-neutral-400">14 days full access · No card required to start</p>
         </div>
 
         {configError && (
@@ -79,16 +79,37 @@ export default function Register() {
             disabled={busy || !client}
             className="w-full rounded-lg bg-white px-4 py-3 font-semibold text-neutral-950 hover:bg-neutral-200 disabled:opacity-40"
           >
-            {busy ? "Creating…" : "Start free"}
+            {busy ? "Creating…" : "Start 14-day trial →"}
           </button>
+
+          <p className="text-xs text-neutral-500 leading-relaxed">
+            By creating an account you agree to our{" "}
+            <Link
+              to="/terms"
+              className="underline underline-offset-2 hover:text-neutral-300"
+            >
+              Terms &amp; Conditions
+            </Link>
+            . Founder Offer subscribers receive a 50% percentage discount
+            off the published price at each renewal — see §6 of the terms
+            for the full detail.
+          </p>
         </form>
 
-        <p className="text-center text-sm text-neutral-400">
-          Already have an account?{" "}
-          <Link to="/login" className="text-white underline underline-offset-4">
-            Sign in
+        <div className="space-y-2 text-center">
+          <p className="text-sm text-neutral-400">
+            Already have an account?{" "}
+            <Link to="/login" className="text-white underline underline-offset-4">
+              Sign in
+            </Link>
+          </p>
+          <Link
+            to="/pricing"
+            className="block text-xs text-neutral-500 hover:text-neutral-300 underline underline-offset-4 transition"
+          >
+            View pricing →
           </Link>
-        </p>
+        </div>
       </div>
     </main>
   );

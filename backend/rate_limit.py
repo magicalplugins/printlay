@@ -34,3 +34,9 @@ limiter = Limiter(
 
 def generate_limit() -> str:
     return f"{get_settings().rate_limit_generate_per_hour}/hour"
+
+
+def generate_burst_limit() -> str:
+    """Per-minute cap stacked alongside the hourly limit on `/generate`.
+    See `rate_limit_generate_per_minute` in config for the rationale."""
+    return f"{get_settings().rate_limit_generate_per_minute}/minute"

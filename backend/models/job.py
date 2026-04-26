@@ -34,3 +34,17 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slot_order: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
     assignments: Mapped[dict[str, dict]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # Optional live link to a ColorProfile. Resolved fresh at generate
+    # time so editing the profile flows through to every linked job.
+    color_profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("color_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # Per-job draft swaps (same shape as ColorProfile.swaps). Used while
+    # the user is iterating on a job before promoting to a saved profile.
+    color_swaps_draft: Mapped[list[dict] | None] = mapped_column(
+        JSONB, nullable=True
+    )

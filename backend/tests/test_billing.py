@@ -1,203 +1,194 @@
-"""Tests for the LMFWC client + entitlements layer.
-
-We mock httpx so no network calls happen in CI. The client is also tested for
-its degenerate "not configured" path so dev environments without LMFWC creds
-behave deterministically.
-"""
+"""Tests for the entitlements layer (Stripe-only, no LMFWC)."""
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
-import httpx
 import pytest
 
-from backend.config import get_settings
 from backend.models import User
-from backend.services import entitlements, lmfwc
+from backend.services import entitlements
+from backend.services.entitlements import Plan
 
-
-@pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
-@pytest.fixture
-def configured(monkeypatch):
-    monkeypatch.setenv("LICENSE_SERVER_URL", "https://magicalplugins.test")
-    monkeypatch.setenv("LMFWC_CONSUMER_KEY", "ck_test")
-    monkeypatch.setenv("LMFWC_CONSUMER_SECRET", "cs_test")
-    get_settings.cache_clear()
-    yield
-    get_settings.cache_clear()
-
-
-# -------- tier_from_license_key --------
-
-@pytest.mark.parametrize(
-    "key,expected",
-    [
-        ("PL-STR-AAAA-BBBB", "starter"),
-        ("PL-PRO-AAAA-BBBB", "professional"),
-        ("PL-EXPERT-AAAA-BBBB", "expert"),
-        ("pl-pro-lower-case", "professional"),
-        ("STR-NO-PREFIX", "internal_beta"),
-        ("", "internal_beta"),
-        (None, "internal_beta"),
-    ],
-)
-def test_tier_from_license_key(key, expected):
-    assert lmfwc.tier_from_license_key(key) == expected
-
-
-# -------- is_configured --------
-
-def test_is_configured_false_by_default():
-    assert lmfwc.is_configured() is False
-
-
-def test_is_configured_true_with_creds(configured):
-    assert lmfwc.is_configured() is True
-
-
-# -------- validate_license --------
-
-def test_validate_unconfigured_returns_invalid():
-    result = lmfwc.validate_license("PL-PRO-XXXX")
-    assert result.valid is False
-    assert "not configured" in (result.message or "").lower()
-
-
-def test_validate_success_parses_response(configured):
-    fake = httpx.Response(
-        200,
-        json={
-            "success": True,
-            "data": {
-                "id": 42,
-                "licenseKey": "PL-PRO-AAAA-BBBB",
-                "expiresAt": "2027-04-12 23:59:59",
-                "status": 2,
-                "timesActivated": 1,
-                "timesActivatedMax": 3,
-            },
-        },
-        request=httpx.Request("GET", "https://magicalplugins.test/x"),
-    )
-    with patch("backend.services.lmfwc.httpx.get", return_value=fake):
-        result = lmfwc.validate_license("PL-PRO-AAAA-BBBB")
-    assert result.valid is True
-    assert result.plan == "professional"
-    assert result.activations_used == 1
-    assert result.activations_max == 3
-    assert result.expires_at == datetime(2027, 4, 12, 23, 59, 59)
-
-
-def test_validate_failure_returns_message(configured):
-    fake = httpx.Response(
-        404,
-        json={"message": "License key invalid"},
-        request=httpx.Request("GET", "https://magicalplugins.test/x"),
-    )
-    with patch("backend.services.lmfwc.httpx.get", return_value=fake):
-        result = lmfwc.validate_license("PL-PRO-AAAA-BBBB")
-    assert result.valid is False
-    assert result.message == "License key invalid"
-
-
-def test_validate_timeout_returns_invalid(configured):
-    with patch(
-        "backend.services.lmfwc.httpx.get",
-        side_effect=httpx.TimeoutException("boom"),
-    ):
-        result = lmfwc.validate_license("PL-PRO-AAAA-BBBB")
-    assert result.valid is False
-    assert "timeout" in (result.message or "").lower()
-
-
-# -------- activate_license --------
-
-def test_activate_success_calls_ping(configured):
-    success = httpx.Response(
-        200,
-        json={"success": True, "data": {}},
-        request=httpx.Request("GET", "https://magicalplugins.test/x"),
-    )
-    with patch("backend.services.lmfwc.httpx.get", return_value=success), patch(
-        "backend.services.lmfwc.ping_product_install"
-    ) as ping:
-        result = lmfwc.activate_license("PL-PRO-XXXX", "user-1")
-    assert result.ok is True
-    assert result.already_done is False
-    ping.assert_called_once_with("PL-PRO-XXXX", "user-1")
-
-
-def test_activate_already_used_is_idempotent_ok(configured):
-    fake = httpx.Response(
-        400,
-        json={"message": "License key already activated for the maximum number of times"},
-        request=httpx.Request("GET", "https://magicalplugins.test/x"),
-    )
-    with patch("backend.services.lmfwc.httpx.get", return_value=fake):
-        result = lmfwc.activate_license("PL-PRO-XXXX", "user-1")
-    assert result.ok is True
-    assert result.already_done is True
-
-
-# -------- entitlements --------
 
 def _make_user(**overrides) -> User:
     u = User(email="x@example.com", auth_id=uuid.uuid4())
     u.id = uuid.uuid4()
-    u.tier = overrides.get("tier", "internal_beta")
-    u.license_key = overrides.get("license_key")
-    u.license_status = overrides.get("license_status")
-    u.license_validated_at = overrides.get("license_validated_at")
-    u.license_expires_at = overrides.get("license_expires_at")
+    u.tier = overrides.get("tier", "locked")
+    u.trial_ends_at = overrides.get("trial_ends_at")
+    u.stripe_subscription_status = overrides.get("stripe_subscription_status")
+    u.stripe_price_id = overrides.get("stripe_price_id")
+    u.stripe_current_period_end = overrides.get("stripe_current_period_end")
+    u.founder_member = overrides.get("founder_member", False)
     return u
 
 
-def test_entitlement_default_user_is_internal_beta_unlimited():
+# ---- Locked state (expired trial, no sub, new user) ----
+
+def test_new_user_with_no_trial_is_locked():
     ent = entitlements.for_user(_make_user())
-    assert ent.plan == "internal_beta"
-    assert ent.allows("anything")  # 'all' feature flag
+    assert ent.plan == "locked"
+    assert not ent.allows("pdf_export")
+    assert ent.quota("exports_per_month") == 0
+
+
+# ---- Active trial ----
+
+def test_active_trial_gets_pro_entitlements():
+    user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=7))
+    ent = entitlements.for_user(user)
+    assert ent.plan == "pro"
+    assert ent.is_trialing is True
+    assert ent.allows("pdf_export")
+    assert ent.allows("colour_swap")
+    assert ent.quota("templates_max") is None  # unlimited on pro
+
+
+def test_expired_trial_drops_to_locked():
+    user = _make_user(trial_ends_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+    ent = entitlements.for_user(user)
+    assert ent.plan == "locked"
+    assert not ent.allows("pdf_export")
+
+
+# ---- Stripe active subscription (mocked price IDs) ----
+
+def test_active_stripe_subscription_resolves_plan(monkeypatch):
+    """When stripe_subscription_status is active, plan comes from the price ID."""
+    import backend.services.entitlements as ent_mod
+
+    def fake_plan(price_id: str | None) -> Plan:
+        if price_id == "price_pro_monthly":
+            return "pro"
+        if price_id == "price_starter_monthly":
+            return "starter"
+        if price_id == "price_studio_annual":
+            return "studio"
+        return "locked"
+
+    monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", fake_plan)
+
+    for price_id, expected_plan in [
+        ("price_starter_monthly", "starter"),
+        ("price_pro_monthly", "pro"),
+        ("price_studio_annual", "studio"),
+    ]:
+        user = _make_user(
+            stripe_subscription_status="active",
+            stripe_price_id=price_id,
+        )
+        ent = entitlements.for_user(user)
+        assert ent.plan == expected_plan
+        assert ent.is_trialing is False
+
+
+def test_cancelled_stripe_subscription_drops_to_locked_after_trial(monkeypatch):
+    """Cancelled (status != active) + no active trial => locked."""
+    user = _make_user(
+        stripe_subscription_status="canceled",
+        trial_ends_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    ent = entitlements.for_user(user)
+    assert ent.plan == "locked"
+
+
+# ---- Enterprise (admin-set) ----
+
+def test_enterprise_tier_bypasses_stripe_and_trial():
+    user = _make_user(tier="enterprise")
+    ent = entitlements.for_user(user)
+    assert ent.plan == "enterprise"
+    assert ent.allows("all") or ent.allows("api_access")
     assert ent.quota("templates_max") is None
 
 
-def test_entitlement_starter_has_finite_limits():
-    ent = entitlements.for_user(_make_user(tier="starter"))
+# ---- Starter limits ----
+
+def test_starter_has_correct_limits(monkeypatch):
+    import backend.services.entitlements as ent_mod
+    monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", lambda _: "starter")
+    user = _make_user(stripe_subscription_status="active", stripe_price_id="price_starter_monthly")
+    ent = entitlements.for_user(user)
     assert ent.plan == "starter"
     assert ent.quota("templates_max") == 5
-    assert ent.allows("basic_templates")
+    assert ent.quota("exports_per_month") == 200
+    assert ent.quota("color_profiles_max") == 2
+    assert ent.quota("categories_max") == 10
+    assert ent.quota("asset_size_mb_max") == 50
+    assert ent.quota("storage_mb_max") == 5 * 1024
+    assert ent.allows("pdf_export")
     assert not ent.allows("api_access")
+    assert not ent.allows("white_label_pdf")
 
 
-def test_entitlement_in_grace_period_when_recently_validated():
-    user = _make_user(
-        tier="professional",
-        license_status="invalid",
-        license_validated_at=datetime.now(timezone.utc) - timedelta(hours=1),
-    )
+def test_pro_has_correct_storage_and_asset_caps(monkeypatch):
+    import backend.services.entitlements as ent_mod
+    monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", lambda _: "pro")
+    user = _make_user(stripe_subscription_status="active", stripe_price_id="price_pro_monthly")
     ent = entitlements.for_user(user)
-    assert ent.in_grace_period is True
+    assert ent.plan == "pro"
+    assert ent.quota("templates_max") is None
+    assert ent.quota("exports_per_month") is None
+    assert ent.quota("asset_size_mb_max") == 100
+    assert ent.quota("storage_mb_max") == 50 * 1024
 
 
-def test_entitlement_grace_period_expires_after_72h():
-    user = _make_user(
-        tier="professional",
-        license_status="invalid",
-        license_validated_at=datetime.now(timezone.utc) - timedelta(hours=80),
-    )
+def test_studio_has_correct_storage_and_asset_caps(monkeypatch):
+    import backend.services.entitlements as ent_mod
+    monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", lambda _: "studio")
+    user = _make_user(stripe_subscription_status="active", stripe_price_id="price_studio_monthly")
     ent = entitlements.for_user(user)
-    assert ent.in_grace_period is False
+    assert ent.plan == "studio"
+    assert ent.quota("asset_size_mb_max") == 500
+    assert ent.quota("storage_mb_max") == 250 * 1024
+    assert ent.allows("api_access")
+    assert ent.allows("white_label_pdf")
 
 
-def test_to_public_dict_masks_license_key():
-    user = _make_user(license_key="PL-PRO-AAAA-BBBB-CCCC-DDDD")
-    public = entitlements.to_public_dict(entitlements.for_user(user))
-    assert "AAAA" not in (public["license_key_masked"] or "")
-    assert public["license_key_masked"] is not None
-    assert public["license_key_masked"].startswith("PL-PRO")
+def test_enterprise_storage_is_unlimited():
+    user = _make_user(tier="enterprise")
+    ent = entitlements.for_user(user)
+    assert ent.plan == "enterprise"
+    assert ent.quota("storage_mb_max") is None
+    assert ent.quota("asset_size_mb_max") == 1024
+
+
+def test_trial_storage_is_capped_to_1gb_even_though_features_are_pro():
+    """Trial users get the full Pro feature set, but only 1 GB of storage."""
+    user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=7))
+    ent = entitlements.for_user(user)
+    assert ent.plan == "pro"
+    assert ent.is_trialing is True
+    assert ent.quota("storage_mb_max") == 1024
+    assert ent.quota("templates_max") is None
+    assert ent.allows("priority_support")
+
+
+# ---- under_quota helper ----
+
+def test_under_quota_returns_true_when_unlimited():
+    user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=1))
+    ent = entitlements.for_user(user)
+    assert ent.under_quota("templates_max", 9999) is True
+
+
+def test_under_quota_returns_false_when_at_cap(monkeypatch):
+    import backend.services.entitlements as ent_mod
+    monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", lambda _: "starter")
+    user = _make_user(stripe_subscription_status="active", stripe_price_id="x")
+    ent = entitlements.for_user(user)
+    assert ent.quota("templates_max") == 5
+    assert ent.under_quota("templates_max", 5) is False
+    assert ent.under_quota("templates_max", 4) is True
+
+
+# ---- to_public_dict ----
+
+def test_to_public_dict_shape():
+    user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=3))
+    pub = entitlements.to_public_dict(entitlements.for_user(user))
+    assert pub["plan"] == "pro"
+    assert pub["is_trialing"] is True
+    assert "limits" in pub
+    assert "features" in pub
+    assert isinstance(pub["features"], list)

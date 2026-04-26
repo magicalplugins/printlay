@@ -1,18 +1,21 @@
 import Hero from "../components/landing/Hero";
 import KineticSteps from "../components/landing/KineticSteps";
 import DemoClip from "../components/landing/DemoClip";
+import PricingPreview from "../components/landing/PricingPreview";
 import SignupBlock from "../components/landing/SignupBlock";
+import LandingNav from "../components/landing/LandingNav";
+import LandingFooter from "../components/landing/LandingFooter";
 
 export default function Landing() {
   return (
     <div className="min-h-full">
+      <LandingNav />
       <Hero />
       <KineticSteps />
       <DemoClip />
+      <PricingPreview />
       <SignupBlock />
-      <footer className="px-6 py-10 border-t border-neutral-900 text-center text-xs text-neutral-500">
-        Printlay · Built for print shops who gang up sheets · {new Date().getFullYear()}
-      </footer>
+      <LandingFooter />
     </div>
   );
 }

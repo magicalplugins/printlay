@@ -105,6 +105,7 @@ def generate(
     center: bool = True,
     edge_margin: float = 0.0,
     spacing_mode: Literal["fixed", "even"] = "fixed",
+    corner_radius: float = 0.0,
     positions_layer_name: str = "POSITIONS",
 ) -> GeneratedTemplate:
     page_w = units_to_pt(artboard_w, units)
@@ -114,6 +115,9 @@ def generate(
     gx = units_to_pt(gap_x, units)
     gy = units_to_pt(gap_y, units)
     margin = units_to_pt(edge_margin, units)
+    corner_radius_pt = max(0.0, units_to_pt(corner_radius, units))
+    # Corner radius can never exceed half the smaller side.
+    corner_radius_pt = min(corner_radius_pt, min(sw, sh) / 2.0)
 
     if sw <= 0 or sh <= 0:
         raise ValueError("Shape width/height must be positive.")
@@ -158,26 +162,33 @@ def generate(
                         (cx, cy), radius,
                         color=(0, 0, 0), fill=None, width=0.5, oc=ocg_xref,
                     )
+                elif corner_radius_pt > 0:
+                    _draw_rounded_rect(
+                        page, rect, corner_radius_pt,
+                        color=(0, 0, 0), width=0.5, oc=ocg_xref,
+                    )
                 else:
                     page.draw_rect(
                         rect,
                         color=(0, 0, 0), fill=None, width=0.5, oc=ocg_xref,
                     )
 
-                shapes.append(
-                    {
-                        "page_index": 0,
-                        "shape_index": idx,
-                        "bbox": [
-                            round(x_top, 3),
-                            round(y_top, 3),
-                            round(sw, 3),
-                            round(sh, 3),
-                        ],
-                        "layer": positions_layer_name,
-                        "is_position_slot": True,
-                    }
-                )
+                shape_dict: dict = {
+                    "page_index": 0,
+                    "shape_index": idx,
+                    "bbox": [
+                        round(x_top, 3),
+                        round(y_top, 3),
+                        round(sw, 3),
+                        round(sh, 3),
+                    ],
+                    "layer": positions_layer_name,
+                    "is_position_slot": True,
+                    "kind": "ellipse" if shape_kind == "circle" else "rect",
+                }
+                if shape_kind == "rect" and corner_radius_pt > 0:
+                    shape_dict["corner_radius_pt"] = round(corner_radius_pt, 3)
+                shapes.append(shape_dict)
                 idx += 1
 
         pdf_bytes = doc.tobytes(deflate=True)
@@ -190,3 +201,47 @@ def generate(
         page_height=page_h,
         shapes=shapes,
     )
+
+
+# Cubic Bezier "magic number" approximation of a quarter-circle arc.
+_KAPPA = 0.5522847498307933
+
+
+def _draw_rounded_rect(
+    page: "pymupdf.Page",
+    rect: "pymupdf.Rect",
+    radius_pt: float,
+    *,
+    color: tuple[float, float, float] = (0, 0, 0),
+    width: float = 0.5,
+    oc: int = 0,
+) -> None:
+    """Draw a rectangle with rounded corners at `radius_pt` (in PDF points).
+
+    PyMuPDF's `Shape.draw_rect` only draws sharp corners, so we trace the
+    perimeter manually using `draw_line` for the four edges and `draw_curve`
+    for each of the four corner arcs (cubic Bezier with the standard kappa
+    approximation). The result is a single closed path filled/stroked once
+    by the OCG so the parser still sees one drawing per slot.
+    """
+    r = max(0.0, min(radius_pt, min(rect.width, rect.height) / 2.0))
+    if r <= 0:
+        page.draw_rect(rect, color=color, fill=None, width=width, oc=oc)
+        return
+
+    x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+    k = _KAPPA * r
+    Pt = pymupdf.Point
+
+    shape = page.new_shape()
+    # Start at top-left, just past the corner radius, and trace clockwise.
+    shape.draw_line(Pt(x0 + r, y0), Pt(x1 - r, y0))
+    shape.draw_bezier(Pt(x1 - r, y0), Pt(x1 - r + k, y0), Pt(x1, y0 + r - k), Pt(x1, y0 + r))
+    shape.draw_line(Pt(x1, y0 + r), Pt(x1, y1 - r))
+    shape.draw_bezier(Pt(x1, y1 - r), Pt(x1, y1 - r + k), Pt(x1 - r + k, y1), Pt(x1 - r, y1))
+    shape.draw_line(Pt(x1 - r, y1), Pt(x0 + r, y1))
+    shape.draw_bezier(Pt(x0 + r, y1), Pt(x0 + r - k, y1), Pt(x0, y1 - r + k), Pt(x0, y1 - r))
+    shape.draw_line(Pt(x0, y1 - r), Pt(x0, y0 + r))
+    shape.draw_bezier(Pt(x0, y0 + r), Pt(x0, y0 + r - k), Pt(x0 + r - k, y0), Pt(x0 + r, y0))
+    shape.finish(color=color, fill=None, width=width, closePath=True, oc=oc)
+    shape.commit()

@@ -44,7 +44,9 @@ export default function SignupBlock() {
             <span className="italic font-light">Start printing.</span>
           </h2>
           <p className="text-neutral-400 text-lg">
-            Free during beta. No card. Cancel any time, but you won't.
+            14-day full-access trial. No card required to start.
+            <br />
+            Pick a plan when you're ready — or lock in the Founder rate (50% off forever) before 30 July 2026.
           </p>
         </div>
 
@@ -75,16 +77,34 @@ export default function SignupBlock() {
             disabled={busy || !client}
             className="w-full rounded-xl bg-white px-6 py-4 text-lg font-semibold text-neutral-950 hover:bg-neutral-200 transition disabled:opacity-40"
           >
-            {busy ? "Creating…" : "Start free →"}
+            {busy ? "Creating…" : "Start 14-day trial →"}
           </button>
+          <p className="text-center text-xs text-neutral-500">
+            By starting a trial you agree to our{" "}
+            <Link
+              to="/terms"
+              className="underline underline-offset-2 hover:text-neutral-300"
+            >
+              terms
+            </Link>
+            .
+          </p>
         </form>
 
-        <p className="text-center text-sm text-neutral-500">
-          Already have an account?{" "}
-          <Link to="/login" className="text-white underline underline-offset-4">
-            Sign in
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-center text-sm text-neutral-500">
+            Already have an account?{" "}
+            <Link to="/login" className="text-white underline underline-offset-4">
+              Sign in
+            </Link>
+          </p>
+          <Link
+            to="/pricing"
+            className="text-sm text-neutral-500 hover:text-neutral-300 underline underline-offset-4 transition"
+          >
+            View pricing →
           </Link>
-        </p>
+        </div>
       </div>
     </section>
   );

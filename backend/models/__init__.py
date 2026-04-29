@@ -4,6 +4,7 @@ from backend.models.base import Base
 from backend.models.color_profile import ColorProfile
 from backend.models.job import Job
 from backend.models.output import Output
+from backend.models.spot_color import SpotColor
 from backend.models.stripe_event import StripeEvent
 from backend.models.template import Template
 from backend.models.user import User
@@ -17,6 +18,7 @@ __all__ = [
     "ColorProfile",
     "Job",
     "Output",
+    "SpotColor",
     "StripeEvent",
     "Template",
     "User",

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import pymupdf  # type: ignore[import-untyped]
 from PIL import Image
 
-from backend.services import color_swap, image_filters
+from backend.services import color_swap, cut_lines, image_filters
 
 # Resolution used when we have to rasterise an asset to apply a colour
 # filter. 300 DPI matches print expectations; quality 92 keeps the
@@ -75,6 +75,7 @@ def composite(
     slot_transforms: dict[int, SlotTransform] | None = None,
     positions_layer: str = "POSITIONS",
     color_swaps: list[dict] | None = None,
+    cut_line_spec: cut_lines.CutLineSpec | None = None,
 ) -> CompositedSheet:
     """Build the print-ready PDF.
 
@@ -89,6 +90,13 @@ def composite(
         slot_transforms: optional per-slot `SlotTransform` describing rotation,
             fit mode, and (for `manual`) explicit placement.
         positions_layer: name of the OCG layer to switch off in the output.
+        cut_line_spec: optional. When set, the output PDF gets a Separation
+            colour space named `cut_line_spec.spot_name` and every slot's
+            outline is stroked in that spot so a print/cut RIP routes the
+            geometry to its cutter. The POSITIONS OCG is still turned off
+            so the original construction rectangles remain hidden; the cut
+            lines are drawn on top as a fresh, always-visible content
+            stream that owns the cut path independently.
     """
 
     transforms = slot_transforms or {}
@@ -338,6 +346,20 @@ def composite(
         out = doc.tobytes(deflate=True, garbage=3)
     finally:
         doc.close()
+
+    if cut_line_spec is not None:
+        try:
+            out = cut_lines.embed(
+                pdf_bytes=out,
+                slot_shapes=slot_shapes,
+                spec=cut_line_spec,
+            )
+        except cut_lines.CutLineError as exc:
+            # Cut-line embedding is value-add; if pikepdf chokes on the
+            # composited file we still ship the artwork-only PDF so the
+            # operator isn't blocked. Surface the failure so they can
+            # re-try without the option ticked.
+            raise CompositorError(f"Cut-line embedding failed: {exc}") from exc
 
     return CompositedSheet(
         pdf_bytes=out,

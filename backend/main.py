@@ -16,6 +16,7 @@ from backend.routers import catalogue as catalogue_router
 from backend.routers import color_profiles as color_profiles_router
 from backend.routers import jobs as jobs_router
 from backend.routers import outputs as outputs_router
+from backend.routers import spot_colors as spot_colors_router
 from backend.routers import templates as templates_router
 
 settings = get_settings()
@@ -46,6 +47,7 @@ app.include_router(templates_router.router)
 app.include_router(jobs_router.router)
 app.include_router(catalogue_router.router)
 app.include_router(color_profiles_router.router)
+app.include_router(spot_colors_router.router)
 app.include_router(outputs_router.router)
 app.include_router(admin_router.router)
 

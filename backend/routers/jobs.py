@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from backend.audit import record
 from backend.auth import AuthenticatedUser, get_current_user
 from backend.database import get_db
-from backend.models import Asset, ColorProfile, Job, Output, Template, User
+from backend.models import Asset, ColorProfile, Job, Output, SpotColor, Template, User
 from backend.rate_limit import generate_burst_limit, generate_limit, limiter
 from backend.routers.templates import _resolve_user
 from backend.schemas.asset import AssetOut
@@ -19,6 +19,7 @@ from backend.schemas.color_profile import (
 )
 from backend.schemas.job import (
     FillRequest,
+    GenerateOptions,
     JobCreate,
     JobOut,
     JobUpdate,
@@ -28,6 +29,7 @@ from backend.schemas.output import OutputOut
 from backend.services import (
     asset_pipeline,
     color_swap,
+    cut_lines,
     entitlements,
     pdf_compositor,
     storage,
@@ -470,6 +472,59 @@ def duplicate_job(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_cut_line_spec(
+    db: Session, user: User, opts: GenerateOptions
+) -> cut_lines.CutLineSpec:
+    """Pick which spot colour drives the cut layer.
+
+    Resolution order:
+      1. ``opts.cut_line_spot_color_id`` if provided - explicit user choice.
+      2. The user's row flagged ``is_cut_line_default``.
+      3. 400 with a clear message - the operator must either pick one
+         on this generate call or set a library default in Settings.
+    """
+    if opts.cut_line_spot_color_id is not None:
+        row = (
+            db.query(SpotColor)
+            .filter(
+                SpotColor.id == opts.cut_line_spot_color_id,
+                SpotColor.user_id == user.id,
+            )
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(404, "Spot colour not found")
+    else:
+        row = (
+            db.query(SpotColor)
+            .filter(
+                SpotColor.user_id == user.id,
+                SpotColor.is_cut_line_default.is_(True),
+            )
+            .one_or_none()
+        )
+        if row is None:
+            raise HTTPException(
+                400,
+                detail={
+                    "code": "no_default_cut_line_spot",
+                    "message": (
+                        "No default cut-line spot colour is set on your "
+                        "account. Pick one on the job page or mark a "
+                        "library entry as the default."
+                    ),
+                },
+            )
+
+    rgb_list = list(row.rgb or [255, 0, 255])[:3]
+    while len(rgb_list) < 3:
+        rgb_list.append(0)
+    return cut_lines.CutLineSpec(
+        spot_name=row.name,
+        rgb=(int(rgb_list[0]), int(rgb_list[1]), int(rgb_list[2])),
+    )
+
+
 def _resolve_active_swaps(db: Session, job: Job) -> list[dict]:
     """Effective swap list for a job: profile (if attached) overlaid by
     the job's draft (draft entries win on identical source)."""
@@ -604,9 +659,11 @@ def update_job_colors(
 def generate_output(
     request: Request,
     job_id: uuid.UUID,
+    options: GenerateOptions | None = None,
     auth: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Output:
+    opts = options or GenerateOptions()
     user = _resolve_user(db, auth)
     request.state.auth_user = auth
 
@@ -689,6 +746,8 @@ def generate_output(
 
     active_swaps = _resolve_active_swaps(db, job)
 
+    cut_line_spec = _resolve_cut_line_spec(db, user, opts) if opts.include_cut_lines else None
+
     try:
         sheet = pdf_compositor.composite(
             template_pdf=template_bytes,
@@ -697,6 +756,7 @@ def generate_output(
             slot_transforms=slot_transforms,
             positions_layer=tpl.positions_layer,
             color_swaps=active_swaps,
+            cut_line_spec=cut_line_spec,
         )
     except pdf_compositor.CompositorError as exc:
         raise HTTPException(500, str(exc))

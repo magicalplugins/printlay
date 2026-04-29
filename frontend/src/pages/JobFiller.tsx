@@ -43,6 +43,7 @@ import {
 import { autoReparseIfStale } from "../utils/reparseTemplate";
 import { formatApiError, FormattedApiError } from "../utils/apiError";
 import JobColorsPanel from "../components/app/JobColorsPanel";
+import SpotColorsPanel from "../components/app/SpotColorsPanel";
 import LockedOverlay, { useIsLocked } from "../components/app/LockedOverlay";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
 import PdfCanvas from "../components/app/PdfCanvas";
@@ -148,6 +149,17 @@ export default function JobFiller() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [designerForKey, setDesignerForKey] = useState<string | null>(null);
+
+  // Per-generation cut-line opt-in (lifted from SpotColorsPanel so it
+  // can also be reflected in the Generate button label and threaded
+  // into the generateOutput call). Resets to OFF on every page load -
+  // we don't auto-enable across sessions because turning it on adds a
+  // visible cutter path and we want that to be a deliberate per-job
+  // choice, not a persistent surprise.
+  const [includeCutLines, setIncludeCutLines] = useState(false);
+  const [cutLineSpotColorId, setCutLineSpotColorId] = useState<string | null>(
+    null
+  );
 
   const totalSlots = job?.slot_order.length ?? 0;
   const queuedQty = rows.reduce((s, r) => s + r.qty, 0);
@@ -405,7 +417,10 @@ export default function JobFiller() {
     setErr(null);
     try {
       await saveQueue();
-      const out = await generateOutput(job.id);
+      const out = await generateOutput(job.id, {
+        include_cut_lines: includeCutLines,
+        cut_line_spot_color_id: cutLineSpotColorId,
+      });
 
       // Surface colour-swap results so the user knows whether their
       // configured swaps actually fired. Quiet success (no swaps, or
@@ -526,8 +541,17 @@ export default function JobFiller() {
               onClick={onGenerate}
               disabled={generating || queuedQty === 0}
               className="rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-5 py-2.5 font-semibold text-white hover:from-violet-400 hover:to-fuchsia-400 disabled:opacity-40 shadow-lg shadow-violet-500/20"
+              title={
+                includeCutLines
+                  ? "Generate with cut lines embedded for print/cut RIP"
+                  : "Generate artwork-only PDF"
+              }
             >
-              {generating ? "Generating…" : `Generate PDF →`}
+              {generating
+                ? "Generating…"
+                : includeCutLines
+                ? `Generate PDF + cut →`
+                : `Generate PDF →`}
             </button>
           )}
         </div>
@@ -851,6 +875,17 @@ export default function JobFiller() {
             jobId={job.id}
             filledSlotCount={Object.keys(job.assignments).length}
           />
+
+          {/* Spot colours + the per-job "include cut lines" toggle. Sits
+              directly below the colour swap panel so the two PDF-output
+              modifiers (RGB rewrite + add cut-path layer) live in the
+              same visual region. */}
+          <SpotColorsPanel
+            enabled={includeCutLines}
+            onEnabledChange={setIncludeCutLines}
+            selectedSpotColorId={cutLineSpotColorId}
+            onSelectedSpotColorIdChange={setCutLineSpotColorId}
+          />
         </aside>
       </div>
 
@@ -885,7 +920,11 @@ export default function JobFiller() {
               disabled={generating || queuedQty === 0}
               className="w-full h-12 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-sm font-semibold text-white disabled:opacity-40 shadow-lg shadow-violet-500/20"
             >
-              {generating ? "Generating…" : `Generate PDF (${queuedQty}/${totalSlots})`}
+              {generating
+                ? "Generating…"
+                : includeCutLines
+                ? `Generate PDF + cut (${queuedQty}/${totalSlots})`
+                : `Generate PDF (${queuedQty}/${totalSlots})`}
             </button>
           )}
         </div>

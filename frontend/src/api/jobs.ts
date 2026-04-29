@@ -128,6 +128,25 @@ export type GenerateResponse = {
   color_swap_report: ColorSwapReport | null;
 };
 
-export function generateOutput(id: string) {
-  return api<GenerateResponse>(`/api/jobs/${id}/generate`, { method: "POST" });
+export type GenerateOptions = {
+  include_cut_lines?: boolean;
+  cut_line_spot_color_id?: string | null;
+};
+
+export function generateOutput(id: string, options: GenerateOptions = {}) {
+  // Backwards-compatible: an empty options object means "no body", which
+  // the FastAPI route treats as the default behaviour (no cut lines,
+  // existing colour-swap pipeline only).
+  const hasAny =
+    options.include_cut_lines === true ||
+    options.cut_line_spot_color_id != null;
+  return api<GenerateResponse>(`/api/jobs/${id}/generate`, {
+    method: "POST",
+    body: hasAny
+      ? JSON.stringify({
+          include_cut_lines: !!options.include_cut_lines,
+          cut_line_spot_color_id: options.cut_line_spot_color_id ?? null,
+        })
+      : undefined,
+  });
 }

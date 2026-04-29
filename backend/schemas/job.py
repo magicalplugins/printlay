@@ -72,3 +72,21 @@ class QueueRequest(BaseModel):
     """
 
     queue: list[QueueItem] = []
+
+
+class GenerateOptions(BaseModel):
+    """Optional per-call modifiers for `POST /api/jobs/{id}/generate`. All
+    fields default to the existing behaviour so callers that don't send a
+    body still get an unmodified PDF."""
+
+    include_cut_lines: bool = False
+    """When True, the compositor draws the slot outlines onto the output
+    PDF using a Separation colour space - print/cut RIPs route those
+    paths to the cutter instead of inking them. Off by default so a
+    plain artwork-only generate still works exactly as before."""
+
+    cut_line_spot_color_id: uuid.UUID | None = None
+    """Which entry from the user's spot-colour library to use for the
+    cut path. None means "use the user's marked-default entry"; if no
+    default is set and `include_cut_lines` is True, the request fails
+    with 400 so the operator picks one explicitly."""

@@ -19,8 +19,9 @@ lines" without picking a specific spot colour from the dropdown.
 """
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -62,6 +63,18 @@ class SpotColor(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         nullable=False,
         default=False,
         server_default="false",
+    )
+
+    # The migration adds this column; we declare it here so SQLAlchemy
+    # actually loads it back from rows and `SpotColorOut` (which lists
+    # `updated_at` as required) doesn't 500. Mirrors `ColorProfile` -
+    # both server_default and onupdate fire so the value is correct
+    # whether the row was written by Alembic, raw SQL, or the ORM.
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
     def __repr__(self) -> str:

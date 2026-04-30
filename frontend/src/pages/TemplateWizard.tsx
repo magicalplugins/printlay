@@ -41,7 +41,7 @@ function Choose({ onPick }: { onPick: (p: Path) => void }) {
       />
       <Card
         title="Generate one here"
-        body="Specify the artboard, the shape (rectangle or circle), and the gap. We auto-fit and centre the grid for you."
+        body="Specify the artboard, the shape (rectangle, circle, or oval), and the gap. We auto-fit and centre the grid for you."
         cta="Build a template"
         onClick={() => onPick("generate")}
       />
@@ -112,7 +112,8 @@ function UploadStep({ onBack }: { onBack: () => void }) {
             hover:file:bg-neutral-200"
         />
         <p className="text-xs text-neutral-500 mt-2">
-          Tip: in Illustrator, put your slot rectangles/circles on a layer named{" "}
+          Tip: in Illustrator, put your slot shapes (rectangles, ovals, hexagons,
+          stars — any closed path) on a layer named{" "}
           <code className="text-neutral-300">POSITIONS</code> before exporting.
         </p>
       </div>
@@ -144,9 +145,19 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
   const [units, setUnits] = useState<"mm" | "in" | "pt">("mm");
   const [aw, setAw] = useState(297);
   const [ah, setAh] = useState(210);
-  const [kind, setKind] = useState<"rect" | "circle">("circle");
+  const [kind, setKind] = useState<"rect" | "circle" | "ellipse">("circle");
   const [sw, setSw] = useState(55);
   const [sh, setSh] = useState(55);
+
+  function pickKind(next: "rect" | "circle" | "ellipse") {
+    setKind(next);
+    if (next === "circle") {
+      // Force equal W/H so the diameter input stays consistent.
+      const d = Math.min(sw, sh) || sw || 55;
+      setSw(d);
+      setSh(d);
+    }
+  }
   const [cornerRadius, setCornerRadius] = useState(0);
   const [gx, setGx] = useState(5);
   const [gy, setGy] = useState(5);
@@ -225,22 +236,32 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         </Section>
 
         <Section title="Shape">
-          <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <ShapeTile
               active={kind === "circle"}
-              onClick={() => setKind("circle")}
+              onClick={() => pickKind("circle")}
               label="Circle"
-              hint="Round slot, perfect for stickers, badges, lids."
+              hint="Round slot — stickers, badges, lids."
             >
               <svg viewBox="0 0 40 40" width="44" height="44">
                 <circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" strokeWidth="2" />
               </svg>
             </ShapeTile>
             <ShapeTile
+              active={kind === "ellipse"}
+              onClick={() => pickKind("ellipse")}
+              label="Ellipse / Oval"
+              hint="Independent width × height — name badges, soap labels, vintage stickers."
+            >
+              <svg viewBox="0 0 40 40" width="44" height="44">
+                <ellipse cx="20" cy="20" rx="16" ry="10" fill="none" stroke="currentColor" strokeWidth="2" />
+              </svg>
+            </ShapeTile>
+            <ShapeTile
               active={kind === "rect"}
-              onClick={() => setKind("rect")}
+              onClick={() => pickKind("rect")}
               label="Square / Rectangle"
-              hint="Use equal width & height for a square. Add corner radius for rounded corners."
+              hint="Equal W & H for a square. Add corner radius for rounded corners."
             >
               <svg viewBox="0 0 40 40" width="44" height="44">
                 <rect
@@ -257,24 +278,29 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
               </svg>
             </ShapeTile>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          {kind === "circle" ? (
             <NumberField
-              label={kind === "circle" ? `Diameter (${units})` : `Width (${units})`}
+              label={`Diameter (${units})`}
               value={sw}
               onChange={(v) => {
                 setSw(v);
-                if (kind === "circle") setSh(v);
-              }}
-            />
-            <NumberField
-              label={kind === "circle" ? `Diameter (${units})` : `Height (${units})`}
-              value={sh}
-              onChange={(v) => {
                 setSh(v);
-                if (kind === "circle") setSw(v);
               }}
             />
-          </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField
+                label={`Width (${units})`}
+                value={sw}
+                onChange={setSw}
+              />
+              <NumberField
+                label={`Height (${units})`}
+                value={sh}
+                onChange={setSh}
+              />
+            </div>
+          )}
           {kind === "rect" && (
             <div className="mt-3">
               <label className="block text-xs text-neutral-400 mb-1.5">
@@ -594,7 +620,7 @@ function GeneratorPreview({
   shapeW: number;
   shapeH: number;
   edgeMargin: number;
-  kind: "rect" | "circle";
+  kind: "rect" | "circle" | "ellipse";
   cornerRadius: number;
   layout: Layout;
 }) {
@@ -640,18 +666,35 @@ function GeneratorPreview({
             strokeDasharray={`${strokeUnits * 5} ${strokeUnits * 5}`}
           />
         )}
-        {shapes.map((s, i) =>
-          kind === "circle" ? (
-            <circle
-              key={i}
-              cx={s.x + shapeW / 2}
-              cy={s.y + shapeH / 2}
-              r={Math.min(shapeW, shapeH) / 2}
-              fill="none"
-              stroke="#0a0a0a"
-              strokeWidth={strokeUnits}
-            />
-          ) : (
+        {shapes.map((s, i) => {
+          if (kind === "circle") {
+            return (
+              <circle
+                key={i}
+                cx={s.x + shapeW / 2}
+                cy={s.y + shapeH / 2}
+                r={Math.min(shapeW, shapeH) / 2}
+                fill="none"
+                stroke="#0a0a0a"
+                strokeWidth={strokeUnits}
+              />
+            );
+          }
+          if (kind === "ellipse") {
+            return (
+              <ellipse
+                key={i}
+                cx={s.x + shapeW / 2}
+                cy={s.y + shapeH / 2}
+                rx={shapeW / 2}
+                ry={shapeH / 2}
+                fill="none"
+                stroke="#0a0a0a"
+                strokeWidth={strokeUnits}
+              />
+            );
+          }
+          return (
             <rect
               key={i}
               x={s.x}
@@ -664,8 +707,8 @@ function GeneratorPreview({
               stroke="#0a0a0a"
               strokeWidth={strokeUnits}
             />
-          )
-        )}
+          );
+        })}
       </svg>
       {showSafeZone && (
         <div className="absolute bottom-2 right-2 text-[10px] uppercase tracking-widest text-violet-500/80 bg-white/70 px-2 py-0.5 rounded">

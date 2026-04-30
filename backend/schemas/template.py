@@ -45,7 +45,13 @@ class GenerateArtboard(BaseModel):
 
 
 class GenerateShape(BaseModel):
-    kind: Literal["rect", "circle"] = "rect"
+    kind: Literal["rect", "circle", "ellipse"] = "rect"
+    """``rect`` (with optional ``corner_radius``), ``circle`` (forces
+    ``width == height`` UI-side; backend draws the inscribed circle),
+    or ``ellipse`` (independent width and height — draws an oval that
+    fills the slot bbox). Circles and ellipses round-trip through the
+    parser as ``kind="ellipse"`` since the parser can't tell them apart
+    geometrically."""
     width: float = Field(gt=0)
     height: float = Field(gt=0)
     gap_x: float = Field(ge=0, default=0)

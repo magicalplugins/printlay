@@ -351,6 +351,52 @@ def test_parser_still_classifies_pure_circles_as_ellipse():
     assert s.corner_radius_pt == 0.0
 
 
+def test_generator_emits_ellipse_with_independent_width_height():
+    """A non-square ellipse slot must be drawn at the requested w x h
+    (oval), tagged `kind="ellipse"` in the generator's shape list, and
+    round-trip through the parser as `kind="ellipse"` with the same
+    bbox dimensions. Regression guard for the new ellipse option in
+    the generator wizard."""
+    PT = 72.0 / 25.4
+    tpl = pdf_generator.generate(
+        artboard_w=200, artboard_h=150, units="mm",
+        shape_kind="ellipse", shape_w=80, shape_h=40,
+    )
+    assert tpl.shapes, "generator produced no shapes"
+    g = tpl.shapes[0]
+    assert g["kind"] == "ellipse", f"expected ellipse kind, got {g['kind']!r}"
+    assert g["bbox"][2] == pytest.approx(80 * PT, abs=0.05), "ellipse width drifted"
+    assert g["bbox"][3] == pytest.approx(40 * PT, abs=0.05), "ellipse height drifted"
+    assert "corner_radius_pt" not in g, "ellipse must not carry corner_radius_pt"
+
+    parsed = pdf_parser.parse(tpl.pdf_bytes)
+    assert parsed.shapes, "parser found no shapes"
+    s = parsed.shapes[0]
+    assert s.kind == "ellipse", (
+        f"non-square oval should round-trip as ellipse, got {s.kind!r}"
+    )
+    assert s.bbox[2] == pytest.approx(80 * PT, abs=0.5), "parsed ellipse width drifted"
+    assert s.bbox[3] == pytest.approx(40 * PT, abs=0.5), "parsed ellipse height drifted"
+    assert s.corner_radius_pt == 0.0
+
+
+def test_generator_ellipse_grid_packs_like_a_rect():
+    """Ellipses must use the same axis-aligned bbox layout as rects -
+    same row/column count for the same w/h/gap inputs - so the wizard
+    preview math (which is shape-agnostic) stays accurate when the
+    user switches between rect and ellipse."""
+    common = dict(
+        artboard_w=200, artboard_h=150, units="mm",
+        shape_w=40, shape_h=30, gap_x=5, gap_y=5,
+    )
+    rect = pdf_generator.generate(shape_kind="rect", **common)
+    oval = pdf_generator.generate(shape_kind="ellipse", **common)
+    assert len(oval.shapes) == len(rect.shapes), (
+        "ellipse layout count diverged from rect - they must share the "
+        "same bbox-based packing math."
+    )
+
+
 def test_parser_roundtrip_preserves_slot_positions(template):
     """Each generated slot bbox must round-trip through the parser
     without a y-flip or stroke fudge - slot N's parsed (x, y, w, h)

@@ -97,7 +97,7 @@ def generate(
     artboard_w: float,
     artboard_h: float,
     units: Literal["mm", "pt", "in"],
-    shape_kind: Literal["rect", "circle"],
+    shape_kind: Literal["rect", "circle", "ellipse"],
     shape_w: float,
     shape_h: float,
     gap_x: float = 0.0,
@@ -162,6 +162,15 @@ def generate(
                         (cx, cy), radius,
                         color=(0, 0, 0), fill=None, width=0.5, oc=ocg_xref,
                     )
+                elif shape_kind == "ellipse":
+                    # Oval inscribed in the full slot rect — independent
+                    # width and height. Drawn as four cubic Beziers, so
+                    # the parser classifies it as `kind="ellipse"` on
+                    # round-trip (same path it already takes for circles).
+                    page.draw_oval(
+                        rect,
+                        color=(0, 0, 0), fill=None, width=0.5, oc=ocg_xref,
+                    )
                 elif corner_radius_pt > 0:
                     _draw_rounded_rect(
                         page, rect, corner_radius_pt,
@@ -184,7 +193,7 @@ def generate(
                     ],
                     "layer": positions_layer_name,
                     "is_position_slot": True,
-                    "kind": "ellipse" if shape_kind == "circle" else "rect",
+                    "kind": "ellipse" if shape_kind in ("circle", "ellipse") else "rect",
                 }
                 if shape_kind == "rect" and corner_radius_pt > 0:
                     shape_dict["corner_radius_pt"] = round(corner_radius_pt, 3)

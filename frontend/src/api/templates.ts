@@ -70,7 +70,10 @@ export type GenerateRequest = {
   name: string;
   artboard: { width: number; height: number; units: "mm" | "pt" | "in" };
   shape: {
-    kind: "rect" | "circle";
+    /** `circle` is the equal-W/H special case rendered with a single
+     *  diameter input; `ellipse` takes independent width × height and
+     *  draws an oval. Both round-trip from the parser as `kind: "ellipse"`. */
+    kind: "rect" | "circle" | "ellipse";
     width: number;
     height: number;
     gap_x: number;

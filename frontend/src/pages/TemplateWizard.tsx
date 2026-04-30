@@ -145,17 +145,31 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
   const [units, setUnits] = useState<"mm" | "in" | "pt">("mm");
   const [aw, setAw] = useState(297);
   const [ah, setAh] = useState(210);
-  const [kind, setKind] = useState<"rect" | "circle" | "ellipse">("circle");
+  // "oval" covers both circle (locked) and ellipse (unlocked).
+  const [shapeFamily, setShapeFamily] = useState<"oval" | "rect">("oval");
+  const [locked, setLocked] = useState(true); // true = circle (equal W/H)
   const [sw, setSw] = useState(55);
   const [sh, setSh] = useState(55);
 
-  function pickKind(next: "rect" | "circle" | "ellipse") {
-    setKind(next);
-    if (next === "circle") {
-      // Force equal W/H so the diameter input stays consistent.
+  // Derived kind sent to the backend.
+  const kind: "circle" | "ellipse" | "rect" =
+    shapeFamily === "rect" ? "rect" : locked ? "circle" : "ellipse";
+
+  function pickFamily(next: "oval" | "rect") {
+    setShapeFamily(next);
+    if (next === "oval" && locked) {
       const d = Math.min(sw, sh) || sw || 55;
       setSw(d);
       setSh(d);
+    }
+  }
+
+  function toggleLock() {
+    const next = !locked;
+    setLocked(next);
+    if (next) {
+      // Re-lock: snap H to W.
+      setSh(sw);
     }
   }
   const [cornerRadius, setCornerRadius] = useState(0);
@@ -236,30 +250,24 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         </Section>
 
         <Section title="Shape">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-2 gap-3 mb-4">
             <ShapeTile
-              active={kind === "circle"}
-              onClick={() => pickKind("circle")}
-              label="Circle"
-              hint="Round slot — stickers, badges, lids."
+              active={shapeFamily === "oval"}
+              onClick={() => pickFamily("oval")}
+              label="Circle / Oval"
+              hint="Lock for a perfect circle; unlock to set independent width & height."
             >
               <svg viewBox="0 0 40 40" width="44" height="44">
-                <circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" strokeWidth="2" />
+                {locked && shapeFamily === "oval" ? (
+                  <circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" strokeWidth="2" />
+                ) : (
+                  <ellipse cx="20" cy="20" rx="16" ry="10" fill="none" stroke="currentColor" strokeWidth="2" />
+                )}
               </svg>
             </ShapeTile>
             <ShapeTile
-              active={kind === "ellipse"}
-              onClick={() => pickKind("ellipse")}
-              label="Ellipse / Oval"
-              hint="Independent width × height — name badges, soap labels, vintage stickers."
-            >
-              <svg viewBox="0 0 40 40" width="44" height="44">
-                <ellipse cx="20" cy="20" rx="16" ry="10" fill="none" stroke="currentColor" strokeWidth="2" />
-              </svg>
-            </ShapeTile>
-            <ShapeTile
-              active={kind === "rect"}
-              onClick={() => pickKind("rect")}
+              active={shapeFamily === "rect"}
+              onClick={() => pickFamily("rect")}
               label="Square / Rectangle"
               hint="Equal W & H for a square. Add corner radius for rounded corners."
             >
@@ -278,27 +286,29 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
               </svg>
             </ShapeTile>
           </div>
-          {kind === "circle" ? (
-            <NumberField
-              label={`Diameter (${units})`}
-              value={sw}
-              onChange={(v) => {
-                setSw(v);
-                setSh(v);
-              }}
-            />
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <NumberField
-                label={`Width (${units})`}
-                value={sw}
-                onChange={setSw}
-              />
-              <NumberField
-                label={`Height (${units})`}
-                value={sh}
-                onChange={setSh}
-              />
+
+          {shapeFamily === "oval" && (
+            <div className="space-y-3">
+              {locked ? (
+                <NumberField
+                  label={`Diameter (${units})`}
+                  value={sw}
+                  onChange={(v) => { setSw(v); setSh(v); }}
+                />
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberField label={`Width (${units})`} value={sw} onChange={setSw} />
+                  <NumberField label={`Height (${units})`} value={sh} onChange={setSh} />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={toggleLock}
+                className="flex items-center gap-2 text-xs text-neutral-400 hover:text-white transition"
+              >
+                <span className="text-base leading-none">{locked ? "🔒" : "🔓"}</span>
+                {locked ? "Locked to circle — click to set custom width & height" : "Unlocked — click to lock as circle"}
+              </button>
             </div>
           )}
           {kind === "rect" && (

@@ -745,6 +745,102 @@ def test_compositor_arbitrary_rotation_keeps_aspect_and_centres():
         )
 
 
+def test_compositor_clips_manual_overflow_to_slot_bleed():
+    """A manually-placed asset whose bounding box extends past the slot+bleed
+    bbox MUST be trimmed at the bleed edge — print imposition cannot allow
+    one cell's design to spill into the next cell's area, otherwise the cut
+    line bisects the wrong artwork.
+
+    Regression for https://printlay.fly.dev/app/jobs feedback: user dragged
+    an oversized JPG so its bbox covered the whole sheet, the PDF rendered
+    it across every neighbouring slot, the operator's playing-card output
+    was unusable.
+
+    Scenario: 2 slots side by side, 60x40mm each, 0mm bleed, 0mm gap.
+    Asset (red) is placed in slot 0 with manual mode at a w/h DOUBLE the
+    slot's footprint and offset so it stretches well into slot 1's area.
+    After the fix:
+      * Red pixels exist in slot 0's bbox (asset rendered).
+      * NO red pixels exist anywhere in slot 1's bbox (clip honoured).
+    """
+    PT = 72.0 / 25.4
+    tpl = pdf_generator.generate(
+        artboard_w=120, artboard_h=40, units="mm",
+        shape_kind="rect",
+        shape_w=60, shape_h=40,
+        gap_x=0, gap_y=0,
+        edge_margin=0,
+    )
+    assert len(tpl.shapes) == 2, "fixture expected 2 horizontally-adjacent slots"
+
+    asset_doc = pymupdf.open()
+    ap = asset_doc.new_page(width=120 * PT, height=40 * PT)
+    ap.draw_rect(ap.rect, color=(0, 0, 0), fill=(1, 0, 0), width=0)
+    asset_bytes = asset_doc.tobytes()
+    asset_doc.close()
+
+    # Saved manual bbox spans the whole artboard from slot 0's perspective:
+    # x_pt = 0 (left edge of slot 0), w_pt = 120mm (covers both slots).
+    slot0 = tpl.shapes[0]
+    slot1 = tpl.shapes[1]
+    t = pdf_compositor.SlotTransform(
+        rotation_deg=0,
+        fit_mode="manual",
+        x_pt=0,
+        y_pt=0,
+        w_pt=120 * PT,
+        h_pt=40 * PT,
+    )
+    sheet = pdf_compositor.composite(
+        template_pdf=tpl.pdf_bytes,
+        slot_shapes=tpl.shapes,
+        asset_pdfs={slot0["shape_index"]: asset_bytes},
+        slot_transforms={slot0["shape_index"]: t},
+    )
+
+    from PIL import Image as _Image
+    doc = pymupdf.open(stream=sheet.pdf_bytes, filetype="pdf")
+    try:
+        pix = doc[0].get_pixmap(dpi=200, alpha=False)
+    finally:
+        doc.close()
+    img = _Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+
+    px_per_mm = 200 / 25.4
+
+    def _has_red(bbox_mm: tuple[float, float, float, float]) -> bool:
+        # bbox_mm: (x_mm, y_mm, w_mm, h_mm) — count any "clearly red" pixel.
+        x0 = int(bbox_mm[0] * px_per_mm)
+        y0 = int(bbox_mm[1] * px_per_mm)
+        x1 = int((bbox_mm[0] + bbox_mm[2]) * px_per_mm)
+        y1 = int((bbox_mm[1] + bbox_mm[3]) * px_per_mm)
+        red = 0
+        for yy in range(y0, y1):
+            for xx in range(x0, x1):
+                r, g, b = img.getpixel((xx, yy))
+                if r > 200 and g < 80 and b < 80:
+                    red += 1
+        return red > 100  # tolerate AA / sampling noise
+
+    s0_mm = (
+        slot0["bbox"][0] / PT, slot0["bbox"][1] / PT,
+        slot0["bbox"][2] / PT, slot0["bbox"][3] / PT,
+    )
+    # Slot 1 inset by 1mm on each side so we don't catch slot-1's own
+    # outline pixels or any AA spillover at the cut line.
+    s1_mm = (
+        slot1["bbox"][0] / PT + 1, slot1["bbox"][1] / PT + 1,
+        slot1["bbox"][2] / PT - 2, slot1["bbox"][3] / PT - 2,
+    )
+    assert _has_red(s0_mm), (
+        "asset wasn't rendered into slot 0 at all — placement broke entirely."
+    )
+    assert not _has_red(s1_mm), (
+        "asset bled into slot 1's area — slot+bleed clipping is missing. "
+        "Each cell's design must terminate at its own cut/bleed edge."
+    )
+
+
 def test_compositor_rotation_direction_matches_css_clockwise():
     """The designer applies `transform: rotate(${angle}deg)` which is
     CLOCKWISE on screen for positive angles; the on-canvas SlotOverlay

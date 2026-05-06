@@ -307,42 +307,26 @@ def composite(
                     place_owns_doc = True
 
                 try:
-                    if is_orthogonal:
-                        # Fast path: pymupdf's native rotate kwarg handles
-                        # 0/90/180/270. Crucially, pymupdf's `rotate=N`
-                        # rotates COUNTER-clockwise on screen for positive
-                        # N (verified empirically with a directional test
-                        # asset: rotate=90 puts the asset's TOP edge on
-                        # the LEFT of the page). The designer (and
-                        # SlotOverlay canvas preview) use CSS
-                        # `transform: rotate(Ndeg)` which is CLOCKWISE
-                        # for positive N. Passing `(-rot) % 360` makes
-                        # the print output match what the user designed
-                        # and what they saw in the on-screen preview.
-                        # The earlier "rotate=90 looked right" feedback
-                        # only fooled us because the user's playing-card
-                        # asset was nearly symmetric under 90 deg flips.
-                        page.show_pdf_page(
-                            target_rect,
-                            place_doc,
-                            pno=0,
-                            rotate=(-rot) % 360,
-                            keep_proportion=keep_prop,
-                            oc=design_ocg_xref,
-                        )
-                    else:
-                        # Arbitrary angle: register the asset with no
-                        # rotation, then rewrite the wrapper Form
-                        # XObject's /Matrix to apply our own
-                        # rotate-around-centre matrix. Avoids
-                        # rasterisation so vectors stay vectors.
-                        _place_with_arbitrary_rotation(
-                            page=page,
-                            asset_doc=place_doc,
-                            target_rect=target_rect,
-                            angle_deg=rot_free,
-                            oc_xref=design_ocg_xref,
-                        )
+                    # Clip box = slot bbox grown by bleed on every side.
+                    # Anything the asset would render outside this box must
+                    # be trimmed: in print imposition each cell's content
+                    # MUST stop at its own cut/bleed edge so it never
+                    # bleeds into the neighbouring cell. The user's
+                    # manual placement (and oversized "contain" rasters)
+                    # can both extend the asset past this box; without
+                    # clipping, the design overflows into adjacent slots.
+                    clip_bbox = pymupdf.Rect(ex, ey, ex + ew, ey + eh)
+                    _place_clipped_to_slot(
+                        page=page,
+                        asset_doc=place_doc,
+                        target_rect=target_rect,
+                        clip_rect=clip_bbox,
+                        rot_orthogonal=(-rot) % 360,
+                        rot_free=rot_free,
+                        is_orthogonal=is_orthogonal,
+                        keep_proportion=keep_prop,
+                        oc_xref=design_ocg_xref,
+                    )
                 finally:
                     if place_owns_doc:
                         place_doc.close()
@@ -425,6 +409,113 @@ def _wrap_image_as_pdf(
     page = doc.new_page(width=page_w_pt, height=page_h_pt)
     page.insert_image(page.rect, stream=image_bytes, keep_proportion=False)
     return doc
+
+
+def _place_clipped_to_slot(
+    *,
+    page: "pymupdf.Page",
+    asset_doc: "pymupdf.Document",
+    target_rect: "pymupdf.Rect",
+    clip_rect: "pymupdf.Rect",
+    rot_orthogonal: int,
+    rot_free: float,
+    is_orthogonal: bool,
+    keep_proportion: bool,
+    oc_xref: int,
+) -> None:
+    """Place `asset_doc[0]` on `page` at `target_rect`, but trim anything
+    that extends outside `clip_rect` (the slot's bleed bbox).
+
+    Print imposition rule: every cell's design must terminate at its own
+    cut/bleed edge — never spill into the neighbouring cell. The user can
+    drag a manually-placed asset (or a wildly-oversized "contain" raster)
+    so its bbox extends past the slot+bleed; without this trim the PDF
+    consumer (Acrobat, Illustrator, the print RIP) renders the asset's
+    full footprint and it visibly overlaps the next slot.
+
+    Implementation: render the asset onto a SCRATCH PDF page whose
+    mediabox equals `clip_rect`'s dimensions, then `show_pdf_page` that
+    scratch page at `clip_rect` on the master. PyMuPDF wraps the scratch
+    page in a Form XObject whose /BBox = the page's mediabox, which the
+    PDF spec guarantees clips any rendered content to that rectangle.
+    Vector assets stay vector (XObject nesting, no rasterisation); raster
+    assets stay at the same resolution they would have been at without
+    the indirection.
+
+    The bypass below avoids the extra XObject nesting when the asset
+    already fits inside the clip box — a small optimisation that also
+    keeps the existing happy-path output byte-identical to before.
+    """
+    inset = 0.01  # ignore sub-point overhang from float math
+    fits = (
+        target_rect.x0 >= clip_rect.x0 - inset
+        and target_rect.y0 >= clip_rect.y0 - inset
+        and target_rect.x1 <= clip_rect.x1 + inset
+        and target_rect.y1 <= clip_rect.y1 + inset
+    )
+    if fits:
+        if is_orthogonal:
+            page.show_pdf_page(
+                target_rect,
+                asset_doc,
+                pno=0,
+                rotate=rot_orthogonal,
+                keep_proportion=keep_proportion,
+                oc=oc_xref,
+            )
+        else:
+            _place_with_arbitrary_rotation(
+                page=page,
+                asset_doc=asset_doc,
+                target_rect=target_rect,
+                angle_deg=rot_free,
+                oc_xref=oc_xref,
+            )
+        return
+
+    # Scratch page coordinates: same top-left convention pymupdf uses,
+    # just translated so clip_rect's top-left becomes (0, 0).
+    rel_target = pymupdf.Rect(
+        target_rect.x0 - clip_rect.x0,
+        target_rect.y0 - clip_rect.y0,
+        target_rect.x1 - clip_rect.x0,
+        target_rect.y1 - clip_rect.y0,
+    )
+
+    scratch = pymupdf.open()
+    try:
+        scratch_page = scratch.new_page(
+            width=clip_rect.width,
+            height=clip_rect.height,
+        )
+        if is_orthogonal:
+            scratch_page.show_pdf_page(
+                rel_target,
+                asset_doc,
+                pno=0,
+                rotate=rot_orthogonal,
+                keep_proportion=keep_proportion,
+            )
+        else:
+            # OCG is applied at the OUTER placement so the scratch
+            # render stays plain (otherwise the OCG ref would refer to
+            # the wrong document and pymupdf would ignore it).
+            _place_with_arbitrary_rotation(
+                page=scratch_page,
+                asset_doc=asset_doc,
+                target_rect=rel_target,
+                angle_deg=rot_free,
+                oc_xref=0,
+            )
+        page.show_pdf_page(
+            clip_rect,
+            scratch,
+            pno=0,
+            keep_proportion=False,
+            oc=oc_xref,
+        )
+    finally:
+        scratch.close()
 
 
 def _place_with_arbitrary_rotation(

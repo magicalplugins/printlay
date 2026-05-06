@@ -1037,8 +1037,13 @@ function SortableQueueRow({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.6 : 1,
-    // Prevent the touch sensor from triggering the iOS scroll while dragging.
-    touchAction: "none",
+    // NOTE: deliberately NOT setting `touch-action: none` on the row.
+    // The TouchSensor uses delay-based activation (see `sensors` in the
+    // parent), which is designed to coexist with native scrolling -
+    // moving the finger before the delay lets the browser scroll, holding
+    // still claims the touch for dnd. Setting `touch-action: none` here
+    // would disable mobile scroll over the queue (every touch would be
+    // captured by the row), which made tall queues unscrollable on phones.
   };
   return (
     <li
@@ -1053,9 +1058,13 @@ function SortableQueueRow({
       <button
         {...attributes}
         {...listeners}
-        className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 h-11 w-7 flex items-center justify-center"
+        className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 h-11 w-8 flex items-center justify-center -ml-1"
         aria-label="Drag to reorder (long-press on touch)"
         title="Drag to reorder"
+        // Only the grip handle disables native touch scroll, so once the
+        // user lands on it the long-press drag is unambiguous. Everywhere
+        // else on the row, the page can still scroll normally.
+        style={{ touchAction: "none" }}
       >
         <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor">
           <circle cx="3" cy="4" r="1.6" />

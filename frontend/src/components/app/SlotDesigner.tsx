@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import {
   offsetPolygonPx,
+  pointsToClipPath,
   pointsToPx,
   pointsToSvg,
 } from "../../utils/polygon";
@@ -693,52 +694,143 @@ export default function SlotDesigner({
             }}
           />
 
-          {/* Artwork - draggable. Sits ABOVE the white slot but BELOW the
-              cut-line / bleed / safe guides so the cut edge is always
-              visible through any artwork that bleeds past it. */}
+          {/* Artwork - draggable. Two layers so the user clearly sees what
+              will actually print:
+                1. Low-opacity copy at full box size (shows what will be
+                   trimmed when the box extends past the slot+bleed area).
+                2. Full-opacity copy clipped to the slot+bleed area (this
+                   is exactly what the overlay/print will show).
+              The interactive draggable + handles div sits on top with no
+              image (the visible artwork is in the two layers below). */}
           {thumbnailUrl && (
-            <div
-              className="absolute cursor-move"
-              style={{
-                left: boxPx.x,
-                top: boxPx.y,
-                width: boxPx.w,
-                height: boxPx.h,
-                transform: `rotate(${rotation}deg)`,
-                transformOrigin: "center center",
-                touchAction: "none",
-              }}
-              onPointerDown={(e) =>
-                onPointerDownStage(e, {
-                  kind: "move",
-                  startX: e.clientX,
-                  startY: e.clientY,
-                  startBox: box,
-                })
-              }
-            >
-              <img
-                src={thumbnailUrl}
-                alt=""
-                draggable={false}
-                onLoad={(e) => {
-                  if (aspect) return;
-                  const img = e.currentTarget;
-                  if (img.naturalWidth && img.naturalHeight) {
-                    setAspect(img.naturalWidth / img.naturalHeight);
-                  }
-                }}
+            <>
+              {/* Layer 1: ghost (the entire box, dimmed) */}
+              <div
+                className="absolute pointer-events-none"
                 style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "fill",
-                  pointerEvents: "none",
-                  userSelect: "none",
-                  WebkitUserSelect: "none",
-                  display: "block",
-                  filter: filterCss(filterId),
+                  left: boxPx.x,
+                  top: boxPx.y,
+                  width: boxPx.w,
+                  height: boxPx.h,
+                  transform: `rotate(${rotation}deg)`,
+                  transformOrigin: "center center",
+                  opacity: 0.25,
                 }}
-              />
+              >
+                <img
+                  src={thumbnailUrl}
+                  alt=""
+                  draggable={false}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "fill",
+                    pointerEvents: "none",
+                    userSelect: "none",
+                    WebkitUserSelect: "none",
+                    display: "block",
+                    filter: filterCss(filterId),
+                  }}
+                />
+              </div>
+
+              {/* Layer 2: full-opacity, clipped to slot+bleed area */}
+              <div
+                className="absolute pointer-events-none overflow-hidden"
+                style={{
+                  left: slotOriginX - bleedPx,
+                  top: slotOriginY - bleedPx,
+                  width: slotPxW + bleedPx * 2,
+                  height: slotPxH + bleedPx * 2,
+                  borderRadius:
+                    shapeKind === "ellipse"
+                      ? "50%"
+                      : cornerPx > 0
+                        ? `${cornerPx + bleedPx}px`
+                        : 0,
+                  clipPath:
+                    shapeKind === "polygon" && shapePath && shapePath.length >= 3
+                      ? (() => {
+                          const slotPts = pointsToPx(
+                            shapePath,
+                            bleedPx,
+                            bleedPx,
+                            slotPxW,
+                            slotPxH,
+                          );
+                          const expanded = offsetPolygonPx(slotPts, bleedPx);
+                          const wrapW = slotPxW + bleedPx * 2;
+                          const wrapH = slotPxH + bleedPx * 2;
+                          const reNorm: [number, number][] = expanded.map(
+                            ([px, py]) => [
+                              wrapW > 0 ? px / wrapW : 0,
+                              wrapH > 0 ? py / wrapH : 0,
+                            ],
+                          );
+                          return pointsToClipPath(reNorm);
+                        })()
+                      : undefined,
+                }}
+              >
+                <div
+                  className="absolute"
+                  style={{
+                    left: boxPx.x - (slotOriginX - bleedPx),
+                    top: boxPx.y - (slotOriginY - bleedPx),
+                    width: boxPx.w,
+                    height: boxPx.h,
+                    transform: `rotate(${rotation}deg)`,
+                    transformOrigin: "center center",
+                  }}
+                >
+                  <img
+                    src={thumbnailUrl}
+                    alt=""
+                    draggable={false}
+                    onLoad={(e) => {
+                      if (aspect) return;
+                      const img = e.currentTarget;
+                      if (img.naturalWidth && img.naturalHeight) {
+                        setAspect(img.naturalWidth / img.naturalHeight);
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "fill",
+                      pointerEvents: "none",
+                      userSelect: "none",
+                      WebkitUserSelect: "none",
+                      display: "block",
+                      filter: filterCss(filterId),
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Layer 3: invisible interactive layer (drag + handles).
+                  Sits on top so the user can grab the box even when the
+                  visible artwork is dimmed/clipped underneath. */}
+              <div
+                className="absolute cursor-move"
+                style={{
+                  left: boxPx.x,
+                  top: boxPx.y,
+                  width: boxPx.w,
+                  height: boxPx.h,
+                  transform: `rotate(${rotation}deg)`,
+                  transformOrigin: "center center",
+                  touchAction: "none",
+                }}
+                onPointerDown={(e) =>
+                  onPointerDownStage(e, {
+                    kind: "move",
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startBox: box,
+                  })
+                }
+              >
               {/* Outline + handles. We render handles outside the rotation
                   so they stay visually upright? Simpler to keep them rotating
                   with the box - the corners themselves remain corners. */}
@@ -783,7 +875,8 @@ export default function SlotDesigner({
                   />
                 );
               })}
-            </div>
+              </div>
+            </>
           )}
 
           {/* Guide overlay: cut line + bleed + safe. Sits on TOP of the

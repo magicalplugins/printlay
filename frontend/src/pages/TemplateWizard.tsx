@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   GenerateRequest,
@@ -488,6 +488,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function usePrevious<T>(value: T): T {
+  const ref = useRef(value);
+  const prev = ref.current;
+  ref.current = value;
+  return prev;
+}
+
 function NumberField({
   label,
   value,
@@ -497,6 +504,12 @@ function NumberField({
   value: number;
   onChange: (n: number) => void;
 }) {
+  const [raw, setRaw] = useState(String(value));
+  const prev = usePrevious(value);
+  if (prev !== value && String(value) !== raw) {
+    setRaw(String(value));
+  }
+
   return (
     <label className="block text-xs text-neutral-400">
       {label}
@@ -504,8 +517,21 @@ function NumberField({
         type="number"
         min={0}
         step="0.1"
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+        value={raw}
+        onChange={(e) => {
+          setRaw(e.target.value);
+          const n = parseFloat(e.target.value);
+          if (!Number.isNaN(n)) onChange(n);
+        }}
+        onBlur={() => {
+          const n = parseFloat(raw);
+          if (Number.isNaN(n) || raw.trim() === "") {
+            onChange(0);
+            setRaw("0");
+          } else {
+            setRaw(String(n));
+          }
+        }}
         className="mt-1 w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-base text-neutral-100 outline-none focus:border-neutral-600"
       />
     </label>

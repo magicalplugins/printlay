@@ -1222,30 +1222,22 @@ export default function SlotDesigner({
                 ["H", "h"],
               ] as const
             ).map(([label, k]) => (
-              <label key={k} className="block">
-                <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-0.5">
-                  {label} <span className="text-neutral-700">mm</span>
-                </div>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step={0.5}
-                  value={round2(box[k])}
-                  onChange={(e) => {
-                    const v = parseFloat(e.target.value) || 0;
-                    setBox((b) =>
-                      clampBox(
-                        { ...b, [k]: v },
-                        slotWmm,
-                        slotHmm,
-                        bleedMm,
-                        lockAspect ? aspect : null
-                      )
-                    );
-                  }}
-                  className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2 font-mono text-sm outline-none focus:border-violet-500"
-                />
-              </label>
+              <CropNumField
+                key={k}
+                label={label}
+                value={round2(box[k])}
+                onChange={(v) =>
+                  setBox((b) =>
+                    clampBox(
+                      { ...b, [k]: v },
+                      slotWmm,
+                      slotHmm,
+                      bleedMm,
+                      lockAspect ? aspect : null
+                    )
+                  )
+                }
+              />
             ))}
           </div>
 
@@ -1498,4 +1490,50 @@ function clampBox(
   const y = Math.max(yMin, Math.min(b.y, yMax));
 
   return { x, y, w, h };
+}
+
+function CropNumField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  const [raw, setRaw] = useState(String(value));
+  const prevRef = useRef(value);
+  if (prevRef.current !== value && String(value) !== raw) {
+    setRaw(String(value));
+  }
+  prevRef.current = value;
+
+  return (
+    <label className="block">
+      <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-0.5">
+        {label} <span className="text-neutral-700">mm</span>
+      </div>
+      <input
+        type="number"
+        inputMode="decimal"
+        step={0.5}
+        value={raw}
+        onChange={(e) => {
+          setRaw(e.target.value);
+          const n = parseFloat(e.target.value);
+          if (!Number.isNaN(n)) onChange(n);
+        }}
+        onBlur={() => {
+          const n = parseFloat(raw);
+          if (Number.isNaN(n) || raw.trim() === "") {
+            onChange(0);
+            setRaw("0");
+          } else {
+            setRaw(String(n));
+          }
+        }}
+        className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2 font-mono text-sm outline-none focus:border-violet-500"
+      />
+    </label>
+  );
 }

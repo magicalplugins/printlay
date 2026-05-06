@@ -193,6 +193,17 @@ export default function SlotOverlay({
                 ? "fill"
                 : "contain";
           }
+          // Render structure mirrors SlotDesigner's two-layer pattern so
+          // the two views render byte-identical for any placement: the
+          // wrapper clips to slot+bleed, an inner div positioned at the
+          // box origin holds the rotation transform, and the <img> fills
+          // that inner div with `objectFit:fill`. With rotation applied
+          // to the inner div (not the img), the transform pivot is
+          // unambiguously the box's geometric centre regardless of
+          // browser (Safari treats `transform` on an absolutely-
+          // positioned <img> with overflow:hidden parent inconsistently
+          // when the img's bounding box exceeds the parent's bounds —
+          // wrapping in a div makes it deterministic).
           return (
             <div
               key={`art-${s.shape_index}`}
@@ -218,30 +229,34 @@ export default function SlotOverlay({
                 willChange: "transform",
               }}
             >
-              <img
-                src={p.thumbnailUrl}
-                alt=""
-                draggable={false}
-                decoding="async"
-                loading="eager"
+              <div
                 style={{
                   position: "absolute",
                   left: imgLeft,
                   top: imgTop,
                   width: widthPx,
                   height: heightPx,
-                  objectFit,
-                  // translate3d nudges the rotation onto the GPU compositor
-                  // so the *initial* paint also lands - rotate() alone is
-                  // sometimes treated as a 2D-only transform on iOS and
-                  // skips the composite hint we want here.
-                  transform: `translate3d(0,0,0) rotate(${rot}deg)`,
+                  transform: `rotate(${rot}deg)`,
                   transformOrigin: "center center",
-                  userSelect: "none",
-                  WebkitUserSelect: "none",
-                  filter: filterCss(p.filterId),
                 }}
-              />
+              >
+                <img
+                  src={p.thumbnailUrl}
+                  alt=""
+                  draggable={false}
+                  decoding="async"
+                  loading="eager"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit,
+                    display: "block",
+                    userSelect: "none",
+                    WebkitUserSelect: "none",
+                    filter: filterCss(p.filterId),
+                  }}
+                />
+              </div>
             </div>
           );
         })}

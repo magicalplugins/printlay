@@ -29,11 +29,18 @@ router = APIRouter(prefix="/api", tags=["catalogue"])
 MAX_BUNDLE_BYTES = 200 * 1024 * 1024
 
 
+_PREVIEW_CONTENT_TYPES: dict[str, str] = {
+    "svg": "image/svg+xml",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+}
+
+
 def _asset_urls(a: Asset) -> tuple[str | None, str | None]:
     """Return (thumbnail_url, preview_url) for an asset.
 
-    `preview_url` falls back to the thumbnail unless we have a true
-    vector source (SVG) we can serve sharp."""
+    `preview_url` serves the original source file for SVG/PNG/JPG (sharp at
+    any zoom); PDFs fall back to the thumbnail."""
     thumb = None
     if a.thumbnail_r2_key:
         try:
@@ -41,12 +48,13 @@ def _asset_urls(a: Asset) -> tuple[str | None, str | None]:
         except Exception:
             thumb = None
     preview = thumb
-    if a.kind == "svg" and a.r2_key_original:
+    ct = _PREVIEW_CONTENT_TYPES.get(a.kind)
+    if ct and a.r2_key_original:
         try:
             preview = storage.presigned_get(
                 a.r2_key_original,
                 expires_in=3600,
-                content_type="image/svg+xml",
+                content_type=ct,
             )
         except Exception:
             pass

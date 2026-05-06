@@ -114,6 +114,11 @@ def _detect_kind(filename: str, content_type: str | None) -> Literal["pdf", "svg
 
 
 def _raster_to_pdf(img: Image.Image) -> tuple[bytes, float, float]:
+    try:
+        from PIL import ImageOps
+        img = ImageOps.exif_transpose(img) or img
+    except Exception:
+        pass
     if img.mode in ("RGBA", "P"):
         bg = Image.new("RGB", img.size, (255, 255, 255))
         if img.mode == "RGBA":

@@ -512,6 +512,27 @@ export default function SlotDesigner({
     setFilterId("none");
   }
 
+  function cropToSafe() {
+    if (safeMm <= 0) return;
+    pushHistory();
+    const safeW = slotWmm - 2 * safeMm;
+    const safeH = slotHmm - 2 * safeMm;
+    if (safeW <= 0 || safeH <= 0) return;
+    const ar = aspect ?? slotWmm / slotHmm;
+    let w = safeW;
+    let h = safeW / ar;
+    if (h > safeH) {
+      h = safeH;
+      w = safeH * ar;
+    }
+    setBox({
+      x: safeMm + (safeW - w) / 2,
+      y: safeMm + (safeH - h) / 2,
+      w,
+      h,
+    });
+  }
+
   // Centre the current box on the slot (the cut line, not the bleed canvas).
   // `axis` decides which direction(s): both, horizontal-only, vertical-only.
   // Size is preserved - this is purely a position move.
@@ -1122,6 +1143,15 @@ export default function SlotDesigner({
                   Stretch
                 </button>
               </div>
+              {safeMm > 0 && (
+                <button
+                  onClick={cropToSafe}
+                  className="h-8 px-2.5 text-[11px] rounded-md border border-sky-700 text-sky-300 hover:bg-sky-900/40 hover:text-white"
+                  title={`Contain image within the ${safeMm}mm safe area — gives a perfect white border`}
+                >
+                  Safe crop
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -1433,15 +1463,26 @@ function initialBox(
   // No saved manual placement. Prefer the asset's true physical size
   // (centred in the slot) - that's what a print designer expects: a
   // 58x78 mm SVG opens at exactly 58x78 mm, not stretched to fill the
-  // slot. If natural dimensions aren't known yet, fall back to a
-  // contain-fit which the post-load effect refines once the image
-  // reports its own size.
+  // slot. But if the natural size is drastically larger than the slot
+  // (raster photos at 300 DPI), contain-fit so the image doesn't just
+  // overflow and look like an unintentional full-bleed.
   if (naturalWmm && naturalHmm && naturalWmm > 0 && naturalHmm > 0) {
+    let w = naturalWmm;
+    let h = naturalHmm;
+    if (w > slotWmm * 1.5 || h > slotHmm * 1.5) {
+      const ar = w / h;
+      w = slotWmm;
+      h = slotWmm / ar;
+      if (h > slotHmm) {
+        h = slotHmm;
+        w = slotHmm * ar;
+      }
+    }
     return {
-      x: (slotWmm - naturalWmm) / 2,
-      y: (slotHmm - naturalHmm) / 2,
-      w: naturalWmm,
-      h: naturalHmm,
+      x: (slotWmm - w) / 2,
+      y: (slotHmm - h) / 2,
+      w,
+      h,
     };
   }
   return { x: 0, y: 0, w: slotWmm, h: slotHmm };

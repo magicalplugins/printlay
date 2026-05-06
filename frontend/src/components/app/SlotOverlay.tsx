@@ -161,19 +161,25 @@ export default function SlotOverlay({
             p.assetNaturalWmm > 0 &&
             p.assetNaturalHmm > 0
           ) {
-            // Default placement: render the asset at its native physical
-            // size, centred on the slot. Mirrors `SlotDesigner.initialBox`
-            // so the canvas preview matches what the designer shows.
-            // Critically, we DON'T let `object-fit: contain` shrink the
-            // whole source PDF (including its built-in bleed/whitespace)
-            // to the slot - that's what was making playing cards look
-            // tiny inside the slot.
-            const naturalWpx = p.assetNaturalWmm * ptPerMm * scale;
-            const naturalHpx = p.assetNaturalHmm * ptPerMm * scale;
-            imgLeft = slotPx + (slotPw - naturalWpx) / 2 - clipLeft;
-            imgTop = slotPy + (slotPh - naturalHpx) / 2 - clipTop;
-            widthPx = naturalWpx;
-            heightPx = naturalHpx;
+            // Render the asset at its native physical size, centred on the
+            // slot — but if the asset is drastically larger (raster photos),
+            // contain-fit so it doesn't just overflow+clip and look like an
+            // unintentional full-bleed.
+            let natW = p.assetNaturalWmm * ptPerMm * scale;
+            let natH = p.assetNaturalHmm * ptPerMm * scale;
+            if (natW > slotPw * 1.5 || natH > slotPh * 1.5) {
+              const ar = natW / natH;
+              natW = slotPw;
+              natH = slotPw / ar;
+              if (natH > slotPh) {
+                natH = slotPh;
+                natW = slotPh * ar;
+              }
+            }
+            imgLeft = slotPx + (slotPw - natW) / 2 - clipLeft;
+            imgTop = slotPy + (slotPh - natH) / 2 - clipTop;
+            widthPx = natW;
+            heightPx = natH;
             objectFit = "fill";
           } else {
             imgLeft = slotPx - clipLeft;

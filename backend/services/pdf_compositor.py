@@ -252,15 +252,13 @@ def composite(
                     )
                     keep_prop = True
                 else:  # "contain" (default)
-                    # Place the asset at its exact native physical size,
-                    # centred on the slot. This is what a print designer
-                    # expects: an 86x60 mm playing card stays 86x60 mm,
-                    # not scaled up to the 88.2x63 mm cut line. Mirrors
-                    # `SlotDesigner.initialBox` and `SlotOverlay`'s native-
-                    # size default so canvas, designer and output PDF all
-                    # agree. If the user wants the art to actually fill
-                    # the slot, they pick "cover" or "stretch" in the
-                    # designer.
+                    # Place the asset at its native physical size, centred
+                    # on the slot. This is what a print designer expects:
+                    # an 86x60 mm playing card stays 86x60 mm, not scaled
+                    # up to the 88.2x63 mm cut line. But if the asset is
+                    # drastically larger than the slot (e.g. a raster photo
+                    # at 300 DPI), contain-fit it so it doesn't overflow
+                    # into adjacent slots.
                     cx = x + w / 2.0
                     cy = y_top + h / 2.0
                     # Use orientation-swapped dims only for the orthogonal
@@ -268,6 +266,18 @@ def composite(
                     # asset rect (see `nat_w/nat_h` comment above).
                     rect_w = fit_aw if is_orthogonal else nat_w
                     rect_h = fit_ah if is_orthogonal else nat_h
+                    # Cap: if asset exceeds the slot+bleed box by >50%,
+                    # it's almost certainly a large raster not a matched
+                    # PDF artwork. Shrink to fit inside the slot.
+                    cap_w = ew * 1.5
+                    cap_h = eh * 1.5
+                    if rect_w > cap_w or rect_h > cap_h:
+                        ar = rect_w / rect_h
+                        rect_w = w
+                        rect_h = w / ar
+                        if rect_h > h:
+                            rect_h = h
+                            rect_w = h * ar
                     target_rect = pymupdf.Rect(
                         cx - rect_w / 2.0,
                         cy - rect_h / 2.0,

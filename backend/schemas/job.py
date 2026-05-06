@@ -20,6 +20,13 @@ class JobAssignment(BaseModel):
     # Visual filter applied at composition time. Matches the IDs in
     # `services/image_filters.py`. "none" preserves vector fidelity.
     filter_id: str = "none"
+    # Non-destructive "safe crop" frame. When True, the compositor
+    # tightens the per-slot clip box from slot+bleed down to slot-safe
+    # — anything the user designed outside the safe rect renders as a
+    # uniform white border. The placement coords above are unchanged
+    # so the user can flip safe_crop off and the original layout is
+    # exactly as they left it.
+    safe_crop: bool = False
 
 
 class JobOut(BaseModel):
@@ -63,6 +70,7 @@ class QueueItem(BaseModel):
     w_mm: float | None = None
     h_mm: float | None = None
     filter_id: str = "none"
+    safe_crop: bool = False
 
 
 class QueueRequest(BaseModel):

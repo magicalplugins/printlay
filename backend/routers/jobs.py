@@ -393,6 +393,7 @@ def apply_queue(
                 "w_mm": item.w_mm,
                 "h_mm": item.h_mm,
                 "filter_id": item.filter_id or "none",
+                "safe_crop": bool(item.safe_crop),
             }
             cursor += 1
         if cursor >= len(slot_order):
@@ -735,14 +736,20 @@ def generate_output(
             w_pt=(float(assignment["w_mm"]) * mm_to_pt) if assignment.get("w_mm") else None,
             h_pt=(float(assignment["h_mm"]) * mm_to_pt) if assignment.get("h_mm") else None,
             filter_id=str(assignment.get("filter_id") or "none"),
+            safe_crop=bool(assignment.get("safe_crop")),
         )
 
-    # Inject per-template bleed (in PDF points) onto each shape so the
-    # compositor can grow its effective fillable area. Bleed never grows
-    # the artboard - just lets art extend that far past the slot edge.
+    # Inject per-template bleed AND safe insets (in PDF points) onto each
+    # shape so the compositor can resolve both the default print clip
+    # (slot+bleed) and the optional safe-crop clip (slot-safe). Neither
+    # ever grows the artboard - they're just hints for how far a placed
+    # asset can extend or how tightly it should be framed at print.
     mm_to_pt = 72.0 / 25.4
     bleed_pt = float(tpl.bleed_mm or 0.0) * mm_to_pt
-    enriched_shapes = [{**s, "bleed_pt": bleed_pt} for s in tpl.shapes]
+    safe_pt = float(tpl.safe_mm or 0.0) * mm_to_pt
+    enriched_shapes = [
+        {**s, "bleed_pt": bleed_pt, "safe_pt": safe_pt} for s in tpl.shapes
+    ]
 
     active_swaps = _resolve_active_swaps(db, job)
 

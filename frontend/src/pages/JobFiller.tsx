@@ -68,6 +68,12 @@ type QueueRow = {
   wMm: number | null;
   hMm: number | null;
   filterId: string;
+  /** Non-destructive "safe crop" frame. When true, the printable area
+   *  shrinks from slot+bleed down to slot-safe and everything outside
+   *  the safe rect is rendered as a uniform white border (in both the
+   *  preview and the generated PDF). Doesn't touch the placement
+   *  coords above — the user can flip it off and keep editing. */
+  safeCrop: boolean;
 };
 
 function uid(): string {
@@ -79,6 +85,7 @@ function sameTransform(a: QueueRow, asg: NonNullable<Job["assignments"][string]>
   if (a.rotationDeg !== rot) return false;
   if (a.fitMode !== (asg.fit_mode || "contain")) return false;
   if ((a.filterId || "none") !== (asg.filter_id || "none")) return false;
+  if (Boolean(a.safeCrop) !== Boolean(asg.safe_crop)) return false;
   if (a.fitMode === "manual") {
     return (
       a.xMm === (asg.x_mm || 0) &&
@@ -117,6 +124,7 @@ function rowsFromJob(job: Job, assets: Asset[]): QueueRow[] {
         wMm: a.w_mm ?? null,
         hMm: a.h_mm ?? null,
         filterId: a.filter_id || "none",
+        safeCrop: Boolean(a.safe_crop),
       });
     }
   }
@@ -247,6 +255,7 @@ export default function JobFiller() {
           wMm: row.wMm,
           hMm: row.hMm,
           filterId: row.filterId,
+          safeCrop: row.safeCrop,
           assetNaturalWmm: row.asset.width_pt
             ? row.asset.width_pt / PT_PER_MM
             : undefined,
@@ -286,6 +295,7 @@ export default function JobFiller() {
           wMm: null,
           hMm: null,
           filterId: "none",
+          safeCrop: false,
         },
       ];
     });
@@ -318,6 +328,7 @@ export default function JobFiller() {
               wMm: p.w_mm,
               hMm: p.h_mm,
               filterId: p.filter_id || "none",
+              safeCrop: Boolean(p.safe_crop),
             }
           : r
       )
@@ -391,6 +402,7 @@ export default function JobFiller() {
       w_mm: r.wMm,
       h_mm: r.hMm,
       filter_id: r.filterId || "none",
+      safe_crop: r.safeCrop,
     }));
     const updated = await applyJobQueue(job.id, queue);
     setJob(updated);
@@ -967,6 +979,7 @@ export default function JobFiller() {
               w_mm: row.wMm,
               h_mm: row.hMm,
               filter_id: row.filterId,
+              safe_crop: row.safeCrop,
             }}
             thumbnailUrl={row.asset.preview_url ?? row.asset.thumbnail_url ?? null}
             assetNaturalWmm={row.asset.width_pt ? row.asset.width_pt / PT_PER_MM : undefined}

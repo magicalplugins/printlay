@@ -841,6 +841,108 @@ def test_compositor_clips_manual_overflow_to_slot_bleed():
     )
 
 
+def test_compositor_safe_crop_trims_to_safe_rect_not_to_bleed():
+    """`safe_crop=True` is the user's "frame this with a clean white border"
+    finishing toggle. The compositor must:
+
+      * Render the asset only inside the slot-safe rect (slot bbox shrunk
+        by `safe_pt` on every side).
+      * Leave the strip between the safe rect and the cut line as
+        unrendered white — the print operator's matte effect.
+      * Preserve the user's original placement coords so toggling
+        safe_crop OFF restores the full slot+bleed footprint exactly.
+
+    Scenario: 100x80mm slot, 5mm safe area. Asset (red) is placed manual
+    covering the whole slot. With safe_crop on, the rendered red area
+    must equal the safe rect (90x70mm) and the bleed strip (the 5mm
+    band between safe and cut) must be white.
+    """
+    PT = 72.0 / 25.4
+    tpl = pdf_generator.generate(
+        artboard_w=140, artboard_h=120, units="mm",
+        shape_kind="rect",
+        shape_w=100, shape_h=80,
+        edge_margin=10,
+    )
+    slot = tpl.shapes[0]
+    sx, sy, sw, sh = slot["bbox"]
+
+    asset_doc = pymupdf.open()
+    ap = asset_doc.new_page(width=100 * PT, height=80 * PT)
+    ap.draw_rect(ap.rect, color=(0, 0, 0), fill=(1, 0, 0), width=0)
+    asset_bytes = asset_doc.tobytes()
+    asset_doc.close()
+
+    safe_mm = 5.0
+    enriched = [
+        {**s, "bleed_pt": 0.0, "safe_pt": safe_mm * PT} for s in tpl.shapes
+    ]
+
+    t_safe = pdf_compositor.SlotTransform(
+        rotation_deg=0,
+        fit_mode="manual",
+        x_pt=0, y_pt=0,
+        w_pt=100 * PT, h_pt=80 * PT,
+        safe_crop=True,
+    )
+    sheet = pdf_compositor.composite(
+        template_pdf=tpl.pdf_bytes,
+        slot_shapes=enriched,
+        asset_pdfs={slot["shape_index"]: asset_bytes},
+        slot_transforms={slot["shape_index"]: t_safe},
+    )
+
+    from PIL import Image as _Image
+    doc = pymupdf.open(stream=sheet.pdf_bytes, filetype="pdf")
+    try:
+        pix = doc[0].get_pixmap(dpi=200, alpha=False)
+    finally:
+        doc.close()
+    img = _Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
+    px_per_mm = 200 / 25.4
+
+    def _is_red(px: tuple[int, int, int]) -> bool:
+        return px[0] > 200 and px[1] < 80 and px[2] < 80
+
+    def _is_white(px: tuple[int, int, int]) -> bool:
+        return px[0] > 240 and px[1] > 240 and px[2] > 240
+
+    # Inside the safe rect (1mm inset from safe boundary): expect red.
+    safe_x0_mm = sx / PT + safe_mm + 1
+    safe_y0_mm = sy / PT + safe_mm + 1
+    safe_x1_mm = (sx + sw) / PT - safe_mm - 1
+    safe_y1_mm = (sy + sh) / PT - safe_mm - 1
+    inside_red = 0
+    inside_total = 0
+    for yy in range(int(safe_y0_mm * px_per_mm), int(safe_y1_mm * px_per_mm)):
+        for xx in range(int(safe_x0_mm * px_per_mm), int(safe_x1_mm * px_per_mm)):
+            inside_total += 1
+            if _is_red(img.getpixel((xx, yy))):
+                inside_red += 1
+    assert inside_red / max(inside_total, 1) > 0.95, (
+        f"safe_crop=True: inside the safe rect we expected ~100% red, got "
+        f"{inside_red}/{inside_total}. The compositor isn't rendering the "
+        f"asset inside the safe area."
+    )
+
+    # In the matte band (between safe rect and cut line, 1.5mm into it):
+    # expect WHITE — the asset must not have rendered there even though
+    # the user's manual placement covers it.
+    band_y_mm = sy / PT + safe_mm * 0.3  # 1.5mm into the matte band
+    band_white = 0
+    band_total = 0
+    for xx in range(int((sx / PT + 1) * px_per_mm), int(((sx + sw) / PT - 1) * px_per_mm)):
+        band_total += 1
+        if _is_white(img.getpixel((xx, int(band_y_mm * px_per_mm)))):
+            band_white += 1
+    assert band_white / max(band_total, 1) > 0.95, (
+        f"safe_crop=True: matte band between safe and cut line should be "
+        f"WHITE, got {band_white}/{band_total} white pixels. The "
+        f"compositor isn't honouring safe_crop — the asset is bleeding "
+        f"into the safe-frame area."
+    )
+
+
 def test_compositor_rotation_direction_matches_css_clockwise():
     """The designer applies `transform: rotate(${angle}deg)` which is
     CLOCKWISE on screen for positive angles; the on-canvas SlotOverlay

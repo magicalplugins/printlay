@@ -65,6 +65,13 @@ class SlotTransform:
     # Optional colour filter id (matches `image_filters.FILTERS`). Triggers
     # the rasterised insert path so the look is baked into the print.
     filter_id: str = "none"
+    # Non-destructive "safe crop" frame. When True, the compositor uses
+    # the slot's INNER (slot-safe) rect as the clip box instead of the
+    # outer (slot+bleed) rect, leaving a uniform white border between
+    # the safe line and the cut line. Placement coords are unchanged —
+    # only the clipping rectangle tightens. No-op when the shape has
+    # no `safe_pt` declared (templates without a safe area).
+    safe_crop: bool = False
 
 
 def composite(
@@ -157,6 +164,7 @@ def composite(
             if w <= 0 or h <= 0:
                 continue
             bleed = float(shape.get("bleed_pt") or 0.0)
+            safe = float(shape.get("safe_pt") or 0.0)
 
             # Effective fillable area = slot bbox grown by bleed on every side.
             # Bleed never grows the artboard - we just allow the placed asset
@@ -307,15 +315,30 @@ def composite(
                     place_owns_doc = True
 
                 try:
-                    # Clip box = slot bbox grown by bleed on every side.
-                    # Anything the asset would render outside this box must
-                    # be trimmed: in print imposition each cell's content
-                    # MUST stop at its own cut/bleed edge so it never
-                    # bleeds into the neighbouring cell. The user's
-                    # manual placement (and oversized "contain" rasters)
-                    # can both extend the asset past this box; without
-                    # clipping, the design overflows into adjacent slots.
-                    clip_bbox = pymupdf.Rect(ex, ey, ex + ew, ey + eh)
+                    # Clip box = slot bbox grown by bleed on every side
+                    # (default), OR shrunk by the safe inset when the
+                    # user has toggled "safe crop" on. Anything outside
+                    # the chosen box must be trimmed:
+                    #   * Default (slot+bleed): in print imposition each
+                    #     cell's content MUST stop at its own cut/bleed
+                    #     edge so it never bleeds into the neighbouring
+                    #     cell. The user's manual placement (and
+                    #     oversized "contain" rasters) can both extend
+                    #     the asset past this box; without clipping the
+                    #     design overflows into adjacent slots.
+                    #   * Safe crop (slot-safe): the user has chosen a
+                    #     finishing "frame" that crops everything
+                    #     outside the safe rectangle to white, which
+                    #     gives a print-shop matte effect without
+                    #     mutating their original placement.
+                    use_safe_clip = bool(t.safe_crop) and safe > 0
+                    if use_safe_clip:
+                        clip_bbox = pymupdf.Rect(
+                            x + safe, y_top + safe,
+                            x + w - safe, y_top + h - safe,
+                        )
+                    else:
+                        clip_bbox = pymupdf.Rect(ex, ey, ex + ew, ey + eh)
                     _place_clipped_to_slot(
                         page=page,
                         asset_doc=place_doc,

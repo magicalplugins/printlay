@@ -33,6 +33,11 @@ export type SlotPlacement = {
    *  the visible artwork look much smaller than the cut line. */
   assetNaturalWmm?: number;
   assetNaturalHmm?: number;
+  /** Non-destructive "safe crop" frame. When true, the printable window
+   *  shrinks from slot+bleed down to slot-safe and the strip in between
+   *  becomes a uniform white border. The placement coords above are
+   *  unchanged — only the clip boundary tightens. */
+  safeCrop?: boolean;
 };
 
 type Props = {
@@ -94,19 +99,26 @@ export default function SlotOverlay({
           // PT per mm = 72/25.4. Slot bbox is in PDF points.
           const ptPerMm = 72 / 25.4;
 
-          // Clip box covers slot + bleed on every side. Image left/top
-          // are then expressed relative to this clip box rather than
-          // the overlay so its overflow:hidden actually catches them.
+          // Clip box covers slot + bleed on every side by default.
+          // When `p.safeCrop` is true, it tightens to slot-safe so the
+          // strip between safe and cut line becomes a uniform white
+          // border (matching the SlotDesigner's safe-crop preview).
           const slotPx = x * scale;
           const slotPy = y * scale;
           const slotPw = sw * scale;
           const slotPh = sh * scale;
-          const clipLeft = slotPx - bleedPx;
-          const clipTop = slotPy - bleedPx;
-          const clipW = slotPw + bleedPx * 2;
-          const clipH = slotPh + bleedPx * 2;
+          const useSafe = Boolean(p.safeCrop) && safePx > 0;
+          const inset = useSafe ? -safePx : bleedPx;
+          const clipLeft = slotPx - inset;
+          const clipTop = slotPy - inset;
+          const clipW = slotPw + inset * 2;
+          const clipH = slotPh + inset * 2;
           // Match the bleed-outline corner-radius logic so the clip
-          // hugs exactly what the dashed bleed rect shows.
+          // hugs exactly what the dashed bleed rect shows. Safe-crop
+          // mode uses a TIGHTER radius (slot radius minus the safe
+          // inset, clamped at zero) so the inner clip looks like a
+          // print-shop matte rather than a bigger rounded rect than
+          // the slot itself.
           const rPx = Math.max(
             0,
             Math.min(
@@ -118,19 +130,20 @@ export default function SlotOverlay({
             s.kind === "ellipse"
               ? "50%"
               : rPx > 0
-              ? `${rPx + bleedPx}px`
+              ? useSafe
+                ? `${Math.max(0, rPx - safePx)}px`
+                : `${rPx + bleedPx}px`
               : 0;
           // For polygon slots, clip the artwork preview to the polygon
-          // (expanded by the bleed). The wrapper div is sized to the
-          // slot+bleed box, so the polygon vertices need to be
-          // *re-normalised* to that expanded box rather than the raw
-          // slot bbox - otherwise the clip would chop off the bleed
-          // strip the user can legitimately drag artwork into.
+          // expanded by the bleed (default) or shrunk by the safe inset
+          // (safe-crop mode). The wrapper div is sized to that adjusted
+          // box, so the polygon vertices need to be *re-normalised* to
+          // that adjusted box rather than the raw slot bbox.
           let clipPath: string | undefined;
           if (s.kind === "polygon" && s.path && s.path.length >= 3) {
             const slotPts = pointsToPx(s.path, slotPx, slotPy, slotPw, slotPh);
-            const expanded = offsetPolygonPx(slotPts, bleedPx);
-            const reNorm: [number, number][] = expanded.map(([x, y]) => [
+            const adjusted = offsetPolygonPx(slotPts, inset);
+            const reNorm: [number, number][] = adjusted.map(([x, y]) => [
               clipW > 0 ? (x - clipLeft) / clipW : 0,
               clipH > 0 ? (y - clipTop) / clipH : 0,
             ]);
@@ -217,6 +230,11 @@ export default function SlotOverlay({
                 borderRadius: clipPath ? 0 : wrapperRadius,
                 clipPath,
                 WebkitClipPath: clipPath,
+                // White "matte" backdrop in safe-crop mode so an asset
+                // that doesn't fully cover the safe rect renders against
+                // a clean border instead of letting the underlying PDF
+                // canvas (or anything else stacked behind) bleed through.
+                background: useSafe ? "white" : undefined,
                 // iOS Safari refuses to paint a freshly-decoded <img> inside
                 // an overflow:hidden + border-radius/clip-path wrapper until
                 // something forces a composite of that region. Without this

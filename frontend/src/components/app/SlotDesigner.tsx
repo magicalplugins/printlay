@@ -25,6 +25,14 @@ export type SlotPlacement = {
    *  rasterised path. Older saved placements may omit this; readers
    *  must default to "none". */
   filter_id?: string;
+  /** When true, the visible/printable area shrinks from slot+bleed
+   *  to slot-safe — anything the user designed *outside* the safe
+   *  rectangle becomes a uniform white border. Position/scale/rotation
+   *  of the artwork are NOT mutated; only the clip boundary tightens.
+   *  Lets the user design freely and then "frame" the result with one
+   *  click. Older saved placements may omit this; readers must
+   *  default to `false`. */
+  safe_crop?: boolean;
 };
 
 /** Shape of each filter preset. The CSS string is applied directly to the
@@ -163,6 +171,14 @@ export default function SlotDesigner({
   const [rotation, setRotation] = useState<number>(() => initial.rotation_deg || 0);
   const [lockAspect, setLockAspect] = useState(true);
   const [filterId, setFilterId] = useState<string>(initial.filter_id || "none");
+  // Safe-crop is a non-destructive frame: it tightens the clip mask from
+  // slot+bleed down to slot-safe so the user gets a uniform white border
+  // around what they designed, without touching their actual placement.
+  // Decoupled from `box`/`rotation`/`filterId` so toggling it on/off is
+  // reversible — the user can flip back to keep editing whenever.
+  const [safeCrop, setSafeCrop] = useState<boolean>(
+    () => Boolean(initial.safe_crop) && safeMm > 0
+  );
   // Modules panel ("filters" today; future modules added here).
   const [activeModule, setActiveModule] = useState<"filters" | null>(null);
 
@@ -171,7 +187,7 @@ export default function SlotDesigner({
   // rotate snap, fit/centre press). The current state is *not* on the
   // stack - only previous states are - so popping always lands on
   // something different than what's on screen.
-  type Snapshot = { box: Box; rotation: number; filterId: string };
+  type Snapshot = { box: Box; rotation: number; filterId: string; safeCrop: boolean };
   const historyRef = useRef<Snapshot[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
 
@@ -203,12 +219,13 @@ export default function SlotDesigner({
     );
     setRotation(initial.rotation_deg || 0);
     setFilterId(initial.filter_id || "none");
+    setSafeCrop(Boolean(initial.safe_crop) && safeMm > 0);
     historyRef.current = [];
     setHistoryVersion((v) => v + 1);
-  }, [open, initial, slotWmm, slotHmm, bleedMm, assetAspectRatio, assetNaturalWmm, assetNaturalHmm]);
+  }, [open, initial, slotWmm, slotHmm, bleedMm, safeMm, assetAspectRatio, assetNaturalWmm, assetNaturalHmm]);
 
   function snapshot(): Snapshot {
-    return { box: { ...box }, rotation, filterId };
+    return { box: { ...box }, rotation, filterId, safeCrop };
   }
 
   function pushHistory(snap?: Snapshot) {
@@ -224,6 +241,7 @@ export default function SlotDesigner({
     setBox(clampBox(prev.box, slotWmm, slotHmm, bleedMm, null));
     setRotation(prev.rotation);
     setFilterId(prev.filterId);
+    setSafeCrop(Boolean(prev.safeCrop) && safeMm > 0);
     setHistoryVersion((v) => v + 1);
   }
 
@@ -513,25 +531,17 @@ export default function SlotDesigner({
     setFilterId("none");
   }
 
-  function cropToSafe() {
+  // Toggle the non-destructive "safe crop" frame. When ON, the printable
+  // window shrinks from slot+bleed down to slot-safe and everything the
+  // user designed outside the safe rectangle becomes a uniform white
+  // border. The artwork's box/rotation/filter are intentionally NOT
+  // mutated — the user can flip safe-crop OFF at any time and the
+  // original placement is exactly as they left it. Lets people design
+  // freely first and "frame" with one click as a finishing step.
+  function toggleSafeCrop() {
     if (safeMm <= 0) return;
     pushHistory();
-    const safeW = slotWmm - 2 * safeMm;
-    const safeH = slotHmm - 2 * safeMm;
-    if (safeW <= 0 || safeH <= 0) return;
-    const ar = aspect ?? slotWmm / slotHmm;
-    let w = safeW;
-    let h = safeW / ar;
-    if (h > safeH) {
-      h = safeH;
-      w = safeH * ar;
-    }
-    setBox({
-      x: safeMm + (safeW - w) / 2,
-      y: safeMm + (safeH - h) / 2,
-      w,
-      h,
-    });
+    setSafeCrop((v) => !v);
   }
 
   // Centre the current box on the slot (the cut line, not the bleed canvas).
@@ -609,6 +619,7 @@ export default function SlotDesigner({
       w_mm: round2(box.w),
       h_mm: round2(box.h),
       filter_id: filterId,
+      safe_crop: safeCrop && safeMm > 0,
     });
     onClose();
   }
@@ -734,49 +745,72 @@ export default function SlotDesigner({
                 />
               </div>
 
-              {/* Layer 2: full-opacity, clipped to slot+bleed area */}
+              {/* Layer 2: full-opacity, clipped to the printable window.
+                  Default = slot+bleed (everything down to the cut line).
+                  When `safeCrop` is on, the window tightens to slot-safe
+                  so anything the user designed outside the safe rect
+                  becomes a uniform white border — print-shop "frame"
+                  effect, applied non-destructively (toggle off and the
+                  original layout is back, untouched). */}
+              {(() => {
+                const useSafe = safeCrop && safeMm > 0;
+                const inset = useSafe ? -safePx : bleedPx;
+                const wrapLeft = slotOriginX - inset;
+                const wrapTop = slotOriginY - inset;
+                const wrapW = slotPxW + inset * 2;
+                const wrapH = slotPxH + inset * 2;
+                const radius =
+                  shapeKind === "ellipse"
+                    ? "50%"
+                    : cornerPx > 0
+                      ? useSafe
+                        ? `${Math.max(0, cornerPx - safePx)}px`
+                        : `${cornerPx + bleedPx}px`
+                      : 0;
+                const clipPath =
+                  shapeKind === "polygon" && shapePath && shapePath.length >= 3
+                    ? (() => {
+                        const slotPts = pointsToPx(
+                          shapePath,
+                          bleedPx,
+                          bleedPx,
+                          slotPxW,
+                          slotPxH,
+                        );
+                        const offset = useSafe ? -safePx : bleedPx;
+                        const adjusted = offsetPolygonPx(slotPts, offset);
+                        const reNorm: [number, number][] = adjusted.map(
+                          ([px, py]) => [
+                            wrapW > 0 ? (px - (wrapLeft - (slotOriginX - bleedPx))) / wrapW : 0,
+                            wrapH > 0 ? (py - (wrapTop - (slotOriginY - bleedPx))) / wrapH : 0,
+                          ],
+                        );
+                        return pointsToClipPath(reNorm);
+                      })()
+                    : undefined;
+                return (
               <div
                 className="absolute pointer-events-none overflow-hidden"
                 style={{
-                  left: slotOriginX - bleedPx,
-                  top: slotOriginY - bleedPx,
-                  width: slotPxW + bleedPx * 2,
-                  height: slotPxH + bleedPx * 2,
-                  borderRadius:
-                    shapeKind === "ellipse"
-                      ? "50%"
-                      : cornerPx > 0
-                        ? `${cornerPx + bleedPx}px`
-                        : 0,
-                  clipPath:
-                    shapeKind === "polygon" && shapePath && shapePath.length >= 3
-                      ? (() => {
-                          const slotPts = pointsToPx(
-                            shapePath,
-                            bleedPx,
-                            bleedPx,
-                            slotPxW,
-                            slotPxH,
-                          );
-                          const expanded = offsetPolygonPx(slotPts, bleedPx);
-                          const wrapW = slotPxW + bleedPx * 2;
-                          const wrapH = slotPxH + bleedPx * 2;
-                          const reNorm: [number, number][] = expanded.map(
-                            ([px, py]) => [
-                              wrapW > 0 ? px / wrapW : 0,
-                              wrapH > 0 ? py / wrapH : 0,
-                            ],
-                          );
-                          return pointsToClipPath(reNorm);
-                        })()
-                      : undefined,
+                  left: wrapLeft,
+                  top: wrapTop,
+                  width: wrapW,
+                  height: wrapH,
+                  borderRadius: clipPath ? 0 : radius,
+                  clipPath,
+                  WebkitClipPath: clipPath,
+                  // White "matte" backdrop so an asset that doesn't fully
+                  // cover the safe rect doesn't show the dimmed ghost
+                  // through the gap — the user expects a clean white
+                  // border, not a translucent one.
+                  background: useSafe ? "white" : undefined,
                 }}
               >
                 <div
                   className="absolute"
                   style={{
-                    left: boxPx.x - (slotOriginX - bleedPx),
-                    top: boxPx.y - (slotOriginY - bleedPx),
+                    left: boxPx.x - wrapLeft,
+                    top: boxPx.y - wrapTop,
                     width: boxPx.w,
                     height: boxPx.h,
                     transform: `rotate(${rotation}deg)`,
@@ -807,6 +841,8 @@ export default function SlotDesigner({
                   />
                 </div>
               </div>
+                );
+              })()}
 
               {/* Layer 3: invisible interactive layer (drag + handles).
                   Sits on top so the user can grab the box even when the
@@ -1236,15 +1272,6 @@ export default function SlotDesigner({
                   Stretch
                 </button>
               </div>
-              {safeMm > 0 && (
-                <button
-                  onClick={cropToSafe}
-                  className="h-8 px-2.5 text-[11px] rounded-md border border-sky-700 text-sky-300 hover:bg-sky-900/40 hover:text-white"
-                  title={`Contain image within the ${safeMm}mm safe area — gives a perfect white border`}
-                >
-                  Safe crop
-                </button>
-              )}
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -1287,6 +1314,47 @@ export default function SlotDesigner({
             </div>
 
             <div className="flex-1" />
+
+            {/* Safe crop toggle. Deliberately positioned AWAY from the fit
+                presets — it's a non-destructive "finishing" step (frame
+                everything outside the safe rect with white) rather than
+                a layout operation. Stateful ON/OFF so the user can flip
+                it back to keep editing. Hidden when the template defines
+                no safe area (`safeMm === 0`) since the toggle would have
+                nothing to clip to. */}
+            {safeMm > 0 && (
+              <button
+                onClick={toggleSafeCrop}
+                aria-pressed={safeCrop}
+                className={
+                  "inline-flex items-center gap-1.5 h-8 px-3 rounded-lg border text-[11px] font-semibold transition-colors " +
+                  (safeCrop
+                    ? "border-sky-500 bg-sky-500/15 text-sky-200"
+                    : "border-neutral-800 bg-neutral-900 text-neutral-300 hover:border-sky-600 hover:text-sky-200")
+                }
+                title={
+                  safeCrop
+                    ? `Safe crop ON — printable area trimmed to inside the ${safeMm}mm safe line. Click to remove the frame and keep editing.`
+                    : `Frame the design with a clean ${safeMm}mm white border. Non-destructive — your placement stays exactly as you set it.`
+                }
+              >
+                <svg width="13" height="13" viewBox="0 0 13 13" aria-hidden>
+                  <rect
+                    x="2.5" y="2.5" width="8" height="8"
+                    fill="none" stroke="currentColor" strokeWidth="1.2"
+                    strokeDasharray="1.5 1"
+                  />
+                  <rect
+                    x="4.5" y="4.5" width="4" height="4"
+                    fill="currentColor" fillOpacity="0.35"
+                  />
+                </svg>
+                <span>Safe crop</span>
+                {safeCrop && (
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400" />
+                )}
+              </button>
+            )}
 
             {/* Modules drawer toggle. Today the only module is Filters but
                 this is the place to plug in future ones (effects, masks,

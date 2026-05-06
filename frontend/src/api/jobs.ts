@@ -13,6 +13,11 @@ export type JobAssignment = {
   w_mm?: number | null;
   h_mm?: number | null;
   filter_id?: string;
+  /** Non-destructive "safe crop" frame. When true, the printable area
+   *  shrinks from slot+bleed down to slot-safe; everything outside the
+   *  safe rect renders as a uniform white border. Lets users design
+   *  freely and "frame" the result with one click as a finishing step. */
+  safe_crop?: boolean;
 };
 
 export type Job = {
@@ -81,6 +86,7 @@ export type QueueItem = {
   w_mm?: number | null;
   h_mm?: number | null;
   filter_id?: string;
+  safe_crop?: boolean;
 };
 
 export function applyJobQueue(id: string, queue: QueueItem[]) {

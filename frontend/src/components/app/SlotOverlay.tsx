@@ -142,6 +142,20 @@ export default function SlotOverlay({
           let widthPx: number;
           let heightPx: number;
           let objectFit: "contain" | "fill" | "cover" = "contain";
+          if (typeof window !== "undefined" && (window as Window & { __dbgOverlay?: boolean }).__dbgOverlay !== false) {
+            // eslint-disable-next-line no-console
+            console.log("[SlotOverlay] placement received", {
+              slotIdx: s.shape_index,
+              fitMode: p.fitMode,
+              xMm: p.xMm,
+              yMm: p.yMm,
+              wMm: p.wMm,
+              hMm: p.hMm,
+              assetNatW: p.assetNaturalWmm,
+              assetNatH: p.assetNaturalHmm,
+              passesManualCheck: p.fitMode === "manual" && p.wMm != null && p.hMm != null && (p.wMm ?? 0) > 0 && (p.hMm ?? 0) > 0,
+            });
+          }
           if (
             p.fitMode === "manual" &&
             p.wMm != null &&

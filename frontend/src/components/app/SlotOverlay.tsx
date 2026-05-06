@@ -154,6 +154,17 @@ export default function SlotOverlay({
             widthPx = p.wMm * ptPerMm * scale;
             heightPx = p.hMm * ptPerMm * scale;
             objectFit = "fill";
+            if (typeof window !== "undefined") {
+              // eslint-disable-next-line no-console
+              console.log("[SlotOverlay] manual placement", {
+                slotIdx: s.shape_index,
+                slotBboxPt: { x, y, w: sw, h: sh },
+                slotMm: { w: sw / ptPerMm, h: sh / ptPerMm },
+                placement: { xMm: p.xMm, yMm: p.yMm, wMm: p.wMm, hMm: p.hMm },
+                rendered: { imgLeft, imgTop, widthPx, heightPx },
+                scale,
+              });
+            }
           } else if (
             (p.fitMode === "contain" || p.fitMode === undefined) &&
             p.assetNaturalWmm &&

@@ -40,23 +40,16 @@ from backend.services import (
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 
-_PREVIEW_CONTENT_TYPES: dict[str, str] = {
-    "svg": "image/svg+xml",
-    "png": "image/png",
-    "jpg": "image/jpeg",
-}
-
-
 def _preview_url_for(a: Asset) -> str | None:
-    """Highest-fidelity preview the browser can render directly.
-    SVG/PNG/JPG get the original source; PDFs fall back to the thumbnail."""
-    ct = _PREVIEW_CONTENT_TYPES.get(a.kind)
-    if ct and a.r2_key_original:
+    """Highest-fidelity preview the browser can render directly. SVGs get
+    their original vector source (sharp at any zoom); everything else
+    falls back to the thumbnail."""
+    if a.kind == "svg" and a.r2_key_original:
         try:
             return storage.presigned_get(
                 a.r2_key_original,
                 expires_in=3600,
-                content_type=ct,
+                content_type="image/svg+xml",
             )
         except Exception:
             return None

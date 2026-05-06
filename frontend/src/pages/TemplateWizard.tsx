@@ -329,7 +329,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
                     type="range"
                     min={0}
                     max={Math.min(sw, sh) / 2}
-                    step={0.5}
+                    step={0.01}
                     value={Math.min(cornerRadius, Math.min(sw, sh) / 2)}
                   onChange={(e) => setCornerRadius(parseFloat(e.target.value))}
                   className="flex-1 accent-violet-500"
@@ -338,7 +338,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
                   type="number"
                   min={0}
                   max={Math.min(sw, sh) / 2}
-                  step={0.5}
+                  step={0.01}
                   value={cornerRadius}
                   onChange={(e) =>
                     setCornerRadius(

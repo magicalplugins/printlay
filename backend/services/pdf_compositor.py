@@ -507,6 +507,24 @@ def _place_clipped_to_slot(
                 angle_deg=rot_free,
                 oc_xref=0,
             )
+
+        # Belt-and-braces: prepend an EXPLICIT clip path to the scratch
+        # page's content stream. The Form XObject /BBox SHOULD already
+        # clip per PDF 1.7 §8.10.2 ("marks falling outside this
+        # rectangle shall not be shown"), but some print RIPs and
+        # Illustrator's "Place Linked PDF" path treat /BBox as a
+        # bounding hint rather than a strict clip — they happily draw
+        # marks outside it. An explicit `q ... W n ... Q` clipping path
+        # in the content stream is a normative graphics-state operation
+        # that EVERY conformant consumer must honour, so the asset
+        # cannot bleed past slot+bleed regardless of viewer quirks.
+        _wrap_page_contents_with_clip(
+            scratch,
+            scratch_page,
+            float(clip_rect.width),
+            float(clip_rect.height),
+        )
+
         page.show_pdf_page(
             clip_rect,
             scratch,
@@ -516,6 +534,41 @@ def _place_clipped_to_slot(
         )
     finally:
         scratch.close()
+
+
+def _wrap_page_contents_with_clip(
+    doc: "pymupdf.Document",
+    page: "pymupdf.Page",
+    width_pt: float,
+    height_pt: float,
+) -> None:
+    """Wrap `page`'s content stream in an explicit `q ... Q` block whose
+    clipping path is the page rectangle. Idempotent in spirit — calling
+    twice would just nest one clip inside another, which is harmless.
+    """
+    contents = page.get_contents()
+    if not contents:
+        return
+    # PyMuPDF often splits content into multiple streams; we wrap each so
+    # the order of operations stays preserved.
+    pre = (
+        f"q\n0 0 {width_pt:.6f} {height_pt:.6f} re\nW n\n".encode("ascii")
+    )
+    post = b"\nQ\n"
+    # Prepend `q + clip` to the FIRST stream and append `Q` to the LAST.
+    # Wrapping each stream individually would create N nested q/Q pairs,
+    # all redundant — the single outer pair is enough since the streams
+    # render in document order on the same graphics state.
+    first = contents[0]
+    last = contents[-1]
+    if first == last:
+        body = doc.xref_stream(first) or b""
+        doc.update_stream(first, pre + body + post)
+        return
+    first_body = doc.xref_stream(first) or b""
+    last_body = doc.xref_stream(last) or b""
+    doc.update_stream(first, pre + first_body)
+    doc.update_stream(last, last_body + post)
 
 
 def _place_with_arbitrary_rotation(

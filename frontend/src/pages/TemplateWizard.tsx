@@ -312,20 +312,25 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
             </div>
           )}
           {kind === "rect" && (
-            <div className="mt-3">
-              <label className="block text-xs text-neutral-400 mb-1.5">
-                Corner radius ({units}) ·{" "}
-                <span className="text-neutral-500">
-                  0 = sharp · max {(Math.min(sw, sh) / 2).toFixed(1)}
-                </span>
-              </label>
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.min(sw, sh) / 2}
-                  step={0.5}
-                  value={Math.min(cornerRadius, Math.min(sw, sh) / 2)}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <NumberField label={`Width (${units})`} value={sw} onChange={setSw} />
+                <NumberField label={`Height (${units})`} value={sh} onChange={setSh} />
+              </div>
+              <div>
+                <label className="block text-xs text-neutral-400 mb-1.5">
+                  Corner radius ({units}) ·{" "}
+                  <span className="text-neutral-500">
+                    0 = sharp · max {(Math.min(sw, sh) / 2).toFixed(1)}
+                  </span>
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.min(sw, sh) / 2}
+                    step={0.5}
+                    value={Math.min(cornerRadius, Math.min(sw, sh) / 2)}
                   onChange={(e) => setCornerRadius(parseFloat(e.target.value))}
                   className="flex-1 accent-violet-500"
                 />
@@ -351,6 +356,7 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
                   Tip: at max radius this is effectively a circle/oval.
                 </p>
               )}
+              </div>
             </div>
           )}
         </Section>

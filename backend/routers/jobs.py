@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.audit import record
@@ -81,15 +82,40 @@ def _asset_to_out(a: Asset) -> AssetOut:
 
 def _purge_job_uploads(db: Session, job: Job) -> None:
     """Delete R2 storage for any job-attached assets. The DB rows themselves
-    cascade-delete via the FK when the Job is deleted."""
+    cascade-delete via the FK when the Job is deleted.
+
+    R2 keys are reference-counted: an object key is only removed from
+    storage if no OTHER Asset row (in any of the three key columns)
+    still points at it. This is required because :func:`duplicate_job`
+    re-uses R2 keys across cloned Asset rows (so duplicating a job
+    doesn't bloat storage quotas) - without this guard, deleting either
+    the source job or a duplicate would silently destroy the other's
+    bytes.
+    """
     uploads = db.query(Asset).filter(Asset.job_id == job.id).all()
     for a in uploads:
         for k in (a.r2_key, a.r2_key_original, a.thumbnail_r2_key):
-            if k:
-                try:
-                    storage.delete(k)
-                except Exception:
-                    pass
+            if not k:
+                continue
+            still_used = (
+                db.query(Asset)
+                .filter(
+                    Asset.id != a.id,
+                    or_(
+                        Asset.r2_key == k,
+                        Asset.r2_key_original == k,
+                        Asset.thumbnail_r2_key == k,
+                    ),
+                )
+                .limit(1)
+                .first()
+            )
+            if still_used is not None:
+                continue
+            try:
+                storage.delete(k)
+            except Exception:
+                pass
 
 
 def _own_job(db: Session, user: User, job_id: uuid.UUID) -> Job:
@@ -444,6 +470,31 @@ def fill_job(
     return job
 
 
+def _remap_assignment_asset_ids(
+    assignments: dict | None,
+    asset_id_map: dict[str, str],
+) -> dict:
+    """Return a copy of ``assignments`` with any ``asset_id`` that appears
+    in ``asset_id_map`` rewritten to its mapped value. Used by
+    :func:`duplicate_job` to redirect the duplicated job's slot
+    assignments away from the source job's uploaded asset rows and onto
+    the cloned-and-attached asset rows owned by the new job.
+
+    Catalogue assignments (asset ids that aren't keys in the map) are
+    preserved as-is - those are user-level shared assets, not per-job
+    uploads, so the duplicate is meant to keep pointing at the same
+    underlying row.
+    """
+    out: dict = {}
+    for slot_key, asg in (assignments or {}).items():
+        asg_copy = dict(asg)
+        old_aid = str(asg_copy.get("asset_id") or "")
+        if old_aid and old_aid in asset_id_map:
+            asg_copy["asset_id"] = asset_id_map[old_aid]
+        out[slot_key] = asg_copy
+    return out
+
+
 @router.post("/{job_id}/duplicate", response_model=JobOut, status_code=status.HTTP_201_CREATED)
 def duplicate_job(
     job_id: uuid.UUID,
@@ -452,16 +503,66 @@ def duplicate_job(
 ) -> Job:
     user = _resolve_user(db, auth)
     src = _own_job(db, user, job_id)
+
+    # Build the new Job shell first; assignments are filled in below
+    # once we know the cloned-asset id mapping. Without this two-step
+    # the duplicated job's assignments would still reference the source
+    # job's uploaded Asset rows - and JobFiller's loader resolves
+    # uploads via `listJobUploads(new_job.id)`, which only returns
+    # assets tagged with the *new* job_id. That mismatch is why
+    # pre-fix duplicates opened with all slots empty.
     copy = Job(
         user_id=user.id,
         template_id=src.template_id,
         name=f"{src.name} (copy)",
         slot_order=list(src.slot_order or []),
-        assignments=dict(src.assignments or {}),
+        assignments={},
         color_profile_id=src.color_profile_id,
         color_swaps_draft=list(src.color_swaps_draft or []) or None,
     )
     db.add(copy)
+    db.flush()  # need copy.id to attach cloned assets
+
+    # Clone the source job's uploaded assets so the duplicate is fully
+    # independent (deleting one job doesn't break the other's artwork).
+    # We REUSE the R2 storage keys to avoid re-uploading bytes and
+    # double-counting against the user's storage quota; the cloned
+    # row's `file_size` is set to 0 so only the original counts toward
+    # the quota meter. `_purge_job_uploads` reference-counts those
+    # keys before calling `storage.delete`, so this sharing is safe
+    # under deletion of either job.
+    src_uploads = (
+        db.query(Asset)
+        .filter(Asset.job_id == src.id, Asset.user_id == user.id)
+        .all()
+    )
+    asset_id_map: dict[str, str] = {}
+    for a in src_uploads:
+        clone = Asset(
+            user_id=user.id,
+            category_id=None,
+            job_id=copy.id,
+            name=a.name,
+            kind=a.kind,
+            r2_key=a.r2_key,
+            r2_key_original=a.r2_key_original,
+            thumbnail_r2_key=a.thumbnail_r2_key,
+            width_pt=a.width_pt,
+            height_pt=a.height_pt,
+            # Bytes are shared with the source asset row; only the
+            # original row contributes to the storage-usage SUM so
+            # the quota meter stays honest. The compositor reads
+            # from `r2_key`, not `file_size`, so the clone is fully
+            # functional for printing.
+            file_size=0,
+        )
+        db.add(clone)
+        db.flush()
+        asset_id_map[str(a.id)] = str(clone.id)
+
+    copy.assignments = _remap_assignment_asset_ids(
+        dict(src.assignments or {}), asset_id_map
+    )
     db.commit()
     db.refresh(copy)
     record(db, user, "job.duplicate", target_type="job", target_id=copy.id, payload={"src_id": str(src.id)})

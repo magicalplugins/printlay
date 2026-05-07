@@ -140,33 +140,6 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* ─── Time saved banner ──────────────────────────────────────── */}
-      {/* Surfaces the running estimate of how much manual imposition
-          work the user dodged this month vs doing it by hand in
-          InDesign / Illustrator. Honest number (derived, not invented)
-          so it's something the user can show their accountant or
-          their client to justify the subscription. Hidden when:
-          - the user opted out in Settings → Preferences,
-          - they're locked out (then we're trying to convert, not brag), or
-          - they've literally generated nothing yet (a "0 min saved" tile
-            is demotivating to a brand-new user). */}
-      {status &&
-        status.plan !== "locked" &&
-        me?.time_saved_show_enabled &&
-        outputs &&
-        outputs.length > 0 && (
-          <TimeSavedBanner
-            outputs={outputs}
-            setupMinutes={
-              me.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes
-            }
-            perSlotSeconds={
-              me.time_saved_per_slot_seconds ??
-              TIME_SAVED_DEFAULTS.perSlotSeconds
-            }
-          />
-        )}
-
       {/* ─── Quick actions ──────────────────────────────────────────── */}
       <section className="space-y-3">
         <SectionHeader title="Get to work" />
@@ -205,6 +178,33 @@ export default function Dashboard() {
           />
         </div>
       </section>
+
+      {/* ─── Time saved banner ──────────────────────────────────────── */}
+      {/* Sits BELOW the "Get to work" cards (and above the recent
+          outputs list) so the action-first hierarchy stays intact:
+          new/returning users land on the actions, the banner is a
+          secondary "by the way, here's what you've already saved"
+          line. Hidden when:
+          - the user opted out in Settings → Preferences,
+          - they're locked out (then we're trying to convert, not brag), or
+          - they've literally generated nothing this month (a "0 min
+            saved" tile is demotivating to a brand-new user). */}
+      {status &&
+        status.plan !== "locked" &&
+        me?.time_saved_show_enabled &&
+        outputs &&
+        outputs.length > 0 && (
+          <TimeSavedBanner
+            outputs={outputs}
+            setupMinutes={
+              me.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes
+            }
+            perSlotSeconds={
+              me.time_saved_per_slot_seconds ??
+              TIME_SAVED_DEFAULTS.perSlotSeconds
+            }
+          />
+        )}
 
       {/* ─── Recent outputs ─────────────────────────────────────────── */}
       {recent && recent.length > 0 && (

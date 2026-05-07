@@ -157,6 +157,13 @@ export default function JobFiller() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [designerForKey, setDesignerForKey] = useState<string | null>(null);
+  // Bidirectional "find me" link between the layout preview (left) and
+  // the queue rows (right). When set, the matching queue row gets a
+  // violet ring + scrolls into view, AND the matching slot in the
+  // overlay gets a pulsing violet ring. Toggling the same target off
+  // is the way to clear it - no separate "deselect" affordance needed.
+  const [highlightedKey, setHighlightedKey] = useState<string | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
 
   // Per-generation cut-line opt-in (lifted from SpotColorsPanel so it
   // can also be reflected in the Generate button label and threaded
@@ -233,16 +240,40 @@ export default function JobFiller() {
   // Live preview: derive a slotNumbers map AND a placement map (artwork
   // thumbnail + transform per slot) from the current queue order so the PDF
   // overlay updates as the user reorders/changes quantities/rotates/customises.
-  const { previewSlotMap, previewPlacements } = useMemo(() => {
+  // We also build two cross-reference maps used by the "find me" highlight:
+  //   - slotToRowKey: clicking a slot in the preview tells us which queue
+  //     row owns it.
+  //   - rowKeyToFirstSlot: clicking a queue row tells us which slot in the
+  //     preview to ring (we pick the first occurrence so the user always
+  //     sees the lowest-numbered position for that artwork).
+  const {
+    previewSlotMap,
+    previewPlacements,
+    slotToRowKey,
+    rowKeyToFirstSlot,
+  } = useMemo(() => {
     const nums: Record<number, number> = {};
     const placements: Record<number, OverlayPlacement> = {};
-    if (!job) return { previewSlotMap: nums, previewPlacements: placements };
+    const slotToRow: Record<number, string> = {};
+    const rowToSlot: Record<string, number> = {};
+    if (!job)
+      return {
+        previewSlotMap: nums,
+        previewPlacements: placements,
+        slotToRowKey: slotToRow,
+        rowKeyToFirstSlot: rowToSlot,
+      };
     let cursor = 0;
     let n = 1;
     for (const row of rows) {
       for (let i = 0; i < row.qty; i++) {
         if (cursor >= job.slot_order.length) {
-          return { previewSlotMap: nums, previewPlacements: placements };
+          return {
+            previewSlotMap: nums,
+            previewPlacements: placements,
+            slotToRowKey: slotToRow,
+            rowKeyToFirstSlot: rowToSlot,
+          };
         }
         const slotIdx = job.slot_order[cursor];
         nums[slotIdx] = n++;
@@ -263,11 +294,58 @@ export default function JobFiller() {
             ? row.asset.height_pt / PT_PER_MM
             : undefined,
         };
+        slotToRow[slotIdx] = row.key;
+        if (rowToSlot[row.key] === undefined) rowToSlot[row.key] = slotIdx;
         cursor++;
       }
     }
-    return { previewSlotMap: nums, previewPlacements: placements };
+    return {
+      previewSlotMap: nums,
+      previewPlacements: placements,
+      slotToRowKey: slotToRow,
+      rowKeyToFirstSlot: rowToSlot,
+    };
   }, [rows, job]);
+
+  // Derive the slot to ring from the currently-highlighted row key. If
+  // the highlighted row no longer exists (deleted) or no longer maps to
+  // any slot (qty zero, off the end), the ring just disappears - no
+  // dangling state to clean up.
+  const highlightedSlotIdx =
+    highlightedKey != null ? rowKeyToFirstSlot[highlightedKey] ?? null : null;
+
+  // When the highlight target changes, scroll the matching row into view
+  // in the queue (covers the desktop case where the queue extends below
+  // the fold) and the preview into view (covers the mobile case where
+  // the preview is stacked above the queue and may be off-screen). Both
+  // calls no-op when the element is already visible, so it's safe to do
+  // both unconditionally.
+  useEffect(() => {
+    if (!highlightedKey) return;
+    const row = document.querySelector(
+      `[data-queue-row-key="${highlightedKey}"]`
+    );
+    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [highlightedKey]);
+
+  function toggleHighlightFromSlot(slotIdx: number) {
+    const key = slotToRowKey[slotIdx];
+    if (!key) return; // empty slot - nothing to highlight
+    setHighlightedKey((prev) => (prev === key ? null : key));
+  }
+
+  function toggleHighlightFromRow(rowKey: string) {
+    const willHighlight = highlightedKey !== rowKey;
+    setHighlightedKey(willHighlight ? rowKey : null);
+    // When activating from the queue side, also scroll the preview into
+    // view so the user can actually see the slot ring (mobile mostly).
+    if (willHighlight) {
+      previewRef.current?.scrollIntoView({
+        block: "nearest",
+        behavior: "smooth",
+      });
+    }
+  }
 
   function addRow(asset: Asset, qty = 1) {
     setRows((prev) => {
@@ -602,7 +680,10 @@ export default function JobFiller() {
               </span>
             )}
           </div>
-          <div className="relative block w-full bg-white rounded-lg shadow-2xl ring-1 ring-neutral-800 overflow-hidden">
+          <div
+            ref={previewRef}
+            className="relative block w-full bg-white rounded-lg shadow-2xl ring-1 ring-neutral-800 overflow-hidden"
+          >
             <PdfCanvas url={pdfUrl} width={900} onReady={setRender} />
             {render && (
               <SlotOverlay
@@ -615,6 +696,8 @@ export default function JobFiller() {
                 highlightEmpty
                 bleedPt={(tpl.bleed_mm || 0) * (72 / 25.4)}
                 safePt={(tpl.safe_mm || 0) * (72 / 25.4)}
+                onShapeClick={(s) => toggleHighlightFromSlot(s.shape_index)}
+                highlightedSlotIdx={highlightedSlotIdx}
               />
             )}
           </div>
@@ -695,6 +778,8 @@ export default function JobFiller() {
                         key={row.key}
                         row={row}
                         index={i + 1}
+                        highlighted={highlightedKey === row.key}
+                        onLocate={() => toggleHighlightFromRow(row.key)}
                         onQty={(q) => updateQty(row.key, q)}
                         onRotate={() => rotateRow(row.key)}
                         onCustomize={() => setDesignerForKey(row.key)}
@@ -1019,6 +1104,8 @@ function pickRepresentativeShape(shapes: Template["shapes"]): Template["shapes"]
 function SortableQueueRow({
   row,
   index,
+  highlighted,
+  onLocate,
   onQty,
   onRotate,
   onCustomize,
@@ -1026,6 +1113,13 @@ function SortableQueueRow({
 }: {
   row: QueueRow;
   index: number;
+  /** Drives the violet "you are here" ring when the user has either
+   *  clicked this row or clicked one of its slots in the layout preview. */
+  highlighted: boolean;
+  /** Called when the user clicks the row's info area to ask "where is
+   *  this in the layout?". The parent toggles the bidirectional
+   *  highlight + scrolls the preview into view. */
+  onLocate: () => void;
   onQty: (qty: number) => void;
   onRotate: () => void;
   onCustomize: () => void;
@@ -1049,9 +1143,12 @@ function SortableQueueRow({
     <li
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-2 rounded-xl border bg-neutral-950/50 px-2 py-2 ${
+      data-queue-row-key={row.key}
+      className={`flex items-center gap-2 rounded-xl border bg-neutral-950/50 px-2 py-2 transition ${
         isDragging
           ? "border-violet-500 shadow-lg shadow-violet-500/30"
+          : highlighted
+          ? "border-violet-500 ring-2 ring-violet-500/40 shadow-lg shadow-violet-500/20"
           : "border-neutral-800"
       }`}
     >
@@ -1109,10 +1206,24 @@ function SortableQueueRow({
           </svg>
         </div>
       </button>
-      <div className="flex-1 min-w-0">
-        <div className="text-sm text-neutral-200 truncate" title={row.asset.name}>
-          <span className="text-neutral-500 font-mono mr-1.5">{index}.</span>
-          {row.asset.name}
+      <button
+        type="button"
+        onClick={onLocate}
+        className={`flex-1 min-w-0 text-left rounded-md -mx-1 px-1.5 py-1 transition group/locate ${
+          highlighted
+            ? "bg-violet-500/10"
+            : "hover:bg-violet-500/5"
+        }`}
+        title="Find this artwork in the layout"
+        aria-label={`Find ${row.asset.name} in layout`}
+        aria-pressed={highlighted}
+      >
+        <div
+          className="text-sm text-neutral-200 truncate flex items-center gap-1"
+          title={row.asset.name}
+        >
+          <span className="text-neutral-500 font-mono">{index}.</span>
+          <span className="truncate">{row.asset.name}</span>
         </div>
         <div className="text-[11px] text-neutral-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span>{row.asset.job_id ? "Uploaded" : "Catalogue"}</span>
@@ -1124,8 +1235,36 @@ function SortableQueueRow({
           {row.fitMode === "manual" && (
             <span className="text-fuchsia-300 font-mono">· custom</span>
           )}
+          <span
+            className={`ml-auto inline-flex items-center gap-0.5 transition ${
+              highlighted
+                ? "text-violet-300"
+                : "text-neutral-700 group-hover/locate:text-violet-400"
+            }`}
+            aria-hidden
+          >
+            {/* Map-pin glyph - communicates "find this on the layout" without
+                stealing horizontal space when the row is at rest. Goes solid
+                violet while the row is the active highlight target. */}
+            <svg
+              width="10"
+              height="10"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M8 14s5-4.5 5-8.5a5 5 0 0 0-10 0c0 4 5 8.5 5 8.5z" />
+              <circle cx="8" cy="5.5" r="1.6" />
+            </svg>
+            <span className="text-[10px]">
+              {highlighted ? "Showing" : "Find"}
+            </span>
+          </span>
         </div>
-      </div>
+      </button>
       <button
         onClick={onRotate}
         className="h-11 w-9 rounded-md border border-neutral-800 text-neutral-400 hover:border-violet-500 hover:text-violet-300 flex items-center justify-center"

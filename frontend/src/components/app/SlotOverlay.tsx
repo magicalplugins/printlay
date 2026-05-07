@@ -59,6 +59,11 @@ type Props = {
   /** Safe-zone in PDF points. Drawn as a blue dashed rect inside each slot. */
   safePt?: number;
   onShapeClick?: (shape: Shape, e: React.MouseEvent<SVGElement>) => void;
+  /** When set, the slot whose `shape_index` matches gets a violet
+   *  "you-are-here" ring drawn over the cut line. Used by the JobFiller
+   *  to highlight the slot that corresponds to a queue row the user
+   *  clicked (and vice-versa). `null` / undefined disables the ring. */
+  highlightedSlotIdx?: number | null;
 };
 
 export default function SlotOverlay({
@@ -73,6 +78,7 @@ export default function SlotOverlay({
   bleedPt = 0,
   safePt = 0,
   onShapeClick,
+  highlightedSlotIdx = null,
 }: Props) {
   const bleedPx = bleedPt * scale;
   const safePx = safePt * scale;
@@ -483,6 +489,48 @@ export default function SlotOverlay({
                     strokeWidth={1.2}
                     strokeDasharray="3 3"
                     pointerEvents="none"
+                  />
+                )
+              )}
+              {/* "You-are-here" highlight — drawn after the bleed/safe
+                  outlines so it sits on top of them, but BEFORE the
+                  badge so the slot number remains readable. Pulses to
+                  catch the eye when the user clicks a queue row. */}
+              {s.shape_index === highlightedSlotIdx && (
+                isPoly && polyCutSvg ? (
+                  <polygon
+                    points={polyCutSvg}
+                    fill="rgba(168, 85, 247, 0.18)"
+                    stroke="rgba(168, 85, 247, 1)"
+                    strokeWidth={3}
+                    pointerEvents="none"
+                    className="animate-pulse"
+                  />
+                ) : s.kind === "ellipse" ? (
+                  <ellipse
+                    cx={cx}
+                    cy={cy}
+                    rx={pw / 2}
+                    ry={ph / 2}
+                    fill="rgba(168, 85, 247, 0.18)"
+                    stroke="rgba(168, 85, 247, 1)"
+                    strokeWidth={3}
+                    pointerEvents="none"
+                    className="animate-pulse"
+                  />
+                ) : (
+                  <rect
+                    x={px}
+                    y={py}
+                    width={pw}
+                    height={ph}
+                    rx={rPx}
+                    ry={rPx}
+                    fill="rgba(168, 85, 247, 0.18)"
+                    stroke="rgba(168, 85, 247, 1)"
+                    strokeWidth={3}
+                    pointerEvents="none"
+                    className="animate-pulse"
                   />
                 )
               )}

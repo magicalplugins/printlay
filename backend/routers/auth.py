@@ -15,7 +15,12 @@ from backend.auth import AuthenticatedUser, get_current_user, is_admin_email
 from backend.config import get_settings
 from backend.database import get_db
 from backend.models import User
-from backend.schemas.auth import ProfileUpdate, PublicConfig, UserOut
+from backend.schemas.auth import (
+    PreferencesUpdate,
+    ProfileUpdate,
+    PublicConfig,
+    UserOut,
+)
 from backend.services import telemetry, user_provisioning
 
 router = APIRouter(prefix="/api", tags=["auth"])
@@ -37,6 +42,9 @@ def _to_user_out(row: User) -> UserOut:
         company_name=row.company_name,
         needs_profile=not row.has_completed_profile(),
         is_admin=is_admin_email(row.email),
+        time_saved_show_enabled=row.time_saved_show_enabled,
+        time_saved_setup_minutes=row.time_saved_setup_minutes,
+        time_saved_per_slot_seconds=row.time_saved_per_slot_seconds,
     )
 
 
@@ -89,4 +97,40 @@ def update_profile(
     if was_first_time:
         record(db, row, "profile.completed", payload={"company_present": bool(payload.company_name)})
         telemetry.emit(row, "profile_completed", {"company_present": bool(payload.company_name)})
+    return _to_user_out(row)
+
+
+@router.patch("/auth/me/preferences", response_model=UserOut)
+def update_preferences(
+    payload: PreferencesUpdate,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    """Update per-user preferences (currently just the time-saved
+    surface). Partial: any field omitted from the body is left alone,
+    so the SPA can flip a single toggle without round-tripping the
+    others. Bounds are enforced in the schema."""
+    row = db.query(User).filter(User.auth_id == user.auth_id).one_or_none()
+    if row is None:
+        raise HTTPException(404, "User not provisioned yet; call /api/auth/me first")
+
+    if payload.time_saved_show_enabled is not None:
+        row.time_saved_show_enabled = payload.time_saved_show_enabled
+    if payload.time_saved_setup_minutes is not None:
+        row.time_saved_setup_minutes = payload.time_saved_setup_minutes
+    if payload.time_saved_per_slot_seconds is not None:
+        row.time_saved_per_slot_seconds = payload.time_saved_per_slot_seconds
+
+    db.commit()
+    db.refresh(row)
+    record(
+        db,
+        row,
+        "preferences.updated",
+        payload={
+            "time_saved_show_enabled": row.time_saved_show_enabled,
+            "time_saved_setup_minutes": row.time_saved_setup_minutes,
+            "time_saved_per_slot_seconds": row.time_saved_per_slot_seconds,
+        },
+    )
     return _to_user_out(row)

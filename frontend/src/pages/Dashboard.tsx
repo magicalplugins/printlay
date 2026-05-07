@@ -9,6 +9,11 @@ import {
 } from "../api/billing";
 import { listOutputs, Output } from "../api/outputs";
 import { useMe } from "../auth/MeProvider";
+import {
+  humanizeMinutes,
+  TIME_SAVED_DEFAULTS,
+  totalMinutesSaved,
+} from "../utils/timeSaved";
 
 const PLAN_LABEL: Record<Plan, string> = {
   locked: "Locked",
@@ -30,14 +35,18 @@ export default function Dashboard() {
   const { me } = useMe();
   const [status, setStatus] = useState<BillingStatus | null>(null);
   const [usage, setUsage] = useState<BillingUsage | null>(null);
-  const [recent, setRecent] = useState<Output[] | null>(null);
+  // We keep the FULL outputs list so the time-saved banner can sum
+  // across the user's local "this month" without an extra round-trip.
+  // The recent-5 display below just slices off the head.
+  const [outputs, setOutputs] = useState<Output[] | null>(null);
+  const recent = outputs ? outputs.slice(0, 5) : null;
 
   useEffect(() => {
     getBillingStatus().then(setStatus).catch(() => setStatus(null));
     getBillingUsage().then(setUsage).catch(() => setUsage(null));
     listOutputs()
-      .then((rows) => setRecent(rows.slice(0, 5)))
-      .catch(() => setRecent([]));
+      .then(setOutputs)
+      .catch(() => setOutputs([]));
   }, []);
 
   const greeting = useMemo(() => {
@@ -130,6 +139,33 @@ export default function Dashboard() {
           <UsageStrip usage={usage} />
         </section>
       )}
+
+      {/* ─── Time saved banner ──────────────────────────────────────── */}
+      {/* Surfaces the running estimate of how much manual imposition
+          work the user dodged this month vs doing it by hand in
+          InDesign / Illustrator. Honest number (derived, not invented)
+          so it's something the user can show their accountant or
+          their client to justify the subscription. Hidden when:
+          - the user opted out in Settings → Preferences,
+          - they're locked out (then we're trying to convert, not brag), or
+          - they've literally generated nothing yet (a "0 min saved" tile
+            is demotivating to a brand-new user). */}
+      {status &&
+        status.plan !== "locked" &&
+        me?.time_saved_show_enabled &&
+        outputs &&
+        outputs.length > 0 && (
+          <TimeSavedBanner
+            outputs={outputs}
+            setupMinutes={
+              me.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes
+            }
+            perSlotSeconds={
+              me.time_saved_per_slot_seconds ??
+              TIME_SAVED_DEFAULTS.perSlotSeconds
+            }
+          />
+        )}
 
       {/* ─── Quick actions ──────────────────────────────────────────── */}
       <section className="space-y-3">
@@ -574,6 +610,97 @@ function RecentRow({ output }: { output: Output }) {
       </div>
       <div className="text-xs text-neutral-500 shrink-0">{date}</div>
     </Link>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Time-saved banner — running this-month estimate vs manual imposition.
+   Single quiet line on desktop, two-line stack on mobile. Never shouts:
+   no confetti, no badges, no animated counter. The number is the brag.
+
+   "This month" is computed in the user's browser-local timezone so the
+   month boundary lines up with what they're actually looking at on
+   their wall calendar (a UK user shouldn't see the figure reset at 11pm
+   on the last of the month because the server's in UTC).
+   ───────────────────────────────────────────────────────────────────── */
+function TimeSavedBanner({
+  outputs,
+  setupMinutes,
+  perSlotSeconds,
+}: {
+  outputs: Output[];
+  setupMinutes: number;
+  perSlotSeconds: number;
+}) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const thisMonth = outputs.filter(
+    (o) => new Date(o.created_at) >= monthStart
+  );
+  const minutesThisMonth = totalMinutesSaved(thisMonth, {
+    setupMinutes,
+    perSlotSeconds,
+  });
+  const slotsThisMonth = thisMonth.reduce((s, o) => s + o.slots_filled, 0);
+
+  // Don't render an empty-looking row when this month is genuinely
+  // dry (the user generated stuff in earlier months but nothing yet
+  // this month). Keeps the dashboard clean for returning users at the
+  // start of a new month.
+  if (thisMonth.length === 0) return null;
+
+  return (
+    <section
+      className="rounded-2xl border border-violet-500/20 bg-gradient-to-r from-violet-500/8 via-violet-500/5 to-transparent p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3"
+      aria-label="Time saved this month"
+    >
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        <span
+          aria-hidden
+          className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-full bg-violet-500/15 text-violet-300"
+        >
+          {/* Stopwatch glyph - subtle, no emoji noise. */}
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <circle cx="12" cy="13" r="8" />
+            <path d="M12 9v4l2 2" />
+            <path d="M9 2h6" />
+          </svg>
+        </span>
+        <div className="min-w-0">
+          <div className="text-xs uppercase tracking-wider text-violet-300/70 font-semibold">
+            This month with PrintLay
+          </div>
+          <div className="text-sm sm:text-base text-neutral-100 mt-0.5">
+            ~
+            <span className="font-bold text-white">
+              {humanizeMinutes(minutesThisMonth)}
+            </span>{" "}
+            saved vs manual imposition
+            <span className="text-neutral-500">
+              {" "}
+              · {thisMonth.length} PDF{thisMonth.length === 1 ? "" : "s"} ·{" "}
+              {slotsThisMonth} slot{slotsThisMonth === 1 ? "" : "s"} imposed
+            </span>
+          </div>
+        </div>
+      </div>
+      <Link
+        to="/app/settings?tab=preferences"
+        className="text-xs text-neutral-400 hover:text-violet-300 transition shrink-0 sm:ml-auto"
+        title="See and edit how this estimate is calculated"
+      >
+        How is this calculated? →
+      </Link>
+    </section>
   );
 }
 

@@ -15,9 +15,14 @@ import {
   listColorProfiles,
   updateColorProfile,
 } from "../api/colorProfiles";
-import { updateProfile } from "../api/me";
+import { updatePreferences, updateProfile } from "../api/me";
 import { useAuth } from "../auth/AuthProvider";
 import { useMe } from "../auth/MeProvider";
+import {
+  humanizeMinutes,
+  minutesSavedForOutput,
+  TIME_SAVED_DEFAULTS,
+} from "../utils/timeSaved";
 import ColorProfileEditor from "../components/app/ColorProfileEditor";
 import { formatErr } from "../utils/apiError";
 
@@ -474,26 +479,15 @@ function ProfileSection() {
 
 /* ────────────────────────────────────────────────────────────────────
    PREFERENCES TAB
-   Placeholder today, designed to grow. As we add real global settings
-   (default bleed, fit mode, theme, language...) they live here.
+   First real setting: the "Time saved vs manual imposition" surface.
+   Toggle drives the Dashboard banner + Outputs row line; the per-unit
+   numbers feed the formula on both surfaces.
    ──────────────────────────────────────────────────────────────────── */
 
 function PreferencesTab() {
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-dashed border-neutral-800 bg-neutral-900/30 p-6 sm:p-8 text-center">
-        <div className="text-2xl mb-2" aria-hidden>
-          ⚙
-        </div>
-        <h2 className="text-lg font-semibold mb-1">
-          Global preferences are coming soon
-        </h2>
-        <p className="text-sm text-neutral-400 max-w-md mx-auto leading-relaxed">
-          This is where defaults that apply across every template and job will
-          live — think default bleed for new templates, preferred fit mode,
-          measurement units, and theme. Tell us what you'd like first.
-        </p>
-      </section>
+      <TimeSavedSection />
 
       <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6">
         <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
@@ -509,6 +503,267 @@ function PreferencesTab() {
       </section>
     </div>
   );
+}
+
+function TimeSavedSection() {
+  const { me, refresh, setMe } = useMe();
+  // Local input state mirrors `me` until saved. We keep the inputs as
+  // strings so the user can clear the field while typing without it
+  // snapping to "0" - same pattern used elsewhere (NumberField in
+  // TemplateWizard, CropNumField in SlotDesigner).
+  const [enabled, setEnabled] = useState<boolean>(
+    me?.time_saved_show_enabled ?? true
+  );
+  const [setupRaw, setSetupRaw] = useState<string>(
+    String(me?.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes)
+  );
+  const [perSlotRaw, setPerSlotRaw] = useState<string>(
+    String(me?.time_saved_per_slot_seconds ?? TIME_SAVED_DEFAULTS.perSlotSeconds)
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState(false);
+
+  // Re-sync local state when /me lands or refreshes (e.g. after another
+  // tab updated the prefs). Without this the form would stay on its
+  // initial values forever after a manual /me refresh.
+  useEffect(() => {
+    if (!me) return;
+    setEnabled(me.time_saved_show_enabled);
+    setSetupRaw(String(me.time_saved_setup_minutes));
+    setPerSlotRaw(String(me.time_saved_per_slot_seconds));
+  }, [
+    me?.time_saved_show_enabled,
+    me?.time_saved_setup_minutes,
+    me?.time_saved_per_slot_seconds,
+  ]);
+
+  const setupMin = parseClampedInt(setupRaw, 0, 600, TIME_SAVED_DEFAULTS.setupMinutes);
+  const perSlotSec = parseClampedInt(perSlotRaw, 0, 600, TIME_SAVED_DEFAULTS.perSlotSeconds);
+
+  const dirty =
+    !!me &&
+    (enabled !== me.time_saved_show_enabled ||
+      setupMin !== me.time_saved_setup_minutes ||
+      perSlotSec !== me.time_saved_per_slot_seconds);
+
+  const onSave = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const next = await updatePreferences({
+        time_saved_show_enabled: enabled,
+        time_saved_setup_minutes: setupMin,
+        time_saved_per_slot_seconds: perSlotSec,
+      });
+      setMe(next);
+      await refresh();
+      setSavedHint(true);
+      setTimeout(() => setSavedHint(false), 1800);
+    } catch (e) {
+      setErr(formatErr(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onReset = () => {
+    setSetupRaw(String(TIME_SAVED_DEFAULTS.setupMinutes));
+    setPerSlotRaw(String(TIME_SAVED_DEFAULTS.perSlotSeconds));
+  };
+
+  // Live example anchored to a 30-up sheet (a typical run for a print
+  // shop - business cards, playing cards, stickers). Keeps the
+  // estimate concrete: the user can sanity-check "yes, that matches
+  // what it actually takes me by hand" before they trust the surface.
+  const exampleSlots = 30;
+  const exampleMinutes = minutesSavedForOutput(exampleSlots, {
+    setupMinutes: setupMin,
+    perSlotSeconds: perSlotSec,
+  });
+
+  return (
+    <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6 space-y-5">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">Time saved vs manual imposition</h2>
+          <p className="text-sm text-neutral-400 mt-1 max-w-xl leading-relaxed">
+            An optional surface that estimates how long each generated PDF
+            would have taken to lay out by hand in InDesign / Illustrator.
+            Numbers are derived from the inputs below — never invented.
+            Shows on the dashboard and next to each output.
+          </p>
+        </div>
+        <Toggle
+          checked={enabled}
+          onChange={setEnabled}
+          label={enabled ? "Showing" : "Hidden"}
+        />
+      </div>
+
+      <div
+        className={`grid sm:grid-cols-2 gap-3 transition ${
+          enabled ? "" : "opacity-40 pointer-events-none"
+        }`}
+      >
+        <label className="block">
+          <div className="text-xs uppercase tracking-wider text-neutral-500 mb-1">
+            Setup time per sheet
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={600}
+              step={1}
+              value={setupRaw}
+              onChange={(e) => setSetupRaw(e.target.value)}
+              onBlur={() => setSetupRaw(String(setupMin))}
+              className="w-24 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none"
+            />
+            <span className="text-sm text-neutral-400">minutes</span>
+          </div>
+          <div className="text-[11px] text-neutral-500 mt-1">
+            Artboard, bleed, cut marks, PDF/X export
+          </div>
+        </label>
+        <label className="block">
+          <div className="text-xs uppercase tracking-wider text-neutral-500 mb-1">
+            Per-slot placement
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={600}
+              step={1}
+              value={perSlotRaw}
+              onChange={(e) => setPerSlotRaw(e.target.value)}
+              onBlur={() => setPerSlotRaw(String(perSlotSec))}
+              className="w-24 rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none"
+            />
+            <span className="text-sm text-neutral-400">seconds</span>
+          </div>
+          <div className="text-[11px] text-neutral-500 mt-1">
+            Place artwork, scale, align, verify
+          </div>
+        </label>
+      </div>
+
+      {/* Auditable formula + live example. The whole point of this
+          surface is that the number is derived, so we deliberately
+          show the math the user is editing and the result for a
+          reference job size. */}
+      <div
+        className={`rounded-xl border border-neutral-800 bg-neutral-950/40 p-4 space-y-2 transition ${
+          enabled ? "" : "opacity-40"
+        }`}
+      >
+        <div className="text-xs uppercase tracking-wider text-neutral-500">
+          Example
+        </div>
+        <p className="text-sm text-neutral-300 leading-relaxed">
+          A {exampleSlots}-slot sheet ={" "}
+          <span className="font-mono text-neutral-200">{setupMin} min</span>
+          <span className="text-neutral-500"> + </span>
+          <span className="font-mono text-neutral-200">
+            {exampleSlots} × {perSlotSec} s
+          </span>
+          <span className="text-neutral-500"> = </span>
+          <span className="font-semibold text-violet-300">
+            ~{humanizeMinutes(exampleMinutes)} saved
+          </span>
+        </p>
+        <p className="text-[11px] text-neutral-500">
+          Formula: setup minutes + (slots × per-slot seconds ÷ 60)
+        </p>
+      </div>
+
+      {err && <div className="text-sm text-rose-300">{err}</div>}
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={onSave}
+          disabled={busy || !dirty}
+          className="rounded-lg bg-white text-neutral-950 px-4 py-2 text-sm font-semibold hover:bg-neutral-200 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save preferences"}
+        </button>
+        <button
+          onClick={onReset}
+          disabled={
+            busy ||
+            (setupMin === TIME_SAVED_DEFAULTS.setupMinutes &&
+              perSlotSec === TIME_SAVED_DEFAULTS.perSlotSeconds)
+          }
+          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-500 disabled:opacity-30"
+        >
+          Reset to defaults
+        </button>
+        {savedHint && <span className="text-sm text-emerald-300">Saved ✓</span>}
+      </div>
+    </section>
+  );
+}
+
+/** Minimal accessible toggle. Lives here for now; if a second toggle
+ *  shows up elsewhere, lift to `frontend/src/components/Toggle.tsx`. */
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="inline-flex items-center gap-2"
+    >
+      <span
+        className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+          checked ? "bg-violet-500" : "bg-neutral-700"
+        }`}
+      >
+        <span
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition ${
+            checked ? "translate-x-5" : "translate-x-0.5"
+          }`}
+        />
+      </span>
+      {label && (
+        <span
+          className={`text-xs uppercase tracking-wider ${
+            checked ? "text-violet-300" : "text-neutral-500"
+          }`}
+        >
+          {label}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** Parse a numeric input string clamped to [min..max]. Empty / NaN
+ *  falls back to `fallback`. Used by the time-saved inputs so a user
+ *  who types nonsense can't get past the schema bounds and confuse
+ *  themselves about why save fails. */
+function parseClampedInt(
+  raw: string,
+  min: number,
+  max: number,
+  fallback: number
+): number {
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 /* ────────────────────────────────────────────────────────────────────

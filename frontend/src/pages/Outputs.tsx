@@ -6,13 +6,30 @@ import {
   listOutputs,
   Output,
 } from "../api/outputs";
+import { useMe } from "../auth/MeProvider";
 import UsageHint from "../components/app/UsageHint";
+import {
+  humanizeMinutes,
+  minutesSavedForOutput,
+  TIME_SAVED_DEFAULTS,
+} from "../utils/timeSaved";
 
 export default function Outputs() {
+  const { me } = useMe();
   const [items, setItems] = useState<Output[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [search] = useSearchParams();
   const highlight = search.get("highlight");
+
+  // Same prefs the dashboard uses; falls back to the documented
+  // defaults until /me lands so the row line doesn't flash a "0 min"
+  // placeholder on first paint.
+  const showTimeSaved = me?.time_saved_show_enabled ?? true;
+  const timePrefs = {
+    setupMinutes: me?.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes,
+    perSlotSeconds:
+      me?.time_saved_per_slot_seconds ?? TIME_SAVED_DEFAULTS.perSlotSeconds,
+  };
 
   function load() {
     listOutputs().then(setItems).catch((e) => setErr(String(e)));
@@ -90,6 +107,15 @@ export default function Outputs() {
                   {o.slots_total} slots filled ·{" "}
                   {new Date(o.created_at).toLocaleString()}
                 </div>
+                {showTimeSaved && (
+                  <div
+                    className="text-[11px] text-violet-300/70 mt-1"
+                    title="Estimated vs manual InDesign / Illustrator imposition. Edit the formula in Settings → Preferences."
+                  >
+                    ≈ {humanizeMinutes(minutesSavedForOutput(o.slots_filled, timePrefs))}{" "}
+                    saved vs manual imposition
+                  </div>
+                )}
               </div>
               <div className="flex gap-2 flex-shrink-0">
                 <button

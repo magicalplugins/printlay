@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -78,6 +78,27 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     The frontend forces collection on first login via the profile gate."""
     company_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     """Optional - sole traders / hobbyists won't have one."""
+
+    # ---- Preferences ----
+    # "Time saved vs manual imposition" surface (Dashboard banner +
+    # per-output line on the Outputs page). The number is derived from
+    # `setup_minutes + slots * per_slot_seconds/60`, which is auditable
+    # in Settings - we deliberately don't fabricate a multiplier. Users
+    # who think the surface is fluff can toggle it off here; users who
+    # think the defaults under- or over-state their actual manual
+    # imposition time can edit the per-unit numbers to match their
+    # workflow. Defaults reflect a typical InDesign/Illustrator manual
+    # imposition: ~10 min of artboard/bleed/cut-mark setup + ~40 s per
+    # slot (place artwork, scale, align, verify).
+    time_saved_show_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    time_saved_setup_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10, server_default="10"
+    )
+    time_saved_per_slot_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=40, server_default="40"
+    )
 
     def has_completed_profile(self) -> bool:
         """True when the user has supplied the post-signup profile fields. We

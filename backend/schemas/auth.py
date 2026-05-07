@@ -24,6 +24,13 @@ class UserOut(BaseModel):
     """True when the user hasn't completed the post-signup profile gate
     (currently: phone is required). The SPA redirects to /profile-setup."""
     is_admin: bool = False
+    # ---- Preferences ----
+    # See User model for full notes. The frontend reads these on every
+    # /me bootstrap so the Dashboard banner + Outputs row line can
+    # compute the time-saved estimate without an extra round-trip.
+    time_saved_show_enabled: bool = True
+    time_saved_setup_minutes: int = 10
+    time_saved_per_slot_seconds: int = 40
 
 
 # International phone format - very lenient. We're not validating carrier
@@ -55,6 +62,33 @@ class ProfileUpdate(BaseModel):
             return None
         v = v.strip()
         return v or None
+
+
+class PreferencesUpdate(BaseModel):
+    """Per-user preference toggles. Currently just the "Time saved vs
+    manual imposition" surface; designed to grow as more global prefs
+    arrive (default bleed, units, theme, etc.).
+
+    All fields are optional so the SPA can `PATCH`-style partial-update
+    a single setting without having to round-trip the others. The
+    bounds keep the formula honest - we don't want a user accidentally
+    setting per-slot to 99999 and then bragging on social media that
+    PrintLay "saved them 3 years this week" off one job.
+    """
+
+    time_saved_show_enabled: bool | None = None
+    time_saved_setup_minutes: int | None = Field(
+        default=None,
+        ge=0,
+        le=600,
+        description="Minutes for one-off sheet setup (artboard, bleed, cut marks).",
+    )
+    time_saved_per_slot_seconds: int | None = Field(
+        default=None,
+        ge=0,
+        le=600,
+        description="Seconds per slot for placing/scaling/aligning artwork by hand.",
+    )
 
 
 class PublicConfig(BaseModel):

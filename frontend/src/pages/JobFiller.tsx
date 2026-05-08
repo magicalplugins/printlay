@@ -134,12 +134,14 @@ function rowsFromJob(job: Job, assets: Asset[]): QueueRow[] {
 // ─── Expand icon (diagonal double-arrow) ──────────────────────────────────────
 function ExpandIcon({ shrink = false }: { shrink?: boolean }) {
   return shrink ? (
+    // Arrows pointing inward from top-right and bottom-left (collapse)
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
       <path d="M9 1h4v4M5 13H1V9M13 1l-5 5M1 13l5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   ) : (
+    // Arrows pointing outward toward top-right and bottom-left (expand)
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-      <path d="M1 5V1h4M9 13h4V9M1 1l5 5M13 13l-5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+      <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );
 }
@@ -151,7 +153,7 @@ function CataloguePicker({
   assetSearch, setAssetSearch,
   cats, filteredCats,
   catAssets, filteredCatAssets,
-  expanded, onExpand, addRow,
+  expanded, onExpand, onCollapse, addRow,
   gridCols, maxH,
 }: {
   activeCat: import("../api/catalogue").Category | null;
@@ -166,27 +168,41 @@ function CataloguePicker({
   filteredCatAssets: import("../api/catalogue").Asset[] | null;
   expanded: boolean;
   onExpand: () => void;
+  onCollapse?: () => void;
   addRow: (a: import("../api/catalogue").Asset, n: number) => void;
   gridCols: string;
   maxH: string;
 }) {
+  // iOS Safari zooms in on focus when font-size < 16px — prevent that
+  const inputStyle: React.CSSProperties = { fontSize: 16 };
+
   return !activeCat ? (
     <>
-      <div className="flex gap-2">
+      <div className={`flex gap-2 ${expanded ? "px-1 py-1" : ""}`}>
         <input
           type="search"
           value={catSearch}
           onChange={(e) => setCatSearch(e.target.value)}
           placeholder="Search categories…"
+          style={inputStyle}
           className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
         />
-        {!expanded && (
+        {!expanded ? (
           <button
             onClick={onExpand}
-            className="rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+            className="shrink-0 rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
             title="Expand to full screen"
           >
             <ExpandIcon />
+          </button>
+        ) : (
+          <button
+            onClick={onCollapse}
+            className="shrink-0 flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all whitespace-nowrap"
+            title="Exit full screen"
+          >
+            <ExpandIcon shrink />
+            <span>Exit full screen</span>
           </button>
         )}
       </div>
@@ -218,7 +234,7 @@ function CataloguePicker({
     </>
   ) : (
     <>
-      <div className="flex items-center justify-between text-sm">
+      <div className={`flex items-center justify-between text-sm ${expanded ? "px-1 py-1" : ""}`}>
         <button
           onClick={() => setActiveCat(null)}
           className="text-neutral-400 hover:text-white"
@@ -226,14 +242,23 @@ function CataloguePicker({
           ← Categories
         </button>
         <div className="flex items-center gap-2">
-          <span className="text-neutral-500 text-xs">{activeCat.name}</span>
-          {!expanded && (
+          <span className="text-neutral-500 text-xs truncate max-w-[120px]">{activeCat.name}</span>
+          {!expanded ? (
             <button
               onClick={onExpand}
               className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
               title="Expand to full screen"
             >
               <ExpandIcon />
+            </button>
+          ) : (
+            <button
+              onClick={onCollapse}
+              className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all whitespace-nowrap"
+              title="Exit full screen"
+            >
+              <ExpandIcon shrink />
+              <span>Exit full screen</span>
             </button>
           )}
         </div>
@@ -245,20 +270,23 @@ function CataloguePicker({
       ) : (
         <>
           {catAssets.length > 5 && (
-            <input
-              type="search"
-              value={assetSearch}
-              onChange={(e) => setAssetSearch(e.target.value)}
-              placeholder="Search assets…"
-              className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-            />
+            <div className={expanded ? "px-1" : ""}>
+              <input
+                type="search"
+                value={assetSearch}
+                onChange={(e) => setAssetSearch(e.target.value)}
+                placeholder="Search assets…"
+                style={inputStyle}
+                className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+              />
+            </div>
           )}
           {filteredCatAssets && filteredCatAssets.length > 0 ? (
             <div
               className={`overflow-y-auto ${maxH}`}
               style={{ WebkitOverflowScrolling: "touch" }}
             >
-              <div className={`grid ${gridCols} gap-2`}>
+              <div className={`grid ${gridCols} gap-2 ${expanded ? "px-1 pb-4" : ""}`}>
                 {filteredCatAssets.map((a) => (
                   <button
                     key={a.id}
@@ -1060,6 +1088,7 @@ export default function JobFiller() {
                   filteredCatAssets={filteredCatAssets}
                   expanded={false}
                   onExpand={() => setCatExpanded(true)}
+                  onCollapse={() => {}}
                   addRow={addRow}
                   gridCols="grid-cols-3"
                   maxH="max-h-72"
@@ -1071,25 +1100,10 @@ export default function JobFiller() {
           {/* Full-screen catalogue overlay */}
           {catExpanded && (
             <div
-              className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-sm flex flex-col"
+              className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-sm overflow-y-auto"
               style={{ WebkitOverflowScrolling: "touch" }}
             >
-              {/* Header */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
-                <span className="text-sm font-semibold text-neutral-200">
-                  Choose from catalogue
-                </span>
-                <button
-                  onClick={() => setCatExpanded(false)}
-                  className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all"
-                  title="Exit full screen"
-                >
-                  <ExpandIcon shrink />
-                  <span>Exit full screen</span>
-                </button>
-              </div>
-              {/* Content */}
-              <div className="flex-1 overflow-y-auto px-4 py-4">
+              <div className="px-4 py-4 space-y-3">
                 <CataloguePicker
                   activeCat={activeCat}
                   setActiveCat={setActiveCat}
@@ -1103,6 +1117,7 @@ export default function JobFiller() {
                   filteredCatAssets={filteredCatAssets}
                   expanded={true}
                   onExpand={() => {}}
+                  onCollapse={() => setCatExpanded(false)}
                   addRow={(a, n) => { addRow(a, n); setCatExpanded(false); }}
                   gridCols="grid-cols-4 sm:grid-cols-6 lg:grid-cols-8"
                   maxH="max-h-none"

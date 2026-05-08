@@ -47,6 +47,9 @@ export default function Catalogue() {
   const [err, setErr] = useState<FormattedApiError | null>(null);
   const reportErr = (e: unknown) => setErr(formatApiError(e));
 
+  // Asset search filter
+  const [assetSearch, setAssetSearch] = useState("");
+
   // Inline rename state
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -83,6 +86,17 @@ export default function Catalogue() {
   );
   const isReadOnly = !!activeCat?.is_official && !isAdmin;
 
+  const filteredAssets = useMemo(() => {
+    if (!assets) return null;
+    const q = assetSearch.trim().toLowerCase();
+    if (!q) return assets;
+    const words = q.split(/\s+/);
+    return assets.filter((a) => {
+      const name = a.name.toLowerCase();
+      return words.every((w) => name.includes(w));
+    });
+  }, [assets, assetSearch]);
+
   async function loadCats() {
     const c = await listCategories();
     setCats(c);
@@ -96,6 +110,7 @@ export default function Catalogue() {
 
   useEffect(() => {
     if (!active) return;
+    setAssetSearch("");
     listAssets(active).then(setAssets).catch(reportErr);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
@@ -511,6 +526,19 @@ export default function Catalogue() {
                 </div>
               </div>
 
+              {/* Search within category */}
+              {assets && assets.length > 5 && (
+                <div className="mb-3">
+                  <input
+                    type="text"
+                    value={assetSearch}
+                    onChange={(e) => setAssetSearch(e.target.value)}
+                    placeholder="Search assets by name…"
+                    className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm outline-none focus:border-neutral-600 placeholder:text-neutral-500"
+                  />
+                </div>
+              )}
+
               <div
                 onDragEnter={onDragEnter}
                 onDragOver={onDragOver}
@@ -522,9 +550,9 @@ export default function Catalogue() {
                     : ""
                 }`}
               >
-                {assets && assets.length > 0 ? (
+                {filteredAssets && filteredAssets.length > 0 ? (
                   <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-                    {assets.map((a) => (
+                    {filteredAssets.map((a) => (
                       <div
                         key={a.id}
                         className="group relative aspect-square rounded-lg border border-neutral-800 bg-white overflow-hidden ring-1 ring-black/5 shadow-sm"
@@ -563,7 +591,9 @@ export default function Catalogue() {
                         : "border-neutral-800 text-neutral-500"
                     }`}
                   >
-                    {isReadOnly
+                    {assetSearch.trim()
+                      ? `No assets matching "${assetSearch.trim()}"`
+                      : isReadOnly
                       ? "This official catalogue is empty."
                       : "Drag files here, or click + Add files. PDFs, SVGs, PNGs, JPGs."}
                   </div>

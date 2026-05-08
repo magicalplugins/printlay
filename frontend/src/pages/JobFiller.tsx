@@ -573,6 +573,17 @@ export default function JobFiller() {
     }
   }
 
+  const filteredCatAssets = useMemo(() => {
+    if (!catAssets) return null;
+    const q = assetSearch.trim().toLowerCase();
+    if (!q) return catAssets;
+    const words = q.split(/\s+/);
+    return catAssets.filter((a) => {
+      const name = a.name.toLowerCase();
+      return words.every((w) => name.includes(w));
+    });
+  }, [catAssets, assetSearch]);
+
   if (err && !job)
     return (
       <div className="p-8">
@@ -585,17 +596,6 @@ export default function JobFiller() {
   const filteredCats = (cats ?? []).filter((c) =>
     c.name.toLowerCase().includes(catSearch.trim().toLowerCase())
   );
-
-  const filteredCatAssets = useMemo(() => {
-    if (!catAssets) return null;
-    const q = assetSearch.trim().toLowerCase();
-    if (!q) return catAssets;
-    const words = q.split(/\s+/);
-    return catAssets.filter((a) => {
-      const name = a.name.toLowerCase();
-      return words.every((w) => name.includes(w));
-    });
-  }, [catAssets, assetSearch]);
 
   return (
     // overflow-x-hidden + max-w-full are defensive: if any descendant is

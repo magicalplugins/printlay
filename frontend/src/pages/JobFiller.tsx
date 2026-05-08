@@ -1103,7 +1103,8 @@ export default function JobFiller() {
               className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-sm overflow-y-auto"
               style={{ WebkitOverflowScrolling: "touch" }}
             >
-              <div className="px-4 py-4 space-y-3">
+              {/* pt-14 clears the sticky h-14 nav bar on desktop */}
+              <div className="px-4 pt-16 pb-6 space-y-3">
                 <CataloguePicker
                   activeCat={activeCat}
                   setActiveCat={setActiveCat}

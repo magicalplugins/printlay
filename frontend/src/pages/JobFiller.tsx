@@ -148,6 +148,7 @@ export default function JobFiller() {
   const [activeCat, setActiveCat] = useState<Category | null>(null);
   const [catAssets, setCatAssets] = useState<Asset[] | null>(null);
   const [catSearch, setCatSearch] = useState("");
+  const [assetSearch, setAssetSearch] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -232,8 +233,10 @@ export default function JobFiller() {
   useEffect(() => {
     if (!activeCat) {
       setCatAssets(null);
+      setAssetSearch("");
       return;
     }
+    setAssetSearch("");
     listAssets(activeCat.id).then(setCatAssets).catch((e) => reportErr(e));
   }, [activeCat]);
 
@@ -583,6 +586,17 @@ export default function JobFiller() {
     c.name.toLowerCase().includes(catSearch.trim().toLowerCase())
   );
 
+  const filteredCatAssets = useMemo(() => {
+    if (!catAssets) return null;
+    const q = assetSearch.trim().toLowerCase();
+    if (!q) return catAssets;
+    const words = q.split(/\s+/);
+    return catAssets.filter((a) => {
+      const name = a.name.toLowerCase();
+      return words.every((w) => name.includes(w));
+    });
+  }, [catAssets, assetSearch]);
+
   return (
     // overflow-x-hidden + max-w-full are defensive: if any descendant is
     // momentarily wider than the viewport (canvas before measurement, a
@@ -924,12 +938,23 @@ export default function JobFiller() {
                         Empty category.
                       </div>
                     ) : (
+                      <>
+                        {catAssets.length > 5 && (
+                          <input
+                            type="search"
+                            value={assetSearch}
+                            onChange={(e) => setAssetSearch(e.target.value)}
+                            placeholder="Search assets…"
+                            className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+                          />
+                        )}
+                        {filteredCatAssets && filteredCatAssets.length > 0 ? (
                       <div
                         className="overflow-y-auto max-h-72"
                         style={{ WebkitOverflowScrolling: "touch" }}
                       >
                         <div className="grid grid-cols-3 gap-2">
-                          {catAssets.map((a) => (
+                          {filteredCatAssets.map((a) => (
                             <button
                               key={a.id}
                               onClick={() => addRow(a, 1)}
@@ -958,6 +983,12 @@ export default function JobFiller() {
                           ))}
                         </div>
                       </div>
+                        ) : (
+                          <div className="text-xs text-neutral-500">
+                            No assets matching "{assetSearch.trim()}"
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 )}

@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   adminSetOfficial,
   Asset,
@@ -11,6 +11,7 @@ import {
   listAssets,
   listCategories,
   listOfficialCatalogues,
+  renameCategory,
   subscribeToCatalogue,
   unsubscribeFromCatalogue,
   uploadAsset,
@@ -45,6 +46,11 @@ export default function Catalogue() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<FormattedApiError | null>(null);
   const reportErr = (e: unknown) => setErr(formatApiError(e));
+
+  // Inline rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   // Browse-officials drawer
   const [browseOpen, setBrowseOpen] = useState(false);
@@ -165,6 +171,33 @@ export default function Catalogue() {
     if (active === id) setActive(null);
     setAssets(null);
     loadCats();
+  }
+
+  function startRename(c: Category) {
+    // Subscribers can't rename official categories they don't own
+    if (c.is_official && !isAdmin) return;
+    setRenamingId(c.id);
+    setRenameValue(c.name);
+    setTimeout(() => renameInputRef.current?.select(), 0);
+  }
+
+  async function commitRename() {
+    if (!renamingId) return;
+    const trimmed = renameValue.trim();
+    if (trimmed) {
+      try {
+        await renameCategory(renamingId, trimmed);
+        await loadCats();
+      } catch (e) {
+        reportErr(e);
+      }
+    }
+    setRenamingId(null);
+  }
+
+  function onRenameKey(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter") { e.preventDefault(); void commitRename(); }
+    if (e.key === "Escape") setRenamingId(null);
   }
 
   const ACCEPTED = /\.(pdf|svg|png|jpe?g)$/i;
@@ -354,18 +387,35 @@ export default function Catalogue() {
                     ? "bg-neutral-800 text-white"
                     : "text-neutral-300 hover:bg-neutral-900"
                 }`}
-                onClick={() => setActive(c.id)}
+                onClick={() => { if (renamingId !== c.id) setActive(c.id); }}
               >
-                <span className="flex items-center gap-2 min-w-0">
-                  <span className="truncate">{c.name}</span>
-                  {c.is_official && <OfficialBadge />}
-                </span>
+                {renamingId === c.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={onRenameKey}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 min-w-0 rounded border border-neutral-600 bg-neutral-700 px-2 py-0.5 text-sm text-white outline-none focus:border-neutral-400"
+                    autoFocus
+                  />
+                ) : (
+                  <span
+                    className="flex items-center gap-2 min-w-0"
+                    onDoubleClick={(e) => { e.stopPropagation(); startRename(c); }}
+                    title={(!c.is_official || isAdmin) ? "Double-click to rename" : undefined}
+                  >
+                    <span className="truncate">{c.name}</span>
+                    {c.is_official && <OfficialBadge />}
+                  </span>
+                )}
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onDeleteCat(c.id);
                   }}
-                  className="text-xs text-neutral-500 hover:text-rose-400"
+                  className="shrink-0 text-xs text-neutral-500 hover:text-rose-400"
                   title={
                     c.is_official && !isAdmin
                       ? "Unsubscribe from this catalogue"

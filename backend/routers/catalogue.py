@@ -198,6 +198,21 @@ def create_category(
     return _category_to_out(cat)
 
 
+@router.patch("/categories/{cat_id}", response_model=CategoryOut)
+def rename_category(
+    cat_id: uuid.UUID,
+    payload: CategoryCreate,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CategoryOut:
+    user = _resolve_user(db, auth)
+    cat = _own_category(db, user, cat_id)
+    cat.name = payload.name.strip()
+    db.commit()
+    db.refresh(cat)
+    return _category_to_out(cat)
+
+
 @router.delete("/categories/{cat_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_category(
     cat_id: uuid.UUID,

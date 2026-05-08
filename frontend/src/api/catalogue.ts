@@ -35,6 +35,12 @@ export const createCategory = (name: string) =>
 export const deleteCategory = (id: string) =>
   api<void>(`/api/categories/${id}`, { method: "DELETE" });
 
+export const renameCategory = (id: string, name: string) =>
+  api<Category>(`/api/categories/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+
 export const listAssets = (categoryId: string) =>
   api<Asset[]>(`/api/categories/${categoryId}/assets`);
 

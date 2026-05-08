@@ -761,3 +761,68 @@ def admin_unassign_subscriber(
         target_type="category", target_id=cat_id,
         payload={"target_user_id": str(user_id)},
     )
+
+
+@router.post("/admin/categories/{cat_id}/rotate-assets", status_code=status.HTTP_200_OK)
+def rotate_category_assets(
+    cat_id: uuid.UUID,
+    degrees: int = 90,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Rotate every asset PDF in a category by `degrees` (90, 180, or 270).
+
+    Uses a metadata-only /Rotate operation — no content stream is touched, so
+    vector paths, colours, and embedded images are fully preserved.
+    Updates width_pt / height_pt in the DB and regenerates thumbnails.
+    """
+    import pymupdf  # type: ignore[import-untyped]
+
+    if degrees not in (90, 180, 270):
+        raise HTTPException(400, "degrees must be 90, 180, or 270")
+
+    cat = db.query(AssetCategory).filter(AssetCategory.id == cat_id).one_or_none()
+    if cat is None:
+        raise HTTPException(404, "Category not found")
+
+    assets = db.query(Asset).filter(Asset.category_id == cat_id).all()
+    rotated, skipped, errors = 0, 0, []
+
+    for a in assets:
+        if not a.r2_key:
+            skipped += 1
+            continue
+        try:
+            pdf_bytes = storage.get_bytes(a.r2_key)
+            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            for page in doc:
+                page.set_rotation((page.rotation + degrees) % 360)
+            new_pdf = doc.tobytes(deflate=True, garbage=1)
+            doc.close()
+
+            # Re-upload the rotated PDF (overwrite same key)
+            storage.put_bytes(a.r2_key, new_pdf, content_type="application/pdf")
+
+            # Regenerate thumbnail
+            new_thumb = asset_pipeline._thumbnail_from_pdf(new_pdf)
+            if a.thumbnail_r2_key:
+                storage.put_bytes(a.thumbnail_r2_key, new_thumb, content_type="image/jpeg")
+
+            # Update dimensions in DB — swap w/h for 90 or 270
+            if degrees in (90, 270):
+                a.width_pt, a.height_pt = a.height_pt, a.width_pt
+            # 180 keeps the same dimensions
+
+            rotated += 1
+        except Exception as exc:
+            errors.append({"asset_id": str(a.id), "name": a.name, "error": str(exc)})
+
+    db.commit()
+    return {
+        "category": cat.name,
+        "degrees": degrees,
+        "rotated": rotated,
+        "skipped": skipped,
+        "errors": errors,
+    }
+

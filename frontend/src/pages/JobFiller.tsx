@@ -131,6 +131,174 @@ function rowsFromJob(job: Job, assets: Asset[]): QueueRow[] {
   return rows;
 }
 
+// ─── Expand icon (diagonal double-arrow) ──────────────────────────────────────
+function ExpandIcon({ shrink = false }: { shrink?: boolean }) {
+  return shrink ? (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M9 1h4v4M5 13H1V9M13 1l-5 5M1 13l5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  ) : (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+      <path d="M1 5V1h4M9 13h4V9M1 1l5 5M13 13l-5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+// ─── Shared catalogue picker UI ───────────────────────────────────────────────
+function CataloguePicker({
+  activeCat, setActiveCat,
+  catSearch, setCatSearch,
+  assetSearch, setAssetSearch,
+  cats, filteredCats,
+  catAssets, filteredCatAssets,
+  expanded, onExpand, addRow,
+  gridCols, maxH,
+}: {
+  activeCat: import("../api/catalogue").Category | null;
+  setActiveCat: (c: import("../api/catalogue").Category | null) => void;
+  catSearch: string;
+  setCatSearch: (v: string) => void;
+  assetSearch: string;
+  setAssetSearch: (v: string) => void;
+  cats: import("../api/catalogue").Category[] | null;
+  filteredCats: import("../api/catalogue").Category[];
+  catAssets: import("../api/catalogue").Asset[] | null;
+  filteredCatAssets: import("../api/catalogue").Asset[] | null;
+  expanded: boolean;
+  onExpand: () => void;
+  addRow: (a: import("../api/catalogue").Asset, n: number) => void;
+  gridCols: string;
+  maxH: string;
+}) {
+  return !activeCat ? (
+    <>
+      <div className="flex gap-2">
+        <input
+          type="search"
+          value={catSearch}
+          onChange={(e) => setCatSearch(e.target.value)}
+          placeholder="Search categories…"
+          className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+        />
+        {!expanded && (
+          <button
+            onClick={onExpand}
+            className="rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+            title="Expand to full screen"
+          >
+            <ExpandIcon />
+          </button>
+        )}
+      </div>
+      {cats === null ? (
+        <div className="text-xs text-neutral-500">Loading…</div>
+      ) : cats.length === 0 ? (
+        <a href="/app/catalogue" className="block text-sm text-neutral-400 underline">
+          No categories yet — create some →
+        </a>
+      ) : filteredCats.length === 0 ? (
+        <div className="text-xs text-neutral-500">
+          No categories match "{catSearch}".
+        </div>
+      ) : (
+        <ul className={`overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800 ${expanded ? "max-h-none" : "max-h-64"}`}>
+          {filteredCats.map((c) => (
+            <li key={c.id}>
+              <button
+                onClick={() => setActiveCat(c)}
+                className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
+              >
+                <span>{c.name}</span>
+                <span className="text-neutral-600 group-hover:text-neutral-300">→</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  ) : (
+    <>
+      <div className="flex items-center justify-between text-sm">
+        <button
+          onClick={() => setActiveCat(null)}
+          className="text-neutral-400 hover:text-white"
+        >
+          ← Categories
+        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-neutral-500 text-xs">{activeCat.name}</span>
+          {!expanded && (
+            <button
+              onClick={onExpand}
+              className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+              title="Expand to full screen"
+            >
+              <ExpandIcon />
+            </button>
+          )}
+        </div>
+      </div>
+      {catAssets === null ? (
+        <div className="text-xs text-neutral-500">Loading…</div>
+      ) : catAssets.length === 0 ? (
+        <div className="text-xs text-neutral-500">Empty category.</div>
+      ) : (
+        <>
+          {catAssets.length > 5 && (
+            <input
+              type="search"
+              value={assetSearch}
+              onChange={(e) => setAssetSearch(e.target.value)}
+              placeholder="Search assets…"
+              className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+            />
+          )}
+          {filteredCatAssets && filteredCatAssets.length > 0 ? (
+            <div
+              className={`overflow-y-auto ${maxH}`}
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              <div className={`grid ${gridCols} gap-2`}>
+                {filteredCatAssets.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => addRow(a, 1)}
+                    className="rounded-lg border border-neutral-800 bg-white overflow-hidden ring-1 ring-black/5 shadow-sm hover:border-violet-500 active:border-violet-500 active:scale-95 transition-all group relative"
+                    title={`Add ${a.name} to queue`}
+                    style={{
+                      height: expanded ? 120 : 90,
+                      touchAction: "manipulation",
+                      WebkitTapHighlightColor: "transparent",
+                    }}
+                  >
+                    {a.preview_url || a.thumbnail_url ? (
+                      <img
+                        src={a.preview_url ?? a.thumbnail_url ?? ""}
+                        alt={a.name}
+                        className="w-full h-full object-contain p-1.5"
+                        draggable={false}
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-xs text-neutral-400 uppercase">
+                        {a.kind}
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-violet-500/0 group-hover:bg-violet-500/15 active:bg-violet-500/20 transition" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-neutral-500">
+              No assets matching "{assetSearch.trim()}"
+            </div>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 export default function JobFiller() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -144,6 +312,7 @@ export default function JobFiller() {
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [uploadOpen, setUploadOpen] = useState(true);
   const [catOpen, setCatOpen] = useState(false);
+  const [catExpanded, setCatExpanded] = useState(false);
   const [cats, setCats] = useState<Category[] | null>(null);
   const [activeCat, setActiveCat] = useState<Category | null>(null);
   const [catAssets, setCatAssets] = useState<Asset[] | null>(null);
@@ -878,123 +1047,69 @@ export default function JobFiller() {
             </button>
             {catOpen && (
               <div className="px-4 pb-4 space-y-3">
-                {!activeCat ? (
-                  <>
-                    <input
-                      type="search"
-                      value={catSearch}
-                      onChange={(e) => setCatSearch(e.target.value)}
-                      placeholder="Search categories…"
-                      className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-                    />
-                    {cats === null ? (
-                      <div className="text-xs text-neutral-500">Loading…</div>
-                    ) : cats.length === 0 ? (
-                      <Link
-                        to="/app/catalogue"
-                        className="block text-sm text-neutral-400 underline"
-                      >
-                        No categories yet — create some →
-                      </Link>
-                    ) : filteredCats.length === 0 ? (
-                      <div className="text-xs text-neutral-500">
-                        No categories match "{catSearch}".
-                      </div>
-                    ) : (
-                      <ul className="max-h-64 overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800">
-                        {filteredCats.map((c) => (
-                          <li key={c.id}>
-                            <button
-                              onClick={() => setActiveCat(c)}
-                              className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
-                            >
-                              <span>{c.name}</span>
-                              <span className="text-neutral-600 group-hover:text-neutral-300">
-                                →
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between text-sm">
-                      <button
-                        onClick={() => setActiveCat(null)}
-                        className="text-neutral-400 hover:text-white"
-                      >
-                        ← Categories
-                      </button>
-                      <span className="text-neutral-500 text-xs">
-                        {activeCat.name}
-                      </span>
-                    </div>
-                    {catAssets === null ? (
-                      <div className="text-xs text-neutral-500">Loading…</div>
-                    ) : catAssets.length === 0 ? (
-                      <div className="text-xs text-neutral-500">
-                        Empty category.
-                      </div>
-                    ) : (
-                      <>
-                        {catAssets.length > 5 && (
-                          <input
-                            type="search"
-                            value={assetSearch}
-                            onChange={(e) => setAssetSearch(e.target.value)}
-                            placeholder="Search assets…"
-                            className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-                          />
-                        )}
-                        {filteredCatAssets && filteredCatAssets.length > 0 ? (
-                      <div
-                        className="overflow-y-auto max-h-72"
-                        style={{ WebkitOverflowScrolling: "touch" }}
-                      >
-                        <div className="grid grid-cols-3 gap-2">
-                          {filteredCatAssets.map((a) => (
-                            <button
-                              key={a.id}
-                              onClick={() => addRow(a, 1)}
-                              className="rounded-lg border border-neutral-800 bg-white overflow-hidden ring-1 ring-black/5 shadow-sm hover:border-violet-500 active:border-violet-500 active:scale-95 transition-all group relative"
-                              title={`Add ${a.name} to queue`}
-                              style={{
-                                height: 90,
-                                touchAction: "manipulation",
-                                WebkitTapHighlightColor: "transparent",
-                              }}
-                            >
-                              {a.preview_url || a.thumbnail_url ? (
-                                <img
-                                  src={a.preview_url ?? a.thumbnail_url ?? ""}
-                                  alt={a.name}
-                                  className="w-full h-full object-contain p-1.5"
-                                  draggable={false}
-                                />
-                              ) : (
-                                <div className="w-full h-full flex items-center justify-center text-xs text-neutral-400 uppercase">
-                                  {a.kind}
-                                </div>
-                              )}
-                              <div className="absolute inset-0 bg-violet-500/0 group-hover:bg-violet-500/15 active:bg-violet-500/20 transition" />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                        ) : (
-                          <div className="text-xs text-neutral-500">
-                            No assets matching "{assetSearch.trim()}"
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
+                <CataloguePicker
+                  activeCat={activeCat}
+                  setActiveCat={setActiveCat}
+                  catSearch={catSearch}
+                  setCatSearch={setCatSearch}
+                  assetSearch={assetSearch}
+                  setAssetSearch={setAssetSearch}
+                  cats={cats}
+                  filteredCats={filteredCats}
+                  catAssets={catAssets}
+                  filteredCatAssets={filteredCatAssets}
+                  expanded={false}
+                  onExpand={() => setCatExpanded(true)}
+                  addRow={addRow}
+                  gridCols="grid-cols-3"
+                  maxH="max-h-72"
+                />
               </div>
             )}
           </section>
+
+          {/* Full-screen catalogue overlay */}
+          {catExpanded && (
+            <div
+              className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-sm flex flex-col"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800 shrink-0">
+                <span className="text-sm font-semibold text-neutral-200">
+                  Choose from catalogue
+                </span>
+                <button
+                  onClick={() => setCatExpanded(false)}
+                  className="flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all"
+                  title="Exit full screen"
+                >
+                  <ExpandIcon shrink />
+                  <span>Exit full screen</span>
+                </button>
+              </div>
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto px-4 py-4">
+                <CataloguePicker
+                  activeCat={activeCat}
+                  setActiveCat={setActiveCat}
+                  catSearch={catSearch}
+                  setCatSearch={setCatSearch}
+                  assetSearch={assetSearch}
+                  setAssetSearch={setAssetSearch}
+                  cats={cats}
+                  filteredCats={filteredCats}
+                  catAssets={catAssets}
+                  filteredCatAssets={filteredCatAssets}
+                  expanded={true}
+                  onExpand={() => {}}
+                  addRow={(a, n) => { addRow(a, n); setCatExpanded(false); }}
+                  gridCols="grid-cols-4 sm:grid-cols-6 lg:grid-cols-8"
+                  maxH="max-h-none"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Colour swaps - applied at Generate PDF time. Sits below the
               catalogue picker because by the time you're tweaking colours

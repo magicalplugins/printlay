@@ -377,6 +377,34 @@ def _content_streams(page) -> Iterable[bytes]:
             continue
 
 
+def _walk_xobject_tree(obj, seen: set[int]) -> Iterable:
+    """Recursively yield Form XObject streams from nested /Resources."""
+    pikepdf = _get_pikepdf()
+    yield obj
+    sub_res = obj.get("/Resources")
+    if sub_res is None:
+        return
+    sub_xobj = sub_res.get("/XObject")
+    if sub_xobj is None:
+        return
+    try:
+        items = list(sub_xobj.items())
+    except Exception:
+        return
+    for _name, child in items:
+        if id(child) in seen:
+            continue
+        seen.add(id(child))
+        try:
+            st = child.get("/Subtype")
+            if st is not None and str(st) in ("/Image", "Image"):
+                continue
+        except Exception:
+            pass
+        if isinstance(child, pikepdf.Stream):
+            yield from _walk_xobject_tree(child, seen)
+
+
 def _writable_streams(page, *, seen: set[int] | None = None) -> Iterable:
     """Yield pikepdf Stream objects we can mutate. Walks form XObjects too."""
     if seen is None:
@@ -405,10 +433,32 @@ def _writable_streams(page, *, seen: set[int] | None = None) -> Iterable:
                         continue
                 except Exception:
                     pass
-                # Form XObjects ARE content streams.
+                # Form XObjects ARE content streams — yield them and
+                # recurse into their own /Resources/XObject to handle
+                # nested wrappers (e.g. from show_pdf_page baking).
                 pikepdf = _get_pikepdf()
                 if isinstance(obj, pikepdf.Stream):
                     yield obj
+                    sub_res = obj.get("/Resources")
+                    if sub_res is not None:
+                        sub_xobj = sub_res.get("/XObject")
+                        if sub_xobj is not None:
+                            try:
+                                sub_items = list(sub_xobj.items())
+                            except Exception:
+                                sub_items = []
+                            for _sname, sobj in sub_items:
+                                if id(sobj) in seen:
+                                    continue
+                                seen.add(id(sobj))
+                                try:
+                                    st = sobj.get("/Subtype")
+                                    if st is not None and str(st) in ("/Image", "Image"):
+                                        continue
+                                except Exception:
+                                    pass
+                                if isinstance(sobj, pikepdf.Stream):
+                                    yield from _walk_xobject_tree(sobj, seen)
 
 
 def _flatten_streams(obj, seen: set[int]) -> Iterable:

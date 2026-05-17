@@ -808,10 +808,14 @@ def rotate_category_assets(
             if a.thumbnail_r2_key:
                 storage.put_bytes(a.thumbnail_r2_key, new_thumb, content_type="image/jpeg")
 
-            # Update dimensions in DB — swap w/h for 90 or 270
-            if degrees in (90, 270):
-                a.width_pt, a.height_pt = a.height_pt, a.width_pt
-            # 180 keeps the same dimensions
+            # Read the DISPLAYED dimensions from the rotated PDF (page.rect
+            # accounts for /Rotate) rather than swapping DB values, which
+            # can drift if the DB was stale.
+            check = pymupdf.open(stream=new_pdf, filetype="pdf")
+            rp = check[0]
+            a.width_pt = float(rp.rect.width)
+            a.height_pt = float(rp.rect.height)
+            check.close()
 
             rotated += 1
         except Exception as exc:

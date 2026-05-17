@@ -86,6 +86,7 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
     let cancelled = false;
     (async () => {
       setBusy(true);
+      setErr(null);
       try {
         const state = await getJobColors(jobId, { detect: true });
         if (cancelled) return;
@@ -271,6 +272,22 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
 
       {open && (
         <div className="px-4 pb-4 space-y-4 border-t border-neutral-900 pt-4">
+          {err && (
+            <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3 py-2 text-xs text-rose-300">
+              {err}
+            </div>
+          )}
+
+          {busy && !detectedLoaded && (
+            <div className="flex items-center gap-2 rounded-lg bg-violet-500/10 border border-violet-500/30 px-3 py-2">
+              <svg className="animate-spin h-4 w-4 text-violet-400" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
+              </svg>
+              <span className="text-xs text-violet-300">Detecting colours from assigned assets…</span>
+            </div>
+          )}
+
           {/* Profile picker */}
           <div className="flex items-center gap-2 flex-wrap">
             <label className="text-xs text-neutral-400 font-medium">
@@ -354,8 +371,7 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
             </div>
           </div>
 
-          {err && <div className="text-xs text-rose-300">{err}</div>}
-          {busy && (
+          {busy && detectedLoaded && (
             <div className="text-xs text-neutral-500">Working…</div>
           )}
         </div>

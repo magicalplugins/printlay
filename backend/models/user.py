@@ -45,7 +45,7 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     trial_ends_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    """Set to now() + 14 days on signup. Cleared once a Stripe subscription
+    """Set to now() + 7 days on signup. Cleared once a Stripe subscription
     becomes active. The entitlements resolver checks this lazily on every
     request so no cron is needed."""
 

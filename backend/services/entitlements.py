@@ -80,7 +80,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
 
 # Trial users get the Pro feature set, but a tighter storage cap so a
 # brand-new account can't dump a huge library we have to host forever
-# if they bounce. 14 days × 1 GB is plenty for a real evaluation.
+# if they bounce. 7 days × 1 GB is plenty for a real evaluation.
 _TRIAL_STORAGE_MB_MAX = 1024  # 1 GB
 
 # Feature flags per tier.

@@ -5,7 +5,7 @@ All LMFWC columns are gone as of migration 0010. Subscription truth lives in:
     users.stripe_subscription_status   ('active', 'past_due', 'canceled', None)
     users.stripe_price_id               → plan tier via entitlements
     users.stripe_current_period_end     next renewal / cancellation date
-    users.trial_ends_at                 expiry of 14-day Pro trial
+    users.trial_ends_at                 expiry of 7-day Pro trial
     users.founder_member                lifetime badge flag
     users.tier                          'enterprise' for manually-set overrides
 """

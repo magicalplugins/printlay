@@ -152,7 +152,7 @@ export default function PricingPreview() {
             <span className="italic font-light">serious shops.</span>
           </h2>
           <p className="text-neutral-400 text-lg max-w-xl mx-auto">
-            Every plan starts with a 14-day full-access trial — no card needed.
+            Every plan starts with a 7-day full-access trial — no card needed.
             Upgrade once you see the time you're saving.
           </p>
         </div>

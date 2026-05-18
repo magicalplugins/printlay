@@ -84,7 +84,7 @@ export default function Terms() {
 
           <Section number="3" title="Trial">
             <p>
-              Every new account starts with a 14-day full-access trial. No
+              Every new account starts with a 7-day full-access trial. No
               card is required to begin. During the trial you have access to
               the Pro feature set with a 1 GB total storage allowance.
             </p>

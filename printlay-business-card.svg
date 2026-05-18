@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="80mm" height="55mm" viewBox="0 0 226.77 155.91">
+  <defs>
+    <pattern id="grid" width="13.6" height="13.6" patternUnits="userSpaceOnUse">
+      <path d="M 13.6 0 L 0 0 0 13.6" fill="none" stroke="#ffffff" stroke-width="0.3" opacity="0.06"/>
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="226.77" height="155.91" fill="#0a0a0a"/>
+
+  <!-- Colour glows (using feGaussianBlur-free ellipses with low opacity for compatibility) -->
+  <ellipse cx="30" cy="25" rx="120" ry="90" fill="#a21caf" opacity="0.18"/>
+  <ellipse cx="195" cy="78" rx="110" ry="85" fill="#4f46e5" opacity="0.14"/>
+  <ellipse cx="100" cy="145" rx="100" ry="70" fill="#10b981" opacity="0.08"/>
+
+  <!-- Dark overlay to deepen the glows -->
+  <rect width="226.77" height="155.91" fill="#0a0a0a" opacity="0.55"/>
+
+  <!-- Grid overlay -->
+  <rect width="226.77" height="155.91" fill="url(#grid)"/>
+
+  <!-- Main title: Printlay.com -->
+  <text x="101" y="68" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif" font-size="38"
+        font-weight="800" letter-spacing="-1.5" fill="#fafafa">Printlay</text>
+  <text x="155" y="58" text-anchor="start"
+        font-family="Inter, system-ui, sans-serif" font-size="12"
+        font-weight="300" fill="#737373" letter-spacing="0">.com</text>
+
+  <!-- Tagline -->
+  <text x="113.39" y="88" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif" font-size="8.5"
+        font-weight="300" fill="#a3a3a3" letter-spacing="0.2">Your print / cut layout solution.</text>
+
+  <!-- Subtle divider line -->
+  <line x1="78" y1="102" x2="149" y2="102" stroke="#ffffff" stroke-opacity="0.07" stroke-width="0.4"/>
+
+  <!-- Contact for demo -->
+  <text x="113.39" y="115" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif" font-size="6.5"
+        font-weight="600" fill="#d4d4d4" letter-spacing="0.6">Contact for demo</text>
+
+  <!-- Email -->
+  <text x="113.39" y="128" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif" font-size="5.5"
+        font-weight="400" fill="#737373" letter-spacing="0.2">info@printlay.co.uk</text>
+
+  <!-- Phone -->
+  <text x="113.39" y="140" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif" font-size="5.5"
+        font-weight="400" fill="#737373" letter-spacing="0.2">Tel / WhatsApp: +44 7989 568 304</text>
+</svg>

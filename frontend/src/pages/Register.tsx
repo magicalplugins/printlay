@@ -45,7 +45,7 @@ export default function Register() {
             Printlay
           </Link>
           <h1 className="text-3xl font-bold tracking-tight">Start your free trial</h1>
-          <p className="text-sm text-neutral-400">14 days full access · No card required to start</p>
+          <p className="text-sm text-neutral-400">7 days full access · No card required to start</p>
         </div>
 
         {configError && (
@@ -79,7 +79,7 @@ export default function Register() {
             disabled={busy || !client}
             className="w-full rounded-lg bg-white px-4 py-3 font-semibold text-neutral-950 hover:bg-neutral-200 disabled:opacity-40"
           >
-            {busy ? "Creating…" : "Start 14-day trial →"}
+            {busy ? "Creating…" : "Start 7-day trial →"}
           </button>
 
           <p className="text-xs text-neutral-500 leading-relaxed">

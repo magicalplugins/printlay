@@ -5,11 +5,10 @@ import { useMemo } from "react";
 /**
  * Persistent top-of-page trial countdown banner. Appears only when:
  *   - User is on a Pro trial (trial_ends_at is set + in the future)
- *   - AND there are 7 or fewer days remaining
+ *   - AND there are 5 or fewer days remaining
  *
- * Invisible at days 8-14 so it doesn't distract during the honeymoon
- * period — shown from day 7 onward to build urgency without being annoying
- * from day one.
+ * Invisible for the first 2 days so it doesn't distract during the
+ * honeymoon period — shown from day 5 onward to build urgency.
  *
  * Rendered inside Layout, just below the sticky header, so it persists
  * across all in-app pages without each page needing to know about billing.
@@ -27,7 +26,7 @@ export default function TrialBanner() {
     return Math.max(0, Math.ceil((end - now) / (1000 * 60 * 60 * 24)));
   }, [me?.trial_ends_at, me?.stripe_subscription_status, me?.is_admin]);
 
-  if (daysLeft === null || daysLeft > 7) return null;
+  if (daysLeft === null || daysLeft > 5) return null;
 
   const urgent = daysLeft <= 2;
   const warning = daysLeft <= 5;

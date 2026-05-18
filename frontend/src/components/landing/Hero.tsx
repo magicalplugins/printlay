@@ -55,7 +55,7 @@ export default function Hero() {
               to="/register"
               className="rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
             >
-              Start 14-day trial →
+              Start 7-day trial →
             </Link>
             <Link
               to="/pricing"

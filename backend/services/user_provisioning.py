@@ -7,7 +7,7 @@ first). All of those must end up provisioning the user the same way —
 same trial, same defaults — so we centralise it here.
 
 Trial policy:
-    new user → trial_ends_at = now() + 14 days, full Pro features.
+    new user → trial_ends_at = now() + 7 days, full Pro features.
     Existing users without a trial are not retroactively granted one (we
     don't want to give locked-out customers free time by accident); use
     the admin tools for that.
@@ -23,12 +23,12 @@ from backend.audit import record
 from backend.models import User
 from backend.services import telemetry
 
-TRIAL_DAYS = 14
+TRIAL_DAYS = 7
 
 
 def get_or_provision(db: Session, *, auth_id: uuid.UUID, email: str) -> User:
     """Return the existing app-side user row, or create one with a fresh
-    14-day Pro trial. Idempotent + safe to call from any router.
+    7-day Pro trial. Idempotent + safe to call from any router.
 
     Email is updated in-place if the Supabase email has changed since last
     sync (users do change email addresses)."""

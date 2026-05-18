@@ -171,6 +171,7 @@ class UserPatch(BaseModel):
     tier: Literal["locked", "starter", "pro", "studio", "enterprise"] | None = None
     founder_member: bool | None = None
     is_active: bool | None = None
+    expire_trial: bool | None = None
 
 
 # ---------- helpers ----------
@@ -740,6 +741,10 @@ def patch_user(
     if payload.is_active is not None and payload.is_active != u.is_active:
         changes["is_active"] = {"from": u.is_active, "to": payload.is_active}
         u.is_active = payload.is_active
+    if payload.expire_trial:
+        old_trial = u.trial_ends_at.isoformat() if u.trial_ends_at else None
+        u.trial_ends_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        changes["trial_ends_at"] = {"from": old_trial, "to": "expired"}
 
     if not changes:
         return {"ok": True, "changes": {}}

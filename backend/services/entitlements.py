@@ -45,26 +45,26 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "storage_mb_max": 0,
     },
     "starter": {
-        "templates_max": 5,
-        "exports_per_month": 200,
+        "templates_max": 10,
+        "exports_per_month": 50,
         "categories_max": 10,
         "color_profiles_max": 2,
         "asset_size_mb_max": 50,
-        "storage_mb_max": 5 * 1024,        # 5 GB
+        "storage_mb_max": 20 * 1024,       # 20 GB
     },
     "pro": {
-        "templates_max": None,
-        "exports_per_month": None,
-        "categories_max": None,
-        "color_profiles_max": None,
+        "templates_max": 20,
+        "exports_per_month": 200,
+        "categories_max": 30,
+        "color_profiles_max": 5,
         "asset_size_mb_max": 100,
         "storage_mb_max": 50 * 1024,       # 50 GB
     },
     "studio": {
-        "templates_max": None,
-        "exports_per_month": None,
-        "categories_max": None,
-        "color_profiles_max": None,
+        "templates_max": 50,
+        "exports_per_month": 500,
+        "categories_max": 100,
+        "color_profiles_max": 20,
         "asset_size_mb_max": 500,
         "storage_mb_max": 250 * 1024,      # 250 GB
     },
@@ -80,8 +80,8 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
 
 # Trial users get the Pro feature set, but a tighter storage cap so a
 # brand-new account can't dump a huge library we have to host forever
-# if they bounce. 7 days × 1 GB is plenty for a real evaluation.
-_TRIAL_STORAGE_MB_MAX = 1024  # 1 GB
+# if they bounce. 7 days × 3 GB is plenty for a real evaluation.
+_TRIAL_STORAGE_MB_MAX = 3 * 1024  # 3 GB
 
 # Feature flags per tier.
 # 'all' is a wildcard that satisfies every allows() check.

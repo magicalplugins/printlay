@@ -99,6 +99,48 @@ def get_status(
 # Usage — current period counts vs caps for the dashboard
 # ---------------------------------------------------------------------------
 
+def _suggest_tier(
+    *,
+    templates_used: int,
+    exports_this_month: int,
+    categories_used: int,
+    color_profiles_used: int,
+    storage_mb_used: float,
+) -> tuple[str | None, str | None]:
+    """Recommend the cheapest tier that covers the user's current usage.
+
+    Returns (tier_id, reason) or (None, None) if they already fit in Starter.
+    Checks each limit from cheapest to most expensive; the first tier
+    that accommodates all usage wins."""
+    limits = entitlements.PLAN_LIMITS
+
+    for tier in ("starter", "pro", "studio"):
+        t = limits[tier]
+        fits = True
+        reason = None
+
+        if t["templates_max"] is not None and templates_used > t["templates_max"]:
+            fits = False
+            reason = f"You're using {templates_used} templates (this plan allows {t['templates_max']})"
+        elif t["exports_per_month"] is not None and exports_this_month > t["exports_per_month"]:
+            fits = False
+            reason = f"You've exported {exports_this_month} PDFs this month (this plan allows {t['exports_per_month']})"
+        elif t["categories_max"] is not None and categories_used > t["categories_max"]:
+            fits = False
+            reason = f"You're using {categories_used} categories (this plan allows {t['categories_max']})"
+        elif t["color_profiles_max"] is not None and color_profiles_used > t["color_profiles_max"]:
+            fits = False
+            reason = f"You're using {color_profiles_used} colour profiles (this plan allows {t['color_profiles_max']})"
+        elif t["storage_mb_max"] is not None and storage_mb_used > t["storage_mb_max"]:
+            fits = False
+            reason = f"You're using {storage_mb_used:.0f} MB storage (this plan allows {t['storage_mb_max']} MB)"
+
+        if fits:
+            return (tier, None)
+
+    return ("enterprise", reason)
+
+
 class UsageOut(BaseModel):
     """Snapshot of the user's current consumption.
 
@@ -130,6 +172,9 @@ class UsageOut(BaseModel):
 
     last_export_at: str | None
     period_start: str  # start of the current month (used for "exports this month")
+
+    suggested_tier: str | None = None
+    suggested_reason: str | None = None
 
 
 @router.get("/usage", response_model=UsageOut)
@@ -187,6 +232,14 @@ def get_usage(
     )
     storage_mb_used = round(storage_usage.current_storage_mb(db, user.id), 1)
 
+    suggested_tier, suggested_reason = _suggest_tier(
+        templates_used=templates_used,
+        exports_this_month=exports_this_month,
+        categories_used=categories_used,
+        color_profiles_used=color_profiles_used,
+        storage_mb_used=storage_mb_used,
+    )
+
     return {
         "templates_used": templates_used,
         "templates_cap": ent.quota("templates_max"),
@@ -203,6 +256,8 @@ def get_usage(
         "color_profiles_cap": ent.quota("color_profiles_max"),
         "last_export_at": last_export.isoformat() if last_export else None,
         "period_start": month_start.isoformat(),
+        "suggested_tier": suggested_tier,
+        "suggested_reason": suggested_reason,
     }
 
 
@@ -257,12 +312,12 @@ _PLAN_DISPLAY: dict[str, dict] = {
         "save_pct": 17,
         "tagline": "For solo print operators getting started.",
         "features": [
-            "5 templates",
-            "200 PDF exports / month",
+            "10 templates",
+            "50 PDF exports / month",
             "10 catalogue categories",
             "2 colour profiles",
             "Up to 50 MB per artwork",
-            "5 GB total storage",
+            "20 GB total storage",
             "Email support",
         ],
         "most_popular": False,
@@ -274,9 +329,10 @@ _PLAN_DISPLAY: dict[str, dict] = {
         "save_pct": 17,
         "tagline": "For working print shops. Most popular.",
         "features": [
-            "Unlimited templates",
-            "Unlimited PDF exports",
-            "Unlimited categories & colour profiles",
+            "20 templates",
+            "200 PDF exports / month",
+            "30 catalogue categories",
+            "5 colour profiles",
             "Up to 100 MB per artwork",
             "50 GB total storage",
             "Catalogue sharing",
@@ -292,6 +348,10 @@ _PLAN_DISPLAY: dict[str, dict] = {
         "tagline": "For high-volume production with custom workflows.",
         "features": [
             "Everything in Pro",
+            "50 templates",
+            "500 PDF exports / month",
+            "100 catalogue categories",
+            "20 colour profiles",
             "Up to 500 MB per artwork",
             "250 GB total storage",
             "API access",

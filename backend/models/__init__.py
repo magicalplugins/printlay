@@ -3,6 +3,7 @@ from backend.models.audit import AuditEvent
 from backend.models.base import Base
 from backend.models.color_profile import ColorProfile
 from backend.models.job import Job
+from backend.models.lead import Lead
 from backend.models.output import Output
 from backend.models.spot_color import SpotColor
 from backend.models.stripe_event import StripeEvent
@@ -17,6 +18,7 @@ __all__ = [
     "CatalogueSubscription",
     "ColorProfile",
     "Job",
+    "Lead",
     "Output",
     "SpotColor",
     "StripeEvent",

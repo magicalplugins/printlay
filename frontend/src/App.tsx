@@ -6,6 +6,7 @@ import { RequireAdmin } from "./auth/RequireAdmin";
 import { RequireAuth } from "./auth/RequireAuth";
 import { RequireProfile } from "./auth/RequireProfile";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import LeadChatWidget from "./components/LeadChatWidget";
 import { RouteFallback } from "./components/RouteFallback";
 import Layout from "./components/Layout";
 import Landing from "./pages/Landing";
@@ -30,6 +31,7 @@ const Settings = lazyWithRetry(() => import("./pages/Settings"));
 const ProfileSetup = lazyWithRetry(() => import("./pages/ProfileSetup"));
 const Admin = lazyWithRetry(() => import("./pages/Admin"));
 const AdminUsers = lazyWithRetry(() => import("./pages/AdminUsers"));
+const AdminLeads = lazyWithRetry(() => import("./pages/AdminLeads"));
 const Pricing = lazyWithRetry(() => import("./pages/Pricing"));
 const Terms = lazyWithRetry(() => import("./pages/Terms"));
 const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
@@ -103,11 +105,20 @@ export default function App() {
                     </RequireAdmin>
                   }
                 />
+                <Route
+                  path="admin/leads"
+                  element={
+                    <RequireAdmin>
+                      <AdminLeads />
+                    </RequireAdmin>
+                  }
+                />
               </Route>
 
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
+          <LeadChatWidget />
         </MeProvider>
       </AuthProvider>
     </ErrorBoundary>

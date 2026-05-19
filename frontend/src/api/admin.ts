@@ -244,3 +244,46 @@ export const patchAdminUser = (userId: string, patch: UserPatch) =>
     `/api/admin/users/${userId}`,
     { method: "PATCH", body: JSON.stringify(patch) }
   );
+
+// ---- Leads (chat widget inbox) ----
+
+export type LeadStatus = "new" | "read" | "responded" | "archived";
+
+export type AdminLead = {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  source: string;
+  page_url: string | null;
+  user_id: string | null;
+  status: LeadStatus;
+  created_at: string;
+};
+
+export type AdminLeadsPage = {
+  total: number;
+  unread: number;
+  items: AdminLead[];
+};
+
+export const getAdminLeads = (
+  status?: LeadStatus,
+  limit = 100,
+  offset = 0
+) => {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  return api<AdminLeadsPage>(`/api/admin/leads?${params.toString()}`);
+};
+
+export const getLeadsUnreadCount = () =>
+  api<{ unread: number }>("/api/admin/leads/unread-count");
+
+export const patchLeadStatus = (id: string, status: LeadStatus) =>
+  api<AdminLead>(`/api/admin/leads/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });

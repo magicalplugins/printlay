@@ -10,6 +10,7 @@ import {
   getAdminStats,
   getBillingHealth,
   getDropouts,
+  getLeadsUnreadCount,
   getSubscribers,
 } from "../api/admin";
 import { MessageComposer } from "../components/admin/MessageComposer";
@@ -112,6 +113,7 @@ export default function Admin() {
   const [subs, setSubs] = useState<SubscriberRow[] | null>(null);
   const [drops, setDrops] = useState<DropoutRow[] | null>(null);
   const [billingHealth, setBillingHealth] = useState<BillingHealth | null>(null);
+  const [unreadLeads, setUnreadLeads] = useState<number>(0);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -125,14 +127,16 @@ export default function Admin() {
       getSubscribers(),
       getDropouts(),
       getBillingHealth().catch(() => null),
+      getLeadsUnreadCount().catch(() => ({ unread: 0 })),
     ])
-      .then(([s, a, sb, d, bh]) => {
+      .then(([s, a, sb, d, bh, lu]) => {
         if (cancelled) return;
         setStats(s);
         setActive(a);
         setSubs(sb);
         setDrops(d);
         setBillingHealth(bh);
+        setUnreadLeads(lu.unread);
       })
       .catch((e) => !cancelled && setErr(String(e)))
       .finally(() => !cancelled && setLoading(false));
@@ -175,7 +179,27 @@ export default function Admin() {
             System overview, subscriptions, and engagement.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link
+            to="/app/admin/leads"
+            className="relative inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-4 h-10 text-sm font-medium text-neutral-200 hover:border-neutral-500"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+              <path
+                d="M2 3.5a1.5 1.5 0 011.5-1.5h7A1.5 1.5 0 0112 3.5v5A1.5 1.5 0 0110.5 10H6L3 12.5V10h-.5A1.5 1.5 0 011 8.5v-5z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Leads
+            {unreadLeads > 0 && (
+              <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-semibold rounded-full bg-violet-500 text-white">
+                {unreadLeads}
+              </span>
+            )}
+          </Link>
           <Link
             to="/app/admin/users"
             className="inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-4 h-10 text-sm font-medium text-neutral-200 hover:border-neutral-500"

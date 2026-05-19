@@ -28,6 +28,7 @@ from backend.models import (
     AuditEvent,
     CatalogueSubscription,
     Job,
+    Lead,
     Output,
     Template,
     User,
@@ -999,3 +1000,131 @@ def catalogue_subscription_counts(
         {"id": str(r[0]), "name": r[1], "subscriber_count": int(r[2] or 0)}
         for r in rows
     ]
+
+
+# ---------- leads (chat-widget inbox) ----------
+
+
+class LeadRow(BaseModel):
+    id: str
+    name: str
+    email: str
+    message: str
+    source: str
+    page_url: str | None
+    user_id: str | None
+    status: str
+    created_at: str
+
+
+class LeadsPage(BaseModel):
+    total: int
+    unread: int
+    items: list[LeadRow]
+
+
+class LeadPatch(BaseModel):
+    status: Literal["new", "read", "responded", "archived"]
+
+
+@router.get("/leads", response_model=LeadsPage)
+def list_leads(
+    status: str | None = Query(
+        None, description="Filter by status. Omit to see everything except archived."
+    ),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> LeadsPage:
+    """List inbound leads, newest first.
+
+    Default view hides archived; pass `status=archived` to see the
+    archive. `unread` is the count of `status='new'` regardless of the
+    current filter (drives the nav badge)."""
+    q = db.query(Lead)
+    if status:
+        q = q.filter(Lead.status == status)
+    else:
+        q = q.filter(Lead.status != "archived")
+
+    total = q.count()
+    rows = (
+        q.order_by(Lead.created_at.desc()).limit(limit).offset(offset).all()
+    )
+
+    unread = (
+        db.query(func.count(Lead.id)).filter(Lead.status == "new").scalar() or 0
+    )
+
+    return LeadsPage(
+        total=int(total),
+        unread=int(unread),
+        items=[
+            LeadRow(
+                id=str(r.id),
+                name=r.name,
+                email=r.email,
+                message=r.message,
+                source=r.source,
+                page_url=r.page_url,
+                user_id=str(r.user_id) if r.user_id else None,
+                status=r.status,
+                created_at=r.created_at.isoformat(),
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.get("/leads/unread-count")
+def leads_unread_count(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cheap single-COUNT query for the admin nav badge."""
+    n = db.query(func.count(Lead.id)).filter(Lead.status == "new").scalar() or 0
+    return {"unread": int(n)}
+
+
+@router.patch("/leads/{lead_id}", response_model=LeadRow)
+def patch_lead(
+    lead_id: str,
+    payload: LeadPatch,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> LeadRow:
+    try:
+        lid = _uuid.UUID(lead_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid lead id")
+
+    lead = db.query(Lead).filter(Lead.id == lid).one_or_none()
+    if lead is None:
+        raise HTTPException(404, "Lead not found")
+
+    old_status = lead.status
+    lead.status = payload.status
+    db.commit()
+    db.refresh(lead)
+
+    record(
+        db,
+        admin,
+        "admin.lead_status_changed",
+        target_type="lead",
+        target_id=lead.id,
+        payload={"from": old_status, "to": payload.status},
+    )
+
+    return LeadRow(
+        id=str(lead.id),
+        name=lead.name,
+        email=lead.email,
+        message=lead.message,
+        source=lead.source,
+        page_url=lead.page_url,
+        user_id=str(lead.user_id) if lead.user_id else None,
+        status=lead.status,
+        created_at=lead.created_at.isoformat(),
+    )

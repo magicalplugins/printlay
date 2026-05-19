@@ -38,15 +38,16 @@ export default function LeadChatWidget() {
     if (me?.company_name && !name) setName(me.company_name);
   }, [me, email, name]);
 
-  // Focus the first empty field when the panel opens.
+  // Focus the first empty field exactly once per open. Depending on `name`
+  // here would re-fire on every keystroke and snatch focus mid-type, so we
+  // snapshot which field to focus on the open transition only.
   useEffect(() => {
     if (!open) return;
-    const t = window.setTimeout(() => {
-      if (!name) nameRef.current?.focus();
-      else messageRef.current?.focus();
-    }, 50);
+    const target = name ? messageRef.current : nameRef.current;
+    const t = window.setTimeout(() => target?.focus(), 50);
     return () => window.clearTimeout(t);
-  }, [open, name]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   // Auto-close 4s after a successful send (gives time to read the confirm).
   useEffect(() => {

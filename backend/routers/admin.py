@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -479,12 +480,17 @@ def dropouts(
         if not reason:
             continue
 
-        # Build a throwaway User-like object for plan resolution
-        pseudo = User.__new__(User)
-        pseudo.stripe_subscription_status = sub_status
-        pseudo.stripe_price_id = None
-        pseudo.tier = tier
-        pseudo.trial_ends_at = trial_ends_at
+        # Build a throwaway User-like object for plan resolution. We use
+        # SimpleNamespace rather than User() because instantiating the ORM
+        # model would attach it to the session — `for_user` only ever reads
+        # named attributes, so duck-typing is enough and ~free.
+        pseudo = SimpleNamespace(
+            email=email,
+            stripe_subscription_status=sub_status,
+            stripe_price_id=None,
+            tier=tier,
+            trial_ends_at=trial_ends_at,
+        )
         plan_label = entitlements.for_user(pseudo).plan
 
         out.append(

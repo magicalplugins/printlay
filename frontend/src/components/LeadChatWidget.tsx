@@ -80,6 +80,14 @@ export default function LeadChatWidget() {
     if (pathname.startsWith("/profile-setup")) return true;
     if (pathname.startsWith("/login") || pathname.startsWith("/register"))
       return true;
+    // Hide during "focus work" — designing templates, programming or
+    // filling jobs. The widget would obscure the canvas / drop targets
+    // and the user is mid-task, not browsing. List pages (/app/templates,
+    // /app/jobs) and the dashboard stay visible.
+    if (pathname === "/app/templates/new") return true;
+    if (/^\/app\/templates\/[^/]+$/.test(pathname)) return true; // designer
+    if (pathname === "/app/jobs/new") return true;
+    if (/^\/app\/jobs\/[^/]+\/(program|fill)$/.test(pathname)) return true;
     return false;
   }, [pathname]);
 

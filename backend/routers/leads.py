@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -41,7 +41,7 @@ class LeadOut(BaseModel):
 @limiter.limit("10/hour")
 def submit_lead(
     request: Request,
-    payload: LeadIn,
+    payload: LeadIn = Body(...),
     auth: AuthenticatedUser | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> LeadOut:

@@ -8,11 +8,10 @@ deep-link to their user detail page.
 Rate-limited by IP to keep a single bored visitor from filling the
 inbox with junk.
 """
-from __future__ import annotations
-
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -30,7 +29,7 @@ class LeadIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     email: EmailStr
     message: str = Field(..., min_length=1, max_length=5000)
-    page_url: str | None = Field(default=None, max_length=512)
+    page_url: Optional[str] = Field(default=None, max_length=512)
 
 
 class LeadOut(BaseModel):
@@ -41,8 +40,8 @@ class LeadOut(BaseModel):
 @limiter.limit("10/hour")
 def submit_lead(
     request: Request,
-    payload: LeadIn = Body(...),
-    auth: AuthenticatedUser | None = Depends(get_current_user_optional),
+    payload: LeadIn,
+    auth: Optional[AuthenticatedUser] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ) -> LeadOut:
     """Create a new lead. Always returns 200 on success — the widget shows

@@ -1,3 +1,4 @@
+from backend.models.app_setting import AppSetting
 from backend.models.asset import Asset, AssetCategory, CatalogueSubscription
 from backend.models.audit import AuditEvent
 from backend.models.base import Base
@@ -12,6 +13,7 @@ from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
 
 __all__ = [
+    "AppSetting",
     "Asset",
     "AssetCategory",
     "AuditEvent",

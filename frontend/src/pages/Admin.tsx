@@ -225,6 +225,21 @@ export default function Admin() {
             </svg>
             All users
           </Link>
+          <Link
+            to="/app/admin/integrations"
+            className="inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-4 h-10 text-sm font-medium text-neutral-200 hover:border-neutral-500"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+              <path
+                d="M5 3a2 2 0 114 0v1h2a1 1 0 011 1v2a2 2 0 11-2 2 2 2 0 002 2v2a1 1 0 01-1 1H3a1 1 0 01-1-1v-2.5A1.5 1.5 0 003.5 9 1.5 1.5 0 002 7.5V5a1 1 0 011-1h2V3z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Integrations
+          </Link>
           <button
             onClick={() => setComposerOpen(true)}
             className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-4 h-10 text-sm font-semibold text-white hover:from-violet-400 hover:to-fuchsia-400"

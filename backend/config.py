@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     absolute URLs in transactional emails — e.g. invite links — where a
     relative path won't do. Override per-env via PUBLIC_BASE_URL."""
 
+    app_secrets_master_key: str | None = None
+    """Fernet master key (urlsafe base64, 32 bytes raw). Encrypts
+    runtime-managed credentials stored in `app_settings`. If unset,
+    the admin Integrations UI is read-only and falls back to env-var
+    only. Generate with:
+        python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"
+    Then set via `fly secrets set APP_SECRETS_MASTER_KEY=...`."""
+
     rate_limit_generate_per_hour: int = 60
     """Max calls to `POST /api/jobs/{id}/generate` per user per hour."""
     rate_limit_generate_per_minute: int = 30

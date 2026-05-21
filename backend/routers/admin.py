@@ -36,7 +36,7 @@ from backend.models import (
     User,
 )
 from backend.models.trial_invite import generate_token
-from backend.services import entitlements, invite_email, messaging
+from backend.services import entitlements, invite_email, messaging, secrets_store
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -1460,3 +1460,192 @@ def invites_pending_count(
         or 0
     )
     return {"pending": int(n)}
+
+
+# ---------- integrations (third-party credentials) ----------
+
+
+class IntegrationSettingOut(BaseModel):
+    """One credential field as shown to the admin. Plaintext is NEVER
+    returned — only its set/unset state and where it came from. To
+    update, the admin POSTs a fresh value to the set endpoint."""
+
+    key: str
+    is_set: bool
+    source: Literal["db", "env", "none"]
+    """'db' = managed in this UI, 'env' = via fly secret, 'none' = unset."""
+    updated_at: str | None
+    updated_by_email: str | None
+
+
+class IntegrationsOut(BaseModel):
+    encryption_available: bool
+    """False when APP_SECRETS_MASTER_KEY is missing — the UI then shows
+    a read-only banner explaining how to set it."""
+    email_provider: Literal["smtp2go", "resend", "none"]
+    email_configured: bool
+    sms_configured: bool
+    settings: list[IntegrationSettingOut]
+
+
+class IntegrationSet(BaseModel):
+    key: str = Field(..., max_length=64)
+    value: str = Field(default="", max_length=2000)
+    """Empty string clears the DB row (env fallback may still apply)."""
+
+
+class IntegrationTestSend(BaseModel):
+    channel: Literal["email", "sms"]
+    recipient: str = Field(..., min_length=3, max_length=320)
+    """Target address/number for the test. Always sent live — there's
+    no real way to dry-run a third-party provider integration test."""
+
+
+@router.get("/integrations", response_model=IntegrationsOut)
+def get_integrations(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> IntegrationsOut:
+    metas = secrets_store.list_meta()
+
+    # Resolve actor emails in one query so the list doesn't N+1.
+    actor_ids = {m.updated_by_user_id for m in metas if m.updated_by_user_id}
+    actor_emails: dict[_uuid.UUID, str] = {}
+    if actor_ids:
+        actor_emails = {
+            r[0]: r[1]
+            for r in db.query(User.id, User.email)
+            .filter(User.id.in_(actor_ids))
+            .all()
+        }
+
+    settings_out = [
+        IntegrationSettingOut(
+            key=m.key,
+            is_set=m.is_set,
+            source=m.source,
+            updated_at=m.updated_at.isoformat() if m.updated_at else None,
+            updated_by_email=(
+                actor_emails.get(m.updated_by_user_id)
+                if m.updated_by_user_id
+                else None
+            ),
+        )
+        for m in metas
+    ]
+
+    return IntegrationsOut(
+        encryption_available=secrets_store.encryption_available(),
+        email_provider=messaging.active_email_provider(),
+        email_configured=messaging.email_configured(),
+        sms_configured=messaging.sms_configured(),
+        settings=settings_out,
+    )
+
+
+@router.put("/integrations", response_model=IntegrationsOut)
+def set_integration(
+    payload: IntegrationSet,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> IntegrationsOut:
+    """Upsert one credential. Empty value clears it (env fallback may
+    take over). The new value is encrypted before persisting; no
+    plaintext is logged."""
+    if payload.key not in secrets_store.KNOWN_KEYS:
+        raise HTTPException(400, f"Unknown setting key: {payload.key}")
+    try:
+        secrets_store.set(
+            payload.key, payload.value.strip(), actor_user_id=admin.id
+        )
+    except secrets_store.StoreUnavailable as exc:
+        raise HTTPException(
+            503,
+            f"Encrypted store is unavailable: {exc}. Set APP_SECRETS_MASTER_KEY via fly secrets.",
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    record(
+        db, admin, "admin.integration_set",
+        target_type="app_setting",
+        payload={"key": payload.key, "cleared": not payload.value.strip()},
+    )
+    return get_integrations(_admin=admin, db=db)
+
+
+class IntegrationTestResult(BaseModel):
+    ok: bool
+    error: str | None = None
+    provider: str | None = None
+
+
+@router.post("/integrations/test", response_model=IntegrationTestResult)
+def test_integration(
+    payload: IntegrationTestSend,
+    _admin: User = Depends(require_admin),
+) -> IntegrationTestResult:
+    """Fire a real test send so the admin gets immediate feedback when
+    they paste new credentials. Bypasses the bulk-message dry-run path
+    — we want the actual provider to either succeed or return a clear
+    error so we can show it in the UI."""
+    recipient = payload.recipient.strip()
+    if payload.channel == "email":
+        provider = messaging.active_email_provider()
+        if provider == "none":
+            return IntegrationTestResult(
+                ok=False,
+                error="Email provider not configured.",
+                provider="none",
+            )
+        results = messaging.send_email_bulk(
+            [recipient],
+            subject="Printlay — integration test",
+            text_body=(
+                "If you're reading this, your Printlay email integration is "
+                "wired up correctly. — sent from the admin Integrations test "
+                "button."
+            ),
+            html_body=(
+                '<div style="font-family:-apple-system,BlinkMacSystemFont,'
+                "'Segoe UI',sans-serif;background:#0a0a0a;color:#e5e5e5;"
+                'padding:24px;border-radius:12px;max-width:480px;">'
+                '<div style="font-size:11px;letter-spacing:3px;text-transform:uppercase;color:#a78bfa;font-weight:600;">'
+                "Printlay · integration test</div>"
+                '<p style="margin:12px 0 0 0;font-size:15px;line-height:1.6;">'
+                "Your email integration is wired up correctly. ✓</p>"
+                '<p style="margin:12px 0 0 0;font-size:12px;color:#737373;">'
+                "Sent from the admin Integrations test button.</p>"
+                "</div>"
+            ),
+            throttle_s=0,
+        )
+        first = results[0] if results else None
+        if first and first.ok:
+            return IntegrationTestResult(ok=True, provider=provider)
+        return IntegrationTestResult(
+            ok=False,
+            error=(first.error if first else "No response from mailer"),
+            provider=provider,
+        )
+
+    # SMS branch
+    if not messaging.sms_configured():
+        return IntegrationTestResult(
+            ok=False,
+            error="SMS provider not configured.",
+            provider="twilio",
+        )
+    results = messaging.send_sms_bulk(
+        [recipient],
+        body="Printlay integration test — your SMS integration works.",
+        throttle_s=0,
+    )
+    first = results[0] if results else None
+    if first and first.ok:
+        return IntegrationTestResult(ok=True, provider="twilio")
+    return IntegrationTestResult(
+        ok=False,
+        error=(first.error if first else "No response from Twilio"),
+        provider="twilio",
+    )

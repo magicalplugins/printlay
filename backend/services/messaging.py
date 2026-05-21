@@ -25,8 +25,16 @@ from typing import Iterable, Literal
 import httpx
 
 from backend.config import get_settings
+from backend.services import secrets_store
 
 log = logging.getLogger(__name__)
+
+
+def _get(key: str) -> str | None:
+    """Single resolver for runtime credentials: DB → env → settings.
+    Wrapped so we don't have to thread `secrets_store.get` through every
+    call site, and so a future swap (e.g. Vault) is one-file."""
+    return secrets_store.get(key)
 
 
 @dataclass
@@ -43,10 +51,9 @@ def active_email_provider() -> EmailProvider:
     """Which provider will actually be used on the next send. SMTP2GO
     wins if both are configured, so the UI can show "SMTP2GO" rather
     than the legacy provider."""
-    s = get_settings()
-    if s.smtp2go_api_key and s.smtp2go_from_email:
+    if _get("smtp2go.api_key") and _get("smtp2go.from_email"):
         return "smtp2go"
-    if s.resend_api_key and s.resend_from_email:
+    if _get("resend.api_key") and _get("resend.from_email"):
         return "resend"
     return "none"
 
@@ -56,8 +63,11 @@ def email_configured() -> bool:
 
 
 def sms_configured() -> bool:
-    s = get_settings()
-    return bool(s.twilio_account_sid and s.twilio_auth_token and s.twilio_from_number)
+    return bool(
+        _get("twilio.account_sid")
+        and _get("twilio.auth_token")
+        and _get("twilio.from_number")
+    )
 
 
 # SMTP2GO wants the sender as separate "name" + "address" fields rather
@@ -176,7 +186,6 @@ def send_email_bulk(
     """Send one email per recipient via the active provider. SMTP2GO is
     preferred when configured; falls back to Resend, then returns a
     clear "not configured" SendResult per recipient if neither is set."""
-    s = get_settings()
     provider = active_email_provider()
     recipients_list = list(recipients)
 
@@ -186,6 +195,15 @@ def send_email_bulk(
             for r in recipients_list
         ]
 
+    # Resolve creds once per batch — DB hits are cheap but doing them
+    # N times for a 2000-recipient send is wasteful.
+    if provider == "smtp2go":
+        api_key = _get("smtp2go.api_key") or ""
+        sender = _get("smtp2go.from_email") or ""
+    else:
+        api_key = _get("resend.api_key") or ""
+        sender = _get("resend.from_email") or get_settings().resend_from_email
+
     out: list[SendResult] = []
     with httpx.Client(timeout=20.0) as client:
         for rcpt in recipients_list:
@@ -193,8 +211,8 @@ def send_email_bulk(
                 out.append(
                     _send_via_smtp2go(
                         client,
-                        api_key=s.smtp2go_api_key or "",
-                        sender=s.smtp2go_from_email or "",
+                        api_key=api_key,
+                        sender=sender,
                         rcpt=rcpt,
                         subject=subject,
                         text_body=text_body,
@@ -205,8 +223,8 @@ def send_email_bulk(
                 out.append(
                     _send_via_resend(
                         client,
-                        api_key=s.resend_api_key or "",
-                        sender=s.resend_from_email,
+                        api_key=api_key,
+                        sender=sender,
                         rcpt=rcpt,
                         subject=subject,
                         text_body=text_body,
@@ -224,17 +242,20 @@ def send_sms_bulk(
     body: str,
     throttle_s: float = 0.1,
 ) -> list[SendResult]:
-    s = get_settings()
     out: list[SendResult] = []
     if not sms_configured():
         return [SendResult(r, False, "SMS provider not configured") for r in recipients]
 
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{s.twilio_account_sid}/Messages.json"
-    auth = (s.twilio_account_sid or "", s.twilio_auth_token or "")
+    sid = _get("twilio.account_sid") or ""
+    token = _get("twilio.auth_token") or ""
+    from_number = _get("twilio.from_number") or ""
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
+    auth = (sid, token)
 
     with httpx.Client(timeout=20.0, auth=auth) as client:
         for rcpt in recipients:
-            data = {"To": rcpt, "From": s.twilio_from_number, "Body": body}
+            data = {"To": rcpt, "From": from_number, "Body": body}
             try:
                 r = client.post(url, data=data)
                 if r.status_code >= 300:

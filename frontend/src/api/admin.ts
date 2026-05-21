@@ -350,3 +350,45 @@ export const revokeAdminInvite = (id: string, revoke: boolean) =>
 
 export const getInvitesPendingCount = () =>
   api<{ pending: number }>("/api/admin/invites/pending-count");
+
+// ---- Integrations (third-party credentials) ----
+
+export type IntegrationSetting = {
+  key: string;
+  is_set: boolean;
+  source: "db" | "env" | "none";
+  updated_at: string | null;
+  updated_by_email: string | null;
+};
+
+export type IntegrationsResponse = {
+  encryption_available: boolean;
+  email_provider: "smtp2go" | "resend" | "none";
+  email_configured: boolean;
+  sms_configured: boolean;
+  settings: IntegrationSetting[];
+};
+
+export type IntegrationTestResult = {
+  ok: boolean;
+  error: string | null;
+  provider: string | null;
+};
+
+export const getIntegrations = () =>
+  api<IntegrationsResponse>("/api/admin/integrations");
+
+export const setIntegration = (key: string, value: string) =>
+  api<IntegrationsResponse>("/api/admin/integrations", {
+    method: "PUT",
+    body: JSON.stringify({ key, value }),
+  });
+
+export const testIntegration = (
+  channel: "email" | "sms",
+  recipient: string
+) =>
+  api<IntegrationTestResult>("/api/admin/integrations/test", {
+    method: "POST",
+    body: JSON.stringify({ channel, recipient }),
+  });

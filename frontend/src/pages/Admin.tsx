@@ -181,6 +181,21 @@ export default function Admin() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Link
+            to="/app/admin/invites"
+            className="inline-flex items-center gap-2 rounded-lg border border-violet-500/40 bg-violet-500/5 px-4 h-10 text-sm font-medium text-violet-200 hover:bg-violet-500/10"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+              <path
+                d="M1.5 4l5.5 4 5.5-4M2 3h10a1 1 0 011 1v6a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Invite
+          </Link>
+          <Link
             to="/app/admin/leads"
             className="relative inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-4 h-10 text-sm font-medium text-neutral-200 hover:border-neutral-500"
           >

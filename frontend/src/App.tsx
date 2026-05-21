@@ -32,6 +32,7 @@ const ProfileSetup = lazyWithRetry(() => import("./pages/ProfileSetup"));
 const Admin = lazyWithRetry(() => import("./pages/Admin"));
 const AdminUsers = lazyWithRetry(() => import("./pages/AdminUsers"));
 const AdminLeads = lazyWithRetry(() => import("./pages/AdminLeads"));
+const AdminInvites = lazyWithRetry(() => import("./pages/AdminInvites"));
 const Pricing = lazyWithRetry(() => import("./pages/Pricing"));
 const Terms = lazyWithRetry(() => import("./pages/Terms"));
 const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
@@ -110,6 +111,14 @@ export default function App() {
                   element={
                     <RequireAdmin>
                       <AdminLeads />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="admin/invites"
+                  element={
+                    <RequireAdmin>
+                      <AdminInvites />
                     </RequireAdmin>
                   }
                 />

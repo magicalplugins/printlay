@@ -7,7 +7,7 @@ from the frontend; this router only:
 - Lets the SPA persist the post-signup profile completion gate.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.audit import record
@@ -60,6 +60,16 @@ def public_config() -> PublicConfig:
 
 @router.get("/auth/me", response_model=UserOut)
 def me(
+    invite: str | None = Query(
+        default=None,
+        max_length=64,
+        description=(
+            "Optional trial-invite token from the signup link. Only honoured "
+            "on the very first call (when the users row is being created); "
+            "subsequent calls ignore it, so re-using an old link can't "
+            "extend an existing trial."
+        ),
+    ),
     user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UserOut:
@@ -70,7 +80,10 @@ def me(
         )
 
     row = user_provisioning.get_or_provision(
-        db, auth_id=user.auth_id, email=user.email
+        db,
+        auth_id=user.auth_id,
+        email=user.email,
+        invite_token=invite,
     )
     return _to_user_out(row)
 

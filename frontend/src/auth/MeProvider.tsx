@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { forgetInviteToken, recallInviteToken } from "../api/invites";
 import { getMe, Me } from "../api/me";
 import { useAuth } from "./AuthProvider";
 
@@ -37,7 +38,13 @@ export function MeProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
     try {
-      const m = await getMe();
+      // First /me call after signup should carry the invite token (if any)
+      // so the backend can grant the extended trial during provisioning.
+      // The token is one-shot — we clear it whether or not the backend
+      // actually honoured it, so a stale token can't keep coming back.
+      const token = recallInviteToken();
+      const m = await getMe(token);
+      if (token) forgetInviteToken();
       setMe(m);
     } catch (e) {
       setError(String(e));

@@ -32,9 +32,11 @@ from backend.models import (
     Lead,
     Output,
     Template,
+    TrialInvite,
     User,
 )
-from backend.services import entitlements, messaging
+from backend.models.trial_invite import generate_token
+from backend.services import entitlements, invite_email, messaging
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -1134,3 +1136,323 @@ def patch_lead(
         status=lead.status,
         created_at=lead.created_at.isoformat(),
     )
+
+
+# ---------- trial invites (admin-issued extended trials) ----------
+
+
+# How long an invite URL itself remains valid. The granted trial length is
+# separate — set per-invite below. 30 days is generous enough for someone
+# who saw the email on holiday and decided to click through after.
+_INVITE_LINK_LIFETIME = timedelta(days=30)
+
+
+class InviteRow(BaseModel):
+    id: str
+    email: str
+    trial_days: int
+    note: str | None
+    token: str
+    invite_url: str
+    invited_by_email: str | None
+    created_at: str
+    expires_at: str
+    sent_at: str | None
+    accepted_at: str | None
+    accepted_user_id: str | None
+    revoked_at: str | None
+    status: Literal["pending", "accepted", "revoked", "expired"]
+
+
+class InvitesPage(BaseModel):
+    total: int
+    items: list[InviteRow]
+
+
+class InviteCreate(BaseModel):
+    """Body for issuing a brand-new invite.
+
+    `trial_days` is bounded conservatively — 1–180 days. Anything longer
+    smells like a mistake (or an "enterprise" deal that should use the
+    tier='enterprise' override instead)."""
+
+    email: str = Field(..., min_length=3, max_length=320)
+    trial_days: int = Field(..., ge=1, le=180)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class InviteSendResult(BaseModel):
+    invite: InviteRow
+    sent: bool
+    send_error: str | None = None
+
+
+def _invite_status(invite: TrialInvite, now: datetime) -> str:
+    if invite.revoked_at is not None:
+        return "revoked"
+    if invite.accepted_at is not None:
+        return "accepted"
+    expires = invite.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires <= now:
+        return "expired"
+    return "pending"
+
+
+def _invite_row(
+    invite: TrialInvite, *, inviter_email: str | None, now: datetime
+) -> InviteRow:
+    return InviteRow(
+        id=str(invite.id),
+        email=invite.email,
+        trial_days=invite.trial_days,
+        note=invite.note,
+        token=invite.token,
+        invite_url=invite_email.build_invite_url(invite.token),
+        invited_by_email=inviter_email,
+        created_at=invite.created_at.isoformat(),
+        expires_at=invite.expires_at.isoformat(),
+        sent_at=invite.sent_at.isoformat() if invite.sent_at else None,
+        accepted_at=invite.accepted_at.isoformat() if invite.accepted_at else None,
+        accepted_user_id=(
+            str(invite.accepted_user_id) if invite.accepted_user_id else None
+        ),
+        revoked_at=invite.revoked_at.isoformat() if invite.revoked_at else None,
+        status=_invite_status(invite, now),
+    )
+
+
+def _inviter_email_map(
+    db: Session, invites: list[TrialInvite]
+) -> dict[_uuid.UUID, str]:
+    ids = {i.invited_by_user_id for i in invites if i.invited_by_user_id}
+    if not ids:
+        return {}
+    rows = db.query(User.id, User.email).filter(User.id.in_(ids)).all()
+    return {r[0]: r[1] for r in rows}
+
+
+@router.get("/invites", response_model=InvitesPage)
+def list_invites(
+    status: str | None = Query(
+        None, description="Filter by lifecycle status (pending|accepted|revoked|expired)."
+    ),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> InvitesPage:
+    """List issued trial invites, newest first. Status is computed on
+    read (not stored) so an invite quietly transitions from `pending` to
+    `expired` without any background job."""
+    now = _utcnow()
+    rows: list[TrialInvite] = (
+        db.query(TrialInvite)
+        .order_by(TrialInvite.created_at.desc())
+        .all()
+    )
+
+    if status:
+        rows = [r for r in rows if _invite_status(r, now) == status]
+
+    total = len(rows)
+    rows = rows[offset : offset + limit]
+    inviter_map = _inviter_email_map(db, rows)
+
+    return InvitesPage(
+        total=total,
+        items=[
+            _invite_row(
+                r,
+                inviter_email=inviter_map.get(r.invited_by_user_id),
+                now=now,
+            )
+            for r in rows
+        ],
+    )
+
+
+@router.post("/invites", response_model=InviteSendResult, status_code=201)
+def create_invite(
+    payload: InviteCreate,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> InviteSendResult:
+    """Create + immediately email a new invite.
+
+    If the email send fails (e.g. RESEND not configured) the invite is
+    still persisted so the admin can copy/share the URL manually."""
+    email_clean = payload.email.strip().lower()
+    if "@" not in email_clean or "." not in email_clean.split("@", 1)[-1]:
+        raise HTTPException(400, "Invalid email address.")
+
+    now = _utcnow()
+    invite = TrialInvite(
+        email=email_clean,
+        token=generate_token(),
+        trial_days=payload.trial_days,
+        note=(payload.note or None),
+        invited_by_user_id=admin.id,
+        expires_at=now + _INVITE_LINK_LIFETIME,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+
+    result = invite_email.send(
+        recipient_email=email_clean,
+        trial_days=payload.trial_days,
+        token=invite.token,
+    )
+    if result.ok:
+        invite.sent_at = _utcnow()
+        db.commit()
+        db.refresh(invite)
+
+    record(
+        db,
+        admin,
+        "admin.invite_created",
+        target_type="trial_invite",
+        target_id=invite.id,
+        payload={
+            "email": email_clean,
+            "trial_days": payload.trial_days,
+            "send_ok": result.ok,
+            "send_error": result.error,
+        },
+    )
+
+    return InviteSendResult(
+        invite=_invite_row(invite, inviter_email=admin.email, now=_utcnow()),
+        sent=result.ok,
+        send_error=result.error,
+    )
+
+
+@router.post("/invites/{invite_id}/resend", response_model=InviteSendResult)
+def resend_invite(
+    invite_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> InviteSendResult:
+    """Resend the invite email. Reuses the same token so any previously
+    delivered link keeps working."""
+    try:
+        iid = _uuid.UUID(invite_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid invite id")
+
+    invite = db.query(TrialInvite).filter(TrialInvite.id == iid).one_or_none()
+    if invite is None:
+        raise HTTPException(404, "Invite not found")
+    if invite.accepted_at is not None:
+        raise HTTPException(400, "Invite already accepted — nothing to resend.")
+    if invite.revoked_at is not None:
+        raise HTTPException(400, "Invite is revoked — restore it first.")
+
+    result = invite_email.send(
+        recipient_email=invite.email,
+        trial_days=invite.trial_days,
+        token=invite.token,
+    )
+    if result.ok:
+        invite.sent_at = _utcnow()
+        db.commit()
+        db.refresh(invite)
+
+    inviter_email = None
+    if invite.invited_by_user_id:
+        inviter_email = (
+            db.query(User.email)
+            .filter(User.id == invite.invited_by_user_id)
+            .scalar()
+        )
+
+    record(
+        db,
+        admin,
+        "admin.invite_resent",
+        target_type="trial_invite",
+        target_id=invite.id,
+        payload={"send_ok": result.ok, "send_error": result.error},
+    )
+
+    return InviteSendResult(
+        invite=_invite_row(invite, inviter_email=inviter_email, now=_utcnow()),
+        sent=result.ok,
+        send_error=result.error,
+    )
+
+
+class InviteRevoke(BaseModel):
+    revoke: bool
+    """True to revoke an invite, False to restore a revoked one (so an
+    accidental click can be undone)."""
+
+
+@router.post("/invites/{invite_id}/revoke", response_model=InviteRow)
+def revoke_invite(
+    invite_id: str,
+    payload: InviteRevoke,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> InviteRow:
+    try:
+        iid = _uuid.UUID(invite_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid invite id")
+
+    invite = db.query(TrialInvite).filter(TrialInvite.id == iid).one_or_none()
+    if invite is None:
+        raise HTTPException(404, "Invite not found")
+    if invite.accepted_at is not None:
+        raise HTTPException(
+            400,
+            "Invite already accepted — revoking it won't reclaim the trial.",
+        )
+
+    invite.revoked_at = _utcnow() if payload.revoke else None
+    db.commit()
+    db.refresh(invite)
+
+    inviter_email = None
+    if invite.invited_by_user_id:
+        inviter_email = (
+            db.query(User.email)
+            .filter(User.id == invite.invited_by_user_id)
+            .scalar()
+        )
+
+    record(
+        db,
+        admin,
+        "admin.invite_revoked" if payload.revoke else "admin.invite_restored",
+        target_type="trial_invite",
+        target_id=invite.id,
+        payload={},
+    )
+
+    return _invite_row(invite, inviter_email=inviter_email, now=_utcnow())
+
+
+@router.get("/invites/pending-count")
+def invites_pending_count(
+    _admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cheap COUNT for an admin nav badge (pending = sent but not yet
+    accepted or expired)."""
+    now = _utcnow()
+    n = (
+        db.query(func.count(TrialInvite.id))
+        .filter(
+            TrialInvite.accepted_at.is_(None),
+            TrialInvite.revoked_at.is_(None),
+            TrialInvite.expires_at > now,
+        )
+        .scalar()
+        or 0
+    )
+    return {"pending": int(n)}

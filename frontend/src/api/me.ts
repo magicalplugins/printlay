@@ -24,7 +24,16 @@ export type Me = {
   time_saved_per_slot_seconds: number;
 };
 
-export const getMe = () => api<Me>("/api/auth/me");
+/** Fetch the calling user's app profile. If `inviteToken` is provided
+ *  and this is the user's very first call (i.e. they're being
+ *  provisioned), the backend will honour it and grant the longer trial
+ *  baked into the invite. Subsequent calls ignore the token. */
+export const getMe = (inviteToken?: string | null) => {
+  const qs = inviteToken
+    ? `?invite=${encodeURIComponent(inviteToken)}`
+    : "";
+  return api<Me>(`/api/auth/me${qs}`);
+};
 
 export type ProfileUpdate = {
   phone: string;

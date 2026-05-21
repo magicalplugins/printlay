@@ -287,3 +287,65 @@ export const patchLeadStatus = (id: string, status: LeadStatus) =>
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
+
+// ---- Trial invites (admin-issued extended trials) ----
+
+export type InviteStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export type AdminInvite = {
+  id: string;
+  email: string;
+  trial_days: number;
+  note: string | null;
+  token: string;
+  invite_url: string;
+  invited_by_email: string | null;
+  created_at: string;
+  expires_at: string;
+  sent_at: string | null;
+  accepted_at: string | null;
+  accepted_user_id: string | null;
+  revoked_at: string | null;
+  status: InviteStatus;
+};
+
+export type AdminInvitesPage = {
+  total: number;
+  items: AdminInvite[];
+};
+
+export type CreateInvitePayload = {
+  email: string;
+  trial_days: number;
+  note?: string | null;
+};
+
+export type InviteSendResult = {
+  invite: AdminInvite;
+  sent: boolean;
+  send_error: string | null;
+};
+
+export const getAdminInvites = (status?: InviteStatus) => {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  return api<AdminInvitesPage>(`/api/admin/invites?${params.toString()}`);
+};
+
+export const createAdminInvite = (payload: CreateInvitePayload) =>
+  api<InviteSendResult>("/api/admin/invites", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const resendAdminInvite = (id: string) =>
+  api<InviteSendResult>(`/api/admin/invites/${id}/resend`, { method: "POST" });
+
+export const revokeAdminInvite = (id: string, revoke: boolean) =>
+  api<AdminInvite>(`/api/admin/invites/${id}/revoke`, {
+    method: "POST",
+    body: JSON.stringify({ revoke }),
+  });
+
+export const getInvitesPendingCount = () =>
+  api<{ pending: number }>("/api/admin/invites/pending-count");

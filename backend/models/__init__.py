@@ -8,6 +8,7 @@ from backend.models.output import Output
 from backend.models.spot_color import SpotColor
 from backend.models.stripe_event import StripeEvent
 from backend.models.template import Template
+from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "SpotColor",
     "StripeEvent",
     "Template",
+    "TrialInvite",
     "User",
 ]

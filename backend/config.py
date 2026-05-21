@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     """Comma-separated list of additional origins to whitelist in production
     (the SPA's own origin is implicitly allowed via same-origin)."""
 
+    public_base_url: str = "https://printlay.co.uk"
+    """Canonical user-facing origin (no trailing slash). Used to build
+    absolute URLs in transactional emails — e.g. invite links — where a
+    relative path won't do. Override per-env via PUBLIC_BASE_URL."""
+
     rate_limit_generate_per_hour: int = 60
     """Max calls to `POST /api/jobs/{id}/generate` per user per hour."""
     rate_limit_generate_per_minute: int = 30

@@ -40,7 +40,9 @@ def build_invite_url(token: str) -> str:
 def _html_body(*, trial_days: int, invite_url: str, recipient_email: str) -> str:
     safe_url = html.escape(invite_url, quote=True)
     safe_email = html.escape(recipient_email)
-    days_label = f"{trial_days}-day"
+    # Plural-safe — "1 day" / "2 days". The body uses this directly so
+    # we never get "30-day of full Pro access" again.
+    days_label = f"{trial_days} day" if trial_days == 1 else f"{trial_days} days"
 
     return f"""\
 <!DOCTYPE html>
@@ -67,7 +69,7 @@ def _html_body(*, trial_days: int, invite_url: str, recipient_email: str) -> str
             </div>
             <h1 style="margin:24px 0 0 0;font-size:30px;line-height:1.15;font-weight:700;letter-spacing:-0.02em;color:#fafafa;">
               You've been<br>
-              <span style="background:linear-gradient(90deg,#a78bfa 0%,#e879f9 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;color:#d946ef;">personally invited.</span>
+              <span style="color:#e879f9;">personally invited.</span>
             </h1>
           </td>
         </tr>
@@ -99,7 +101,7 @@ def _html_body(*, trial_days: int, invite_url: str, recipient_email: str) -> str
                     Your exclusive trial
                   </div>
                   <div style="margin-top:6px;font-size:44px;line-height:1;font-weight:700;color:#fafafa;letter-spacing:-0.02em;">
-                    {trial_days} days
+                    {days_label}
                   </div>
                   <div style="margin-top:6px;font-size:13px;color:#a3a3a3;">
                     Full Pro features · No card required
@@ -158,11 +160,12 @@ def _html_body(*, trial_days: int, invite_url: str, recipient_email: str) -> str
 
 
 def _text_body(*, trial_days: int, invite_url: str) -> str:
+    days_label = f"{trial_days} day" if trial_days == 1 else f"{trial_days} days"
     return (
         "You've been personally invited to Printlay.\n\n"
         "We're hand-picking a small group of print operators to use Printlay\n"
         "free and full-access before we open the doors properly. Your invite is\n"
-        f"good for {trial_days} days of full Pro access — every feature, no card\n"
+        f"good for {days_label} of full Pro access — every feature, no card\n"
         "required, no automatic charge at the end.\n\n"
         f"Activate your trial: {invite_url}\n\n"
         "The link expires in 30 days. If you weren't expecting this, you can\n"
@@ -182,7 +185,8 @@ def send(*, recipient_email: str, trial_days: int, token: str) -> InviteSendResu
         )
 
     url = build_invite_url(token)
-    subject = f"You're invited — {trial_days} days of Printlay, on us"
+    days_label = f"{trial_days} day" if trial_days == 1 else f"{trial_days} days"
+    subject = f"You're invited — {days_label} of Printlay, on us"
     results = messaging.send_email_bulk(
         [recipient_email],
         subject=subject,

@@ -4,6 +4,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -417,6 +418,85 @@ def delete_asset(
                 pass
     db.delete(asset)
     db.commit()
+
+
+class BulkDeleteIn(BaseModel):
+    """Body for bulk asset deletion. Capped at 500 ids per call so a
+    runaway client can't keep one DB connection busy for minutes."""
+
+    asset_ids: list[uuid.UUID] = Field(
+        ..., min_length=1, max_length=500,
+        description="Asset UUIDs to delete. Only the caller's own assets are touched.",
+    )
+
+
+class BulkDeleteOut(BaseModel):
+    deleted: int
+    skipped: int
+    """Ids that resolved to assets the caller doesn't own (or didn't
+    exist). Not an error — silently ignored so a stale client cache
+    doesn't 500."""
+
+
+@router.post(
+    "/assets/bulk-delete",
+    response_model=BulkDeleteOut,
+    status_code=status.HTTP_200_OK,
+)
+def bulk_delete_assets(
+    payload: BulkDeleteIn,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BulkDeleteOut:
+    """Delete many assets in one round-trip.
+
+    We resolve ownership in a single query (much cheaper than N round
+    trips through `DELETE /assets/{id}`), then iterate to clean up R2
+    keys. Storage deletes are best-effort — a failed object purge
+    shouldn't block the row delete because the user clearly wanted
+    the asset gone, and orphaned R2 objects can be GC'd later.
+
+    A subscriber pointing this at an official catalogue gets a 403:
+    they can unsubscribe (which strips the whole catalogue from their
+    library) but they can't mutate the catalogue's contents."""
+    user = _resolve_user(db, auth)
+    ids = list({i for i in payload.asset_ids})  # dedupe defensively
+    if not ids:
+        return BulkDeleteOut(deleted=0, skipped=0)
+
+    assets = (
+        db.query(Asset)
+        .filter(Asset.id.in_(ids), Asset.user_id == user.id)
+        .all()
+    )
+
+    # Refuse to mutate official-catalogue contents. The whole batch is
+    # rejected so the client gets a single clear error rather than
+    # silently dropping some of the selection — the read-only badge in
+    # the UI already prevents reaching this code path in practice.
+    if any(a.is_official for a in assets):
+        raise HTTPException(
+            403,
+            "One or more assets belong to an official catalogue and can't be deleted here. Unsubscribe from the catalogue to remove them.",
+        )
+
+    for asset in assets:
+        for k in (asset.r2_key, asset.r2_key_original, asset.thumbnail_r2_key):
+            if k:
+                try:
+                    storage.delete(k)
+                except Exception:
+                    pass
+        db.delete(asset)
+    db.commit()
+
+    deleted = len(assets)
+    record(
+        db, user, "asset.bulk_delete",
+        target_type="asset",
+        payload={"count": deleted, "requested": len(ids)},
+    )
+    return BulkDeleteOut(deleted=deleted, skipped=len(ids) - deleted)
 
 
 # ---------- bundles (export / import) ----------

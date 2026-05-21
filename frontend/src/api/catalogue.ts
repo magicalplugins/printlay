@@ -59,6 +59,17 @@ export async function uploadAsset(
 export const deleteAsset = (id: string) =>
   api<void>(`/api/assets/${id}`, { method: "DELETE" });
 
+export type BulkDeleteResult = { deleted: number; skipped: number };
+
+/** Delete many assets in one round-trip. Capped at 500 ids server-side.
+ *  Skipped count covers ids the caller doesn't own (e.g. stale cache);
+ *  those are silently ignored. */
+export const bulkDeleteAssets = (assetIds: string[]) =>
+  api<BulkDeleteResult>("/api/assets/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ asset_ids: assetIds }),
+  });
+
 export function exportCategoryUrl(categoryId: string): string {
   // Browser-direct download: streams the bundle without buffering through JS.
   return `/api/categories/${categoryId}/export`;

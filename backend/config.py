@@ -87,12 +87,25 @@ class Settings(BaseSettings):
     role table - keep it small and secret. Example:
         ADMIN_EMAILS=anthony@magicalplugins.com,ops@printlay.io"""
 
-    # ---- Bulk messaging (admin outreach) ----
+    # ---- Bulk messaging (admin outreach + transactional invites) ----
+    #
+    # Two providers supported — SMTP2GO is preferred (HTTP API, simple
+    # sender verification, generous free tier). Resend remains a
+    # fallback so a deploy can flip providers without code changes.
+    # The `messaging` module checks SMTP2GO first.
+    smtp2go_api_key: str | None = None
+    """SMTP2GO HTTP API key (`api-XXXXX...`). Set via fly secrets.
+    https://app.smtp2go.com/settings/apikeys"""
+    smtp2go_from_email: str | None = None
+    """Verified sender for SMTP2GO, RFC-5322 format e.g.
+    'Printlay <hello@printlay.co.uk>'. Domain must be verified in
+    SMTP2GO before sends will succeed."""
+
     resend_api_key: str | None = None
-    """Set to enable transactional email sending. Free tier 3k/month is plenty
-    for early-stage outreach."""
+    """Optional fallback. Only used if smtp2go_api_key is not set."""
     resend_from_email: str = "Printlay <hello@printlay.io>"
-    """Verified sender. Must match a domain you've verified in Resend."""
+    """Sender for the Resend fallback. Must match a verified domain in Resend."""
+
     twilio_account_sid: str | None = None
     twilio_auth_token: str | None = None
     twilio_from_number: str | None = None

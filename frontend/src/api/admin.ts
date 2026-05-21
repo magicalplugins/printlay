@@ -149,6 +149,7 @@ export type MessageResponse = {
 
 export type MessagingStatus = {
   email_configured: boolean;
+  email_provider: "smtp2go" | "resend" | "none";
   sms_configured: boolean;
 };
 

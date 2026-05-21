@@ -173,8 +173,20 @@ export function MessageComposer({ onClose }: { onClose: () => void }) {
             {status && !channelOk && (
               <div className="mt-1.5 text-[11px] text-amber-300">
                 {channel === "email"
-                  ? "RESEND_API_KEY not set — set it via fly secrets to enable."
+                  ? "Email provider not configured — set SMTP2GO_API_KEY + SMTP2GO_FROM_EMAIL via fly secrets to enable."
                   : "Twilio credentials not set — set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER."}
+              </div>
+            )}
+            {status && channel === "email" && channelOk && (
+              <div className="mt-1.5 text-[11px] text-emerald-300">
+                Sending via{" "}
+                <span className="font-semibold">
+                  {status.email_provider === "smtp2go"
+                    ? "SMTP2GO"
+                    : status.email_provider === "resend"
+                      ? "Resend"
+                      : "—"}
+                </span>
               </div>
             )}
           </div>

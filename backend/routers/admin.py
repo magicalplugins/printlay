@@ -962,8 +962,12 @@ def send_message(
 
 @router.get("/messaging/status")
 def messaging_status(_admin: User = Depends(require_admin)) -> dict:
+    """Wiring status for the bulk-message composer. `email_provider` lets
+    the UI render an accurate hint ('SMTP2GO not configured' vs the
+    legacy 'Resend not configured')."""
     return {
         "email_configured": messaging.email_configured(),
+        "email_provider": messaging.active_email_provider(),
         "sms_configured": messaging.sms_configured(),
     }
 

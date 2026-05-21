@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { forgetInviteToken, recallInviteToken } from "../api/invites";
@@ -30,18 +31,24 @@ export function MeProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Keep a ref to the current session so `refresh` can read it without
+  // depending on the session object itself. Supabase fires multiple
+  // onAuthStateChange events (SIGNED_IN, TOKEN_REFRESHED, etc.) during
+  // the email-confirmation redirect flow, each creating a new Session
+  // object. If `refresh` depended on [session] directly, every new
+  // reference would recreate the callback, re-trigger the useEffect,
+  // and hammer /api/auth/me in a tight loop until the token dies.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   const refresh = useCallback(async () => {
-    if (!session) {
+    if (!sessionRef.current) {
       setMe(null);
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      // First /me call after signup should carry the invite token (if any)
-      // so the backend can grant the extended trial during provisioning.
-      // The token is one-shot — we clear it whether or not the backend
-      // actually honoured it, so a stale token can't keep coming back.
       const token = recallInviteToken();
       const m = await getMe(token);
       if (token) forgetInviteToken();
@@ -51,12 +58,16 @@ export function MeProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [session]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Only re-fetch when the auth state actually transitions (signed-in
+  // ↔ signed-out), not on every Supabase token refresh.
+  const hasSession = !!session;
   useEffect(() => {
     if (!ready) return;
     refresh();
-  }, [ready, refresh]);
+  }, [ready, hasSession, refresh]);
 
   const value = useMemo<MeState>(
     () => ({ me, loading, error, refresh, setMe }),

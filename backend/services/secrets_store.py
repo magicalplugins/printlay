@@ -34,7 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
-from backend.database import SessionLocal
+from backend.database import get_session_factory
 from backend.models import AppSetting
 
 log = logging.getLogger(__name__)
@@ -160,7 +160,7 @@ def set(
     fernet = _fernet()
     token = fernet.encrypt(value.encode("utf-8")).decode("ascii")
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         _upsert(db, key, token, actor_user_id)
 
 
@@ -168,7 +168,7 @@ def clear(key: str, *, actor_user_id: uuid.UUID | None) -> None:
     """Remove the DB row. Env-var fallback (if any) takes over again."""
     if key not in KNOWN_KEYS:
         raise ValueError(f"Unknown setting key: {key}")
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         row = db.query(AppSetting).filter(AppSetting.key == key).one_or_none()
         if row is not None:
             db.delete(row)
@@ -180,7 +180,7 @@ def list_meta(keys: Iterable[str] | None = None) -> list[SettingMeta]:
     "set / not set" badges without ever transmitting plaintext."""
     target_keys = list(keys) if keys is not None else list(KNOWN_KEYS)
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         rows = (
             db.query(AppSetting)
             .filter(AppSetting.key.in_(target_keys))
@@ -249,7 +249,7 @@ def _read_db_value(key: str) -> str | None:
     except StoreUnavailable:
         return None
 
-    with SessionLocal() as db:
+    with get_session_factory()() as db:
         row = (
             db.query(AppSetting.encrypted_value)
             .filter(AppSetting.key == key)

@@ -69,6 +69,8 @@ class SheetIn(BaseModel):
     mode: str = "roll"
     sub_sheet_size: str | None = None
     gap_mm: float = Field(default=3.0, ge=0)
+    sub_sheet_gap_mm: float = Field(default=5.0, ge=0)
+    sub_sheet_padding_mm: float = Field(default=5.0, ge=0)
     edge_margin_mm: float = Field(default=5.0, ge=0)
     show_crop_marks: bool = True
     registration_type: str | None = None
@@ -86,6 +88,8 @@ class SheetOut(BaseModel):
     mode: str
     sub_sheet_size: str | None
     gap_mm: float
+    sub_sheet_gap_mm: float
+    sub_sheet_padding_mm: float
     edge_margin_mm: float
     show_crop_marks: bool
     registration_type: str | None
@@ -226,6 +230,8 @@ def create_sheet(
         mode=payload.mode,
         sub_sheet_size=payload.sub_sheet_size,
         gap_mm=payload.gap_mm,
+        sub_sheet_gap_mm=payload.sub_sheet_gap_mm,
+        sub_sheet_padding_mm=payload.sub_sheet_padding_mm,
         edge_margin_mm=payload.edge_margin_mm,
         show_crop_marks=payload.show_crop_marks,
         registration_type=payload.registration_type,
@@ -257,6 +263,8 @@ def update_sheet(
     sheet.mode = payload.mode
     sheet.sub_sheet_size = payload.sub_sheet_size
     sheet.gap_mm = payload.gap_mm
+    sheet.sub_sheet_gap_mm = payload.sub_sheet_gap_mm
+    sheet.sub_sheet_padding_mm = payload.sub_sheet_padding_mm
     sheet.edge_margin_mm = payload.edge_margin_mm
     sheet.show_crop_marks = payload.show_crop_marks
     sheet.registration_type = payload.registration_type
@@ -320,6 +328,8 @@ def run_auto_layout(
         mode=sheet.mode,  # type: ignore[arg-type]
         gap_mm=sheet.gap_mm,
         edge_margin_mm=sheet.edge_margin_mm,
+        sub_sheet_gap_mm=getattr(sheet, "sub_sheet_gap_mm", 5.0) or 5.0,
+        sub_sheet_padding_mm=getattr(sheet, "sub_sheet_padding_mm", 5.0) or 5.0,
         show_crop_marks=sheet.show_crop_marks,
         registration_type=sheet.registration_type,
         max_zone_length_mm=sheet.max_zone_length_mm,
@@ -396,6 +406,8 @@ def export_sheet_pdf(
         mode=sheet.mode,  # type: ignore[arg-type]
         gap_mm=sheet.gap_mm,
         edge_margin_mm=sheet.edge_margin_mm,
+        sub_sheet_gap_mm=getattr(sheet, "sub_sheet_gap_mm", 5.0) or 5.0,
+        sub_sheet_padding_mm=getattr(sheet, "sub_sheet_padding_mm", 5.0) or 5.0,
         show_crop_marks=sheet.show_crop_marks,
         registration_type=sheet.registration_type,
         max_zone_length_mm=sheet.max_zone_length_mm,
@@ -459,6 +471,8 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         mode=s.mode,
         sub_sheet_size=s.sub_sheet_size,
         gap_mm=s.gap_mm,
+        sub_sheet_gap_mm=getattr(s, "sub_sheet_gap_mm", 5.0) or 5.0,
+        sub_sheet_padding_mm=getattr(s, "sub_sheet_padding_mm", 5.0) or 5.0,
         edge_margin_mm=s.edge_margin_mm,
         show_crop_marks=s.show_crop_marks,
         registration_type=s.registration_type,

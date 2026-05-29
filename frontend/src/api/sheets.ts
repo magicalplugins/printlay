@@ -30,6 +30,8 @@ export interface StickerSheet {
   mode: "roll" | "sheet";
   sub_sheet_size: string | null;
   gap_mm: number;
+  sub_sheet_gap_mm: number;
+  sub_sheet_padding_mm: number;
   edge_margin_mm: number;
   show_crop_marks: boolean;
   registration_type: string | null;

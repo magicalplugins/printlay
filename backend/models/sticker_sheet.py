@@ -44,9 +44,22 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     gap_mm: Mapped[float] = mapped_column(
         Float, nullable=False, default=3.0, server_default="3.0"
     )
+    """Gap between stickers inside sub-sheets."""
+
+    sub_sheet_gap_mm: Mapped[float] = mapped_column(
+        Float, nullable=False, default=5.0, server_default="5.0"
+    )
+    """Gap between sub-sheets themselves."""
+
+    sub_sheet_padding_mm: Mapped[float] = mapped_column(
+        Float, nullable=False, default=5.0, server_default="5.0"
+    )
+    """Inner padding inside each sub-sheet before stickers start."""
+
     edge_margin_mm: Mapped[float] = mapped_column(
         Float, nullable=False, default=5.0, server_default="5.0"
     )
+    """Margin from the roll edges to the first sub-sheet."""
     show_crop_marks: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )

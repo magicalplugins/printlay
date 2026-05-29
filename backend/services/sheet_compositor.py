@@ -40,6 +40,8 @@ class SheetConfig:
     mode: Literal["roll", "sheet"] = "roll"
     gap_mm: float = 3.0
     edge_margin_mm: float = 5.0
+    sub_sheet_gap_mm: float = 5.0
+    sub_sheet_padding_mm: float = 5.0
     show_crop_marks: bool = True
     registration_type: str | None = None
     max_zone_length_mm: float | None = None
@@ -78,14 +80,20 @@ def auto_layout(
     # Sub-sheet grouping mode
     if config.sub_sheet_size and config.sub_sheet_size in SUB_SHEET_SIZES:
         sub_w, sub_h = SUB_SHEET_SIZES[config.sub_sheet_size]
-        inner_margin = 3.0  # margin inside each sub-sheet
+        padding = config.sub_sheet_padding_mm
+        sub_gap = config.sub_sheet_gap_mm
+        edge = config.edge_margin_mm
+        sticker_gap = config.gap_mm
 
         # Orient sticker for best fit within the sub-sheet
+        usable_w = sub_w - 2 * padding
+        usable_h = sub_h - 2 * padding
+
         if orientation == "auto":
-            cols_h = max(1, int((sub_w - 2 * inner_margin + gap) / (sw + gap)))
-            rows_h = max(1, int((sub_h - 2 * inner_margin + gap) / (sh + gap)))
-            cols_v = max(1, int((sub_w - 2 * inner_margin + gap) / (sh + gap)))
-            rows_v = max(1, int((sub_h - 2 * inner_margin + gap) / (sw + gap)))
+            cols_h = max(1, int((usable_w + sticker_gap) / (sw + sticker_gap)))
+            rows_h = max(1, int((usable_h + sticker_gap) / (sh + sticker_gap)))
+            cols_v = max(1, int((usable_w + sticker_gap) / (sh + sticker_gap)))
+            rows_v = max(1, int((usable_h + sticker_gap) / (sw + sticker_gap)))
             if cols_v * rows_v > cols_h * rows_h:
                 sw, sh = sh, sw
         elif orientation == "horizontal":
@@ -95,12 +103,14 @@ def auto_layout(
             if sh > sw:
                 sw, sh = sh, sw
 
-        stickers_per_col = max(1, int((sub_w - 2 * inner_margin + gap) / (sw + gap)))
-        stickers_per_row = max(1, int((sub_h - 2 * inner_margin + gap) / (sh + gap)))
+        stickers_per_col = max(1, int((usable_w + sticker_gap) / (sw + sticker_gap)))
+        stickers_per_row = max(1, int((usable_h + sticker_gap) / (sh + sticker_gap)))
         per_sub = stickers_per_col * stickers_per_row
 
         sub_sheets_needed = math.ceil(quantity / per_sub)
-        sub_cols = max(1, int((config.media_width_mm + gap) / (sub_w + gap)))
+
+        available_for_subs = config.media_width_mm - 2 * edge
+        sub_cols = max(1, int((available_for_subs + sub_gap) / (sub_w + sub_gap)))
         sub_rows = math.ceil(sub_sheets_needed / sub_cols)
 
         placements: list[Placement] = []
@@ -110,15 +120,16 @@ def auto_layout(
             for sub_col in range(sub_cols):
                 if sticker_idx >= quantity:
                     break
-                sub_x = sub_col * (sub_w + gap)
-                sub_y = sub_row * (sub_h + gap)
+                # Sub-sheet top-left position (with edge margin and sub-sheet gap)
+                sub_x = edge + sub_col * (sub_w + sub_gap)
+                sub_y = edge + sub_row * (sub_h + sub_gap)
 
                 for r in range(stickers_per_row):
                     for c in range(stickers_per_col):
                         if sticker_idx >= quantity:
                             break
-                        x = sub_x + inner_margin + c * (sw + gap)
-                        y = sub_y + inner_margin + r * (sh + gap)
+                        x = sub_x + padding + c * (sw + sticker_gap)
+                        y = sub_y + padding + r * (sh + sticker_gap)
                         placements.append(Placement(
                             asset_id=asset_id,
                             x_mm=round(x, 2),
@@ -131,7 +142,7 @@ def auto_layout(
             if sticker_idx >= quantity:
                 break
 
-        total_height = sub_rows * (sub_h + gap) - gap
+        total_height = edge + sub_rows * (sub_h + sub_gap) - sub_gap + edge
         return LayoutResult(
             placements=placements,
             total_height_mm=total_height,
@@ -325,12 +336,15 @@ def _draw_crop_marks(
         return
 
     sub_w_mm, sub_h_mm = size
-    gap = config.gap_mm
+    sub_gap = config.sub_sheet_gap_mm
+    edge = config.edge_margin_mm
     sheet_w_mm = config.media_width_mm
     sheet_h_mm = total_height_mm
 
-    cols = int((sheet_w_mm + gap) / (sub_w_mm + gap))
-    rows = int((sheet_h_mm + gap) / (sub_h_mm + gap))
+    available_for_subs = sheet_w_mm - 2 * edge
+    cols = max(1, int((available_for_subs + sub_gap) / (sub_w_mm + sub_gap)))
+    available_for_rows = sheet_h_mm - 2 * edge
+    rows = max(1, int((available_for_rows + sub_gap) / (sub_h_mm + sub_gap)))
 
     mark_len = 3.0 * PT_PER_MM
     offset = 1.5 * PT_PER_MM
@@ -339,8 +353,8 @@ def _draw_crop_marks(
 
     for row in range(rows):
         for col in range(cols):
-            sx_pt = col * (sub_w_mm + gap) * PT_PER_MM
-            sy_pt = row * (sub_h_mm + gap) * PT_PER_MM
+            sx_pt = (edge + col * (sub_w_mm + sub_gap)) * PT_PER_MM
+            sy_pt = (edge + row * (sub_h_mm + sub_gap)) * PT_PER_MM
             sw_pt = sub_w_mm * PT_PER_MM
             sh_pt = sub_h_mm * PT_PER_MM
 

@@ -94,8 +94,8 @@ export default function SheetBuilder() {
     ctx.lineWidth = 1;
     ctx.strokeRect(ox, oy, w, h);
 
-    // Draw sub-sheet groups (A4/A5 sections with crop marks)
-    if (activeSheet.show_crop_marks && activeSheet.sub_sheet_size) {
+    // Draw sub-sheet groups (always visible when configured)
+    if (activeSheet.sub_sheet_size) {
       _drawSubSheets(ctx, ox, oy, scale, activeSheet);
     }
 
@@ -387,7 +387,7 @@ export default function SheetBuilder() {
               Sheet Settings
             </h3>
             <div className="space-y-3">
-              <SettingRow label="Gap (mm)">
+              <SettingRow label="Sticker gap (mm)">
                 <input
                   type="number"
                   min={0}
@@ -440,18 +440,57 @@ export default function SheetBuilder() {
                 </select>
               </SettingRow>
               {activeSheet.sub_sheet_size && (
-                <SettingRow label="Crop marks">
-                  <input
-                    type="checkbox"
-                    checked={activeSheet.show_crop_marks}
-                    onChange={(e) =>
-                      setActiveSheet((s) =>
-                        s ? { ...s, show_crop_marks: e.target.checked } : null
-                      )
-                    }
-                    className="rounded"
-                  />
-                </SettingRow>
+                <>
+                  <SettingRow label="Sub-sheet gap (mm)">
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={activeSheet.sub_sheet_gap_mm ?? 5}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, sub_sheet_gap_mm: Number(e.target.value) }
+                            : null
+                        )
+                      }
+                      className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
+                    />
+                  </SettingRow>
+                  <SettingRow label="Inner padding (mm)">
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={activeSheet.sub_sheet_padding_mm ?? 5}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_padding_mm: Number(e.target.value),
+                              }
+                            : null
+                        )
+                      }
+                      className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
+                    />
+                  </SettingRow>
+                  <SettingRow label="Crop marks">
+                    <input
+                      type="checkbox"
+                      checked={activeSheet.show_crop_marks}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, show_crop_marks: e.target.checked }
+                            : null
+                        )
+                      }
+                      className="rounded"
+                    />
+                  </SettingRow>
+                </>
               )}
               <SettingRow label="Registration">
                 <select
@@ -713,26 +752,42 @@ function _drawSubSheets(
 
   const subW = size.w * scale;
   const subH = size.h * scale;
-  const gap = sheet.gap_mm * scale;
+  const subGap = (sheet.sub_sheet_gap_mm ?? 5) * scale;
+  const edge = (sheet.edge_margin_mm ?? 5) * scale;
+  const padding = (sheet.sub_sheet_padding_mm ?? 5) * scale;
   const sheetW = sheet.media_width_mm * scale;
   const sheetH = sheet.media_height_mm * scale;
 
-  const cols = Math.floor((sheetW + gap) / (subW + gap));
-  const rows = Math.floor((sheetH + gap) / (subH + gap));
+  const availableW = sheetW - 2 * edge;
+  const cols = Math.max(1, Math.floor((availableW + subGap) / (subW + subGap)));
+  const availableH = sheetH - 2 * edge;
+  const rows = Math.max(1, Math.floor((availableH + subGap) / (subH + subGap)));
 
   const markLen = 4 * scale;
   const markOffset = 1.5 * scale;
 
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      const sx = col * (subW + gap);
-      const sy = row * (subH + gap);
+      const sx = edge + col * (subW + subGap);
+      const sy = edge + row * (subH + subGap);
 
       // Sub-sheet outline (dashed)
       ctx.setLineDash([4, 3]);
       ctx.strokeStyle = "#a3a3a3";
       ctx.lineWidth = 0.75;
       ctx.strokeRect(ox + sx, oy + sy, subW, subH);
+      ctx.setLineDash([]);
+
+      // Inner padding indicator (subtle)
+      ctx.setLineDash([2, 4]);
+      ctx.strokeStyle = "#525252";
+      ctx.lineWidth = 0.4;
+      ctx.strokeRect(
+        ox + sx + padding,
+        oy + sy + padding,
+        subW - 2 * padding,
+        subH - 2 * padding
+      );
       ctx.setLineDash([]);
 
       // Crop marks at the 4 corners of this sub-sheet
@@ -746,13 +801,11 @@ function _drawSubSheets(
           [sx + subW, sy + subH],
         ];
         for (const [cx, cy] of corners) {
-          // Horizontal mark
           const hDir = cx === sx ? -1 : 1;
           ctx.beginPath();
           ctx.moveTo(ox + cx + hDir * markOffset, oy + cy);
           ctx.lineTo(ox + cx + hDir * (markOffset + markLen), oy + cy);
           ctx.stroke();
-          // Vertical mark
           const vDir = cy === sy ? -1 : 1;
           ctx.beginPath();
           ctx.moveTo(ox + cx, oy + cy + vDir * markOffset);

@@ -88,6 +88,14 @@ export const AI_STYLES: { id: string; label: string; blurb: string }[] = [
   { id: "watercolor", label: "Watercolour", blurb: "Soft painted look" },
 ];
 
+/** AI photo retouch — photorealistic enhancements (keeps it a photo).
+ *  Same OpenAI-key gating as AI_STYLES. */
+export const AI_RETOUCH: { id: string; label: string; blurb: string }[] = [
+  { id: "retouch", label: "Beautify", blurb: "Full natural retouch" },
+  { id: "smoothskin", label: "Smooth skin", blurb: "Even, flawless skin" },
+  { id: "brighteyes", label: "Brighten eyes", blurb: "Brighter, sharper eyes" },
+];
+
 export async function aiStyleSticker(
   sessionId: string,
   style: string,

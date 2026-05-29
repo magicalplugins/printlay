@@ -60,6 +60,31 @@ STYLE_PROMPTS: dict[str, str] = {
         "outlines, bright cel-shaded colours, slightly small cartoon body. "
         "Fun sticker look. Fully transparent background."
     ),
+    # --- Photorealistic retouch (NOT illustrated) ---
+    "retouch": (
+        "Retouch this portrait like a high-end beauty photographer while keeping it "
+        "a completely natural, realistic photograph of the exact same person. "
+        "Even out and smooth the skin while keeping natural pores and texture, remove "
+        "blemishes, spots and shine, gently brighten and add sparkle/catchlights to "
+        "the eyes, subtly even the skin tone, brighten the smile and add healthy glow. "
+        "Do NOT change the identity, face shape, pose, framing, hair or expression. "
+        "Photorealistic, do not cartoonify or illustrate. Fully transparent background."
+    ),
+    "smoothskin": (
+        "Subtly retouch only the skin in this portrait, keeping it a natural realistic "
+        "photograph of the exact same person: smooth and even the skin texture, remove "
+        "blemishes, spots, redness and shine, like flawless natural makeup foundation, "
+        "while keeping believable pores and skin detail. Do NOT blur, do not change the "
+        "identity, face shape, pose, hair or expression. Photorealistic, not illustrated. "
+        "Fully transparent background."
+    ),
+    "brighteyes": (
+        "Subtly enhance only the eyes in this portrait, keeping it a natural realistic "
+        "photograph of the exact same person: brighten the eyes, sharpen the iris detail, "
+        "add gentle catchlights and whiten the whites slightly for a bright awake look. "
+        "Leave the rest of the face unchanged. Do NOT change identity, face shape or "
+        "expression. Photorealistic, not illustrated. Fully transparent background."
+    ),
 }
 
 STYLE_LABELS: dict[str, str] = {
@@ -69,6 +94,9 @@ STYLE_LABELS: dict[str, str] = {
     "popart": "Pop art",
     "watercolor": "Watercolour",
     "caricature": "Caricature",
+    "retouch": "Beautify",
+    "smoothskin": "Smooth skin",
+    "brighteyes": "Brighten eyes",
 }
 
 # Wrapper applied to a user's free-text custom prompt so the result still

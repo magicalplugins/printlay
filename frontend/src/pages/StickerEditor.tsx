@@ -8,6 +8,7 @@ import {
   saveSticker,
   aiStyleSticker,
   AI_STYLES,
+  AI_RETOUCH,
 } from "../api/sticker";
 import { Category, createCategory, listCategories } from "../api/catalogue";
 import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
@@ -33,10 +34,9 @@ export default function StickerEditor() {
   // how close the cut hugs the subject via the Tighten slider instead.
   const precision: Precision = "medium";
   const [tighten, setTighten] = useState(0);
-  // Photo look: a named colour preset (same as jobs) + beautify (0..100).
+  // Photo look: a named colour preset (same as jobs).
   const [filterId, setFilterId] = useState("none");
   const [bakedFilterId, setBakedFilterId] = useState("none");
-  const [beautify, setBeautify] = useState({ smooth: 0, eyes: 0, tone: 0 });
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -73,7 +73,6 @@ export default function StickerEditor() {
       setTighten(0);
       setFilterId("none");
       setBakedFilterId("none");
-      setBeautify({ smooth: 0, eyes: 0, tone: 0 });
       setStep("preview");
     } catch (e: any) {
       const msg =
@@ -94,17 +93,11 @@ export default function StickerEditor() {
       mode?: CutlineMode;
       tighten?: number;
       filterId?: string;
-      smooth?: number;
-      eyes?: number;
-      tone?: number;
     }) => {
       if (!result) return;
       const mode = next.mode ?? cutlineMode;
       const t = next.tighten ?? tighten;
       const fid = next.filterId ?? filterId;
-      const sm = next.smooth ?? beautify.smooth;
-      const ey = next.eyes ?? beautify.eyes;
-      const tn = next.tone ?? beautify.tone;
       setRegenerating(true);
       setError(null);
       try {
@@ -115,19 +108,13 @@ export default function StickerEditor() {
           "medium",
           border,
           3.0,
-          {
-            filterId: fid,
-            beautifySmooth: sm / 100,
-            beautifyEyes: ey / 100,
-            beautifyTone: tn / 100,
-          }
+          { filterId: fid }
         );
         setResult(res);
         setCutlineMode(mode);
         setTighten(t);
         setFilterId(fid);
         setBakedFilterId(fid);
-        setBeautify({ smooth: sm, eyes: ey, tone: tn });
       } catch (e: any) {
         const msg =
           e?.body?.detail || e?.message || "Could not update the sticker.";
@@ -136,7 +123,7 @@ export default function StickerEditor() {
         setRegenerating(false);
       }
     },
-    [result, cutlineMode, tighten, filterId, beautify]
+    [result, cutlineMode, tighten, filterId]
   );
 
   const handleEditApply = useCallback(
@@ -172,7 +159,6 @@ export default function StickerEditor() {
         setResult(res);
         setFilterId("none");
         setBakedFilterId("none");
-        setBeautify({ smooth: 0, eyes: 0, tone: 0 });
       } catch (e: any) {
         setError(
           e?.body?.detail ||
@@ -283,7 +269,6 @@ export default function StickerEditor() {
           filterId={filterId}
           setFilterId={setFilterId}
           bakedFilterId={bakedFilterId}
-          beautify={beautify}
           regenerating={regenerating}
           onApply={applySettings}
           onEditApply={handleEditApply}
@@ -446,42 +431,6 @@ function ModeCard({
   );
 }
 
-function BeautifySlider({
-  label,
-  value,
-  disabled,
-  onChange,
-  onCommit,
-}: {
-  label: string;
-  value: number;
-  disabled: boolean;
-  onChange: (v: number) => void;
-  onCommit: (v: number) => void;
-}) {
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <div className="text-xs text-neutral-400">{label}</div>
-        <div className="text-xs text-neutral-500">{value}%</div>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(parseInt(e.target.value, 10))}
-        onMouseUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
-        onTouchEnd={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
-        onKeyUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
-        className="w-full accent-violet-500 disabled:opacity-50"
-      />
-    </div>
-  );
-}
-
 function UploadZone({
   dragOver,
   onDragOver,
@@ -557,8 +506,6 @@ function ProcessingState({ originalPreview }: { originalPreview: string | null }
   );
 }
 
-type Beautify = { smooth: number; eyes: number; tone: number };
-
 function PreviewState({
   result,
   mode,
@@ -566,7 +513,6 @@ function PreviewState({
   filterId,
   setFilterId,
   bakedFilterId,
-  beautify,
   regenerating,
   onApply,
   onEditApply,
@@ -589,15 +535,11 @@ function PreviewState({
   filterId: string;
   setFilterId: (id: string) => void;
   bakedFilterId: string;
-  beautify: Beautify;
   regenerating: boolean;
   onApply: (next: {
     mode?: CutlineMode;
     tighten?: number;
     filterId?: string;
-    smooth?: number;
-    eyes?: number;
-    tone?: number;
   }) => void;
   onEditApply: (points: [number, number][]) => Promise<void>;
   aiKeySet: boolean;
@@ -618,16 +560,11 @@ function PreviewState({
   const [catBusy, setCatBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tightenLocal, setTightenLocal] = useState(tighten);
-  const [beautyLocal, setBeautyLocal] = useState<Beautify>(beautify);
   const [customPrompt, setCustomPrompt] = useState("");
 
   useEffect(() => {
     setTightenLocal(tighten);
   }, [tighten]);
-
-  useEffect(() => {
-    setBeautyLocal(beautify);
-  }, [beautify]);
 
   // Preview the colour preset instantly on the canvas (CSS) until it's baked
   // server-side. Once baked (bakedFilterId === filterId) we stop overlaying.
@@ -783,7 +720,7 @@ function PreviewState({
       {!editing && (
         <fieldset className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-5 space-y-3">
           <legend className="px-2 text-xs uppercase tracking-widest text-violet-300/80">
-            AI styles
+            AI styles &amp; retouch
           </legend>
 
           {!aiKeySet ? (
@@ -791,8 +728,10 @@ function PreviewState({
               <p>
                 Turn your photo into a polished{" "}
                 <span className="text-white font-medium">cartoon</span>,{" "}
-                <span className="text-white font-medium">pencil sketch</span>,
-                anime, pop-art or watercolour illustration.
+                <span className="text-white font-medium">caricature</span>,
+                pencil sketch, anime or watercolour — or{" "}
+                <span className="text-white font-medium">beautify / retouch</span>{" "}
+                it (smooth skin, brighten eyes) while keeping it a real photo.
               </p>
               <p className="text-[12px] text-neutral-400">
                 Add your own OpenAI API key to unlock these — generation runs on
@@ -833,6 +772,38 @@ function PreviewState({
                     </button>
                   );
                 })}
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <div className="text-[11px] uppercase tracking-widest text-neutral-500">
+                  Photo retouch (stays a photo)
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  {AI_RETOUCH.map((s) => {
+                    const loading = aiStyling === s.id;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        disabled={!!aiStyling || regenerating}
+                        onClick={() => onAiStyle(s.id)}
+                        title={s.blurb}
+                        className="rounded-lg border border-neutral-700 px-2 py-3 text-center transition hover:border-emerald-500 disabled:opacity-50"
+                      >
+                        {loading ? (
+                          <svg className="animate-spin h-4 w-4 mx-auto text-emerald-300" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                        ) : (
+                          <div className="text-xs font-medium text-neutral-200">
+                            {s.label}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="space-y-2 pt-1">
@@ -914,39 +885,6 @@ function PreviewState({
               </button>
             ))}
           </div>
-        </fieldset>
-      )}
-
-      {/* Beautify */}
-      {!editing && (
-        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
-          <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
-            Beautify
-          </legend>
-          <BeautifySlider
-            label="Smooth skin"
-            value={beautyLocal.smooth}
-            disabled={regenerating}
-            onChange={(v) => setBeautyLocal((b) => ({ ...b, smooth: v }))}
-            onCommit={(v) => onApply({ smooth: v })}
-          />
-          <BeautifySlider
-            label="Brighten eyes"
-            value={beautyLocal.eyes}
-            disabled={regenerating}
-            onChange={(v) => setBeautyLocal((b) => ({ ...b, eyes: v }))}
-            onCommit={(v) => onApply({ eyes: v })}
-          />
-          <BeautifySlider
-            label="Even skin tone"
-            value={beautyLocal.tone}
-            disabled={regenerating}
-            onChange={(v) => setBeautyLocal((b) => ({ ...b, tone: v }))}
-            onCommit={(v) => onApply({ tone: v })}
-          />
-          <p className="text-[11px] text-neutral-500">
-            Beautify works best on clear, front-facing portraits.
-          </p>
         </fieldset>
       )}
 
@@ -1411,10 +1349,13 @@ function CutlineEditor({
   // One Laplacian relaxation pass on the points under the brush. Repeated
   // passes (swiping back and forth) progressively pull each point toward the
   // midpoint of its neighbours, melting away notches/jaggies.
-  // Smooth the cut line under the brush. Runs several iterations of a
-  // 5-tap (±2) windowed average per pointer event, weighted by a radial
-  // falloff, so a single swipe visibly melts notches/indentations — and
-  // brushing back and forth keeps relaxing the same area until it's smooth.
+  // Smooth (straighten) the cut line under the brush. The cut line is a
+  // dense polygon, so a tiny ±2 average barely moves anything. Instead we
+  // size the smoothing stencil (K) to how many points sit under the brush
+  // and pull each in-brush point toward the midpoint of its neighbours K
+  // steps away — i.e. toward the chord across the dent. Anchors just
+  // outside the brush stay put, so the dent flattens toward the
+  // surrounding line, and brushing back and forth converges to straight.
   function smoothAt(n: [number, number]) {
     const c = canvasRef.current!;
     const cw = c.width;
@@ -1422,8 +1363,21 @@ function CutlineEditor({
     const r = brushRadiusPx();
     const len = ptsRef.current.length;
     if (len < 7) return;
-    let pts = ptsRef.current;
-    const ITER = 5;
+
+    const src0 = ptsRef.current;
+    let inCount = 0;
+    for (let i = 0; i < len; i++) {
+      const dx = (src0[i][0] - n[0]) * cw;
+      const dy = (src0[i][1] - n[1]) * ch;
+      if (Math.hypot(dx, dy) <= r) inCount++;
+    }
+    if (inCount < 2) return;
+    // Stencil spans roughly a third of the in-brush run (capped so the
+    // brush can't reach all the way around small loops).
+    const K = Math.max(2, Math.min(Math.floor(len / 3), Math.round(inCount / 3)));
+
+    let pts = src0;
+    const ITER = 8;
     for (let it = 0; it < ITER; it++) {
       const src = pts;
       const out = src.slice() as [number, number][];
@@ -1435,13 +1389,11 @@ function CutlineEditor({
         if (dist > r) continue;
         touched = true;
         const w = 1 - dist / r; // 1 at centre → 0 at edge
-        const a = src[(i - 2 + len) % len];
-        const b = src[(i - 1 + len) % len];
-        const d = src[(i + 1) % len];
-        const e = src[(i + 2) % len];
-        const ax = (a[0] + b[0] + src[i][0] + d[0] + e[0]) / 5;
-        const ay = (a[1] + b[1] + src[i][1] + d[1] + e[1]) / 5;
-        const lambda = Math.min(0.9, 0.85 * w);
+        const a = src[(i - K + len) % len];
+        const b = src[(i + K) % len];
+        const ax = (a[0] + b[0]) / 2;
+        const ay = (a[1] + b[1]) / 2;
+        const lambda = Math.min(0.92, 0.85 * w);
         out[i] = [
           src[i][0] + (ax - src[i][0]) * lambda,
           src[i][1] + (ay - src[i][1]) * lambda,

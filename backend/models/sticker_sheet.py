@@ -116,6 +116,16 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     """Title font size in mm."""
 
+    sub_sheet_title_color: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True, default="#000000"
+    )
+    """Title text colour (hex)."""
+
+    sub_sheet_title_bold: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True, default=False
+    )
+    """Whether the title text is bold."""
+
     sticker_align_h: Mapped[Optional[str]] = mapped_column(
         String(10), nullable=True, default="center"
     )

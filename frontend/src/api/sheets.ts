@@ -46,6 +46,8 @@ export interface StickerSheet {
   sub_sheet_title: string | null;
   sub_sheet_title_font: string | null;
   sub_sheet_title_size_mm: number | null;
+  sub_sheet_title_color: string | null;
+  sub_sheet_title_bold: boolean | null;
   sticker_align_h: string | null;
   sticker_align_v: string | null;
   sub_sheet_bleed_mm: number | null;

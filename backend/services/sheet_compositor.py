@@ -50,6 +50,8 @@ class SheetConfig:
     sticker_align_h: str = "center"
     sticker_align_v: str = "top"
     sub_sheet_bleed_mm: float = 0.0
+    sub_sheet_title: str | None = None
+    sub_sheet_title_size_mm: float = 5.0
 
 
 SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
@@ -91,6 +93,12 @@ def auto_layout(
         # Orient sticker for best fit within the sub-sheet
         usable_w = sub_w - 2 * padding
         usable_h = sub_h - 2 * padding
+
+        # Reserve space for title at the top (title height + 3mm gap minimum)
+        title_offset = 0.0
+        if config.sub_sheet_title:
+            title_offset = max(config.sub_sheet_title_size_mm + 3.0, 3.0)
+            usable_h -= title_offset
 
         if orientation == "auto":
             cols_h = max(1, int((usable_w + sticker_gap) / (sw + sticker_gap)))
@@ -144,14 +152,14 @@ def auto_layout(
                 else:
                     offset_x = padding
 
-                # Vertical alignment offset
+                # Vertical alignment offset (shifted down by title_offset)
                 align_v = config.sticker_align_v
                 if align_v == "center":
-                    offset_y = padding + (usable_h - actual_block_h) / 2
+                    offset_y = padding + title_offset + (usable_h - actual_block_h) / 2
                 elif align_v == "bottom":
-                    offset_y = padding + (usable_h - actual_block_h)
+                    offset_y = padding + title_offset + (usable_h - actual_block_h)
                 else:
-                    offset_y = padding
+                    offset_y = padding + title_offset
 
                 for r in range(stickers_per_row):
                     for c in range(stickers_per_col):

@@ -84,6 +84,8 @@ class SheetIn(BaseModel):
     sub_sheet_title: str | None = None
     sub_sheet_title_font: str | None = "Inter"
     sub_sheet_title_size_mm: float | None = 5.0
+    sub_sheet_title_color: str | None = "#000000"
+    sub_sheet_title_bold: bool | None = False
     sticker_align_h: str | None = "center"
     sticker_align_v: str | None = "top"
     sub_sheet_bleed_mm: float | None = 0.0
@@ -113,6 +115,8 @@ class SheetOut(BaseModel):
     sub_sheet_title: str | None = None
     sub_sheet_title_font: str | None = None
     sub_sheet_title_size_mm: float | None = None
+    sub_sheet_title_color: str | None = None
+    sub_sheet_title_bold: bool | None = None
     sticker_align_h: str | None = None
     sticker_align_v: str | None = None
     sub_sheet_bleed_mm: float | None = None
@@ -266,6 +270,8 @@ def create_sheet(
         sub_sheet_title=payload.sub_sheet_title,
         sub_sheet_title_font=payload.sub_sheet_title_font,
         sub_sheet_title_size_mm=payload.sub_sheet_title_size_mm,
+        sub_sheet_title_color=payload.sub_sheet_title_color,
+        sub_sheet_title_bold=payload.sub_sheet_title_bold,
         sticker_align_h=payload.sticker_align_h,
         sticker_align_v=payload.sticker_align_v,
         sub_sheet_bleed_mm=payload.sub_sheet_bleed_mm,
@@ -310,6 +316,8 @@ def update_sheet(
     sheet.sub_sheet_title = payload.sub_sheet_title
     sheet.sub_sheet_title_font = payload.sub_sheet_title_font
     sheet.sub_sheet_title_size_mm = payload.sub_sheet_title_size_mm
+    sheet.sub_sheet_title_color = payload.sub_sheet_title_color
+    sheet.sub_sheet_title_bold = payload.sub_sheet_title_bold
     sheet.sticker_align_h = payload.sticker_align_h
     sheet.sticker_align_v = payload.sticker_align_v
     sheet.sub_sheet_bleed_mm = payload.sub_sheet_bleed_mm
@@ -375,6 +383,8 @@ def run_auto_layout(
         sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
         sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
+        sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
+        sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
     )
 
     result = auto_layout(
@@ -456,6 +466,8 @@ def export_sheet_pdf(
         sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
         sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
+        sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
+        sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
     )
 
     placements_typed = [
@@ -536,6 +548,8 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         sub_sheet_title=getattr(s, "sub_sheet_title", None),
         sub_sheet_title_font=getattr(s, "sub_sheet_title_font", None),
         sub_sheet_title_size_mm=getattr(s, "sub_sheet_title_size_mm", None),
+        sub_sheet_title_color=getattr(s, "sub_sheet_title_color", None),
+        sub_sheet_title_bold=getattr(s, "sub_sheet_title_bold", None),
         sticker_align_h=getattr(s, "sticker_align_h", "center"),
         sticker_align_v=getattr(s, "sticker_align_v", "top"),
         sub_sheet_bleed_mm=getattr(s, "sub_sheet_bleed_mm", 0.0),
@@ -565,7 +579,7 @@ async def upload_bg_image(
     ext = (file.filename or "bg.png").rsplit(".", 1)[-1].lower()
     r2_key = f"sheets/{sheet.id}/bg.{ext}"
 
-    storage.upload(r2_key, content, content_type=file.content_type or "image/png")
+    storage.put_bytes(r2_key, content, content_type=file.content_type or "image/png")
 
     sheet.sub_sheet_bg_r2_key = r2_key
     url = storage.presigned_get(r2_key, expires_in=3600)

@@ -324,6 +324,7 @@ def run_auto_layout(
         registration_type=sheet.registration_type,
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
+        sub_sheet_size=sheet.sub_sheet_size,
     )
 
     result = auto_layout(
@@ -399,6 +400,7 @@ def export_sheet_pdf(
         registration_type=sheet.registration_type,
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
+        sub_sheet_size=sheet.sub_sheet_size,
     )
 
     placements_typed = [

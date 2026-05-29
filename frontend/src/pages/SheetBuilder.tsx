@@ -73,15 +73,16 @@ export default function SheetBuilder() {
     const w = activeSheet.media_width_mm * scale;
     const h = activeSheet.media_height_mm * scale;
 
-    canvas.width = Math.min(w + 80, window.innerWidth - 360);
-    canvas.height = Math.min(h + 80, 800);
+    const rulerSize = 40;
+    canvas.width = w + rulerSize + 20;
+    canvas.height = h + rulerSize + 20;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const ox = 40 + _panOffset.x;
-    const oy = 40 + _panOffset.y;
+    const ox = rulerSize + _panOffset.x;
+    const oy = rulerSize + _panOffset.y;
 
-    // Media background
+    // Media background (the roll/full sheet)
     ctx.fillStyle = "#ffffff";
     ctx.shadowColor = "rgba(0,0,0,0.15)";
     ctx.shadowBlur = 12;
@@ -92,6 +93,11 @@ export default function SheetBuilder() {
     ctx.strokeStyle = "#d4d4d8";
     ctx.lineWidth = 1;
     ctx.strokeRect(ox, oy, w, h);
+
+    // Draw sub-sheet groups (A4/A5 sections with crop marks)
+    if (activeSheet.show_crop_marks && activeSheet.sub_sheet_size) {
+      _drawSubSheets(ctx, ox, oy, scale, activeSheet);
+    }
 
     // Draw placements
     if (activeSheet.placements) {
@@ -411,18 +417,42 @@ export default function SheetBuilder() {
                   className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                 />
               </SettingRow>
-              <SettingRow label="Crop marks">
-                <input
-                  type="checkbox"
-                  checked={activeSheet.show_crop_marks}
+              <SettingRow label="Sub-sheet size">
+                <select
+                  value={activeSheet.sub_sheet_size ?? ""}
                   onChange={(e) =>
                     setActiveSheet((s) =>
-                      s ? { ...s, show_crop_marks: e.target.checked } : null
+                      s
+                        ? {
+                            ...s,
+                            sub_sheet_size: e.target.value || null,
+                            show_crop_marks: !!e.target.value,
+                          }
+                        : null
                     )
                   }
-                  className="rounded"
-                />
+                  className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                >
+                  <option value="">None (full roll)</option>
+                  <option value="a5">A5 (148 × 210mm)</option>
+                  <option value="a4">A4 (210 × 297mm)</option>
+                  <option value="a3">A3 (297 × 420mm)</option>
+                </select>
               </SettingRow>
+              {activeSheet.sub_sheet_size && (
+                <SettingRow label="Crop marks">
+                  <input
+                    type="checkbox"
+                    checked={activeSheet.show_crop_marks}
+                    onChange={(e) =>
+                      setActiveSheet((s) =>
+                        s ? { ...s, show_crop_marks: e.target.checked } : null
+                      )
+                    }
+                    className="rounded"
+                  />
+                </SettingRow>
+              )}
               <SettingRow label="Registration">
                 <select
                   value={activeSheet.registration_type ?? ""}
@@ -664,6 +694,75 @@ function SavePresetForm({
 }
 
 // ---------- Canvas helpers ----------
+
+const SUB_SHEET_SIZES: Record<string, { w: number; h: number }> = {
+  a5: { w: 148, h: 210 },
+  a4: { w: 210, h: 297 },
+  a3: { w: 297, h: 420 },
+};
+
+function _drawSubSheets(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  scale: number,
+  sheet: StickerSheet
+) {
+  const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
+  if (!size) return;
+
+  const subW = size.w * scale;
+  const subH = size.h * scale;
+  const gap = sheet.gap_mm * scale;
+  const sheetW = sheet.media_width_mm * scale;
+  const sheetH = sheet.media_height_mm * scale;
+
+  const cols = Math.floor((sheetW + gap) / (subW + gap));
+  const rows = Math.floor((sheetH + gap) / (subH + gap));
+
+  const markLen = 4 * scale;
+  const markOffset = 1.5 * scale;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const sx = col * (subW + gap);
+      const sy = row * (subH + gap);
+
+      // Sub-sheet outline (dashed)
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = "#a3a3a3";
+      ctx.lineWidth = 0.75;
+      ctx.strokeRect(ox + sx, oy + sy, subW, subH);
+      ctx.setLineDash([]);
+
+      // Crop marks at the 4 corners of this sub-sheet
+      if (sheet.show_crop_marks) {
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 0.75;
+        const corners = [
+          [sx, sy],
+          [sx + subW, sy],
+          [sx, sy + subH],
+          [sx + subW, sy + subH],
+        ];
+        for (const [cx, cy] of corners) {
+          // Horizontal mark
+          const hDir = cx === sx ? -1 : 1;
+          ctx.beginPath();
+          ctx.moveTo(ox + cx + hDir * markOffset, oy + cy);
+          ctx.lineTo(ox + cx + hDir * (markOffset + markLen), oy + cy);
+          ctx.stroke();
+          // Vertical mark
+          const vDir = cy === sy ? -1 : 1;
+          ctx.beginPath();
+          ctx.moveTo(ox + cx, oy + cy + vDir * markOffset);
+          ctx.lineTo(ox + cx, oy + cy + vDir * (markOffset + markLen));
+          ctx.stroke();
+        }
+      }
+    }
+  }
+}
 
 function _drawRulers(
   ctx: CanvasRenderingContext2D,

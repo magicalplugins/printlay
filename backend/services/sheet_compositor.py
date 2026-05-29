@@ -44,6 +44,14 @@ class SheetConfig:
     registration_type: str | None = None
     max_zone_length_mm: float | None = None
     mark_offset_mm: float = 5.0
+    sub_sheet_size: str | None = None
+
+
+SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
+    "a5": (148.0, 210.0),
+    "a4": (210.0, 297.0),
+    "a3": (297.0, 420.0),
+}
 
 
 def auto_layout(
@@ -56,17 +64,85 @@ def auto_layout(
 ) -> LayoutResult:
     """Pack `quantity` stickers onto the media, returning placement coords.
 
-    For roll mode, height grows to fit. For sheet mode, height is fixed
-    and placements are clipped to available space.
+    If sub_sheet_size is set, stickers are packed into sub-sheet groups
+    (A4/A5/A3) which tile across the roll width and down the length.
+    Each sub-sheet gets crop marks for guillotining.
 
-    If registration marks are configured with a max_zone_length_mm, stickers
-    are grouped into zones with mark gaps between them.
+    For roll mode without sub-sheets, height grows to fit.
     """
-    margin = config.edge_margin_mm
     gap = config.gap_mm
-    available_w = config.media_width_mm - 2 * margin
+    margin = config.edge_margin_mm
 
     sw, sh = sticker_width_mm, sticker_height_mm
+
+    # Sub-sheet grouping mode
+    if config.sub_sheet_size and config.sub_sheet_size in SUB_SHEET_SIZES:
+        sub_w, sub_h = SUB_SHEET_SIZES[config.sub_sheet_size]
+        inner_margin = 3.0  # margin inside each sub-sheet
+
+        # Orient sticker for best fit within the sub-sheet
+        if orientation == "auto":
+            cols_h = max(1, int((sub_w - 2 * inner_margin + gap) / (sw + gap)))
+            rows_h = max(1, int((sub_h - 2 * inner_margin + gap) / (sh + gap)))
+            cols_v = max(1, int((sub_w - 2 * inner_margin + gap) / (sh + gap)))
+            rows_v = max(1, int((sub_h - 2 * inner_margin + gap) / (sw + gap)))
+            if cols_v * rows_v > cols_h * rows_h:
+                sw, sh = sh, sw
+        elif orientation == "horizontal":
+            if sw > sh:
+                sw, sh = sh, sw
+        elif orientation == "vertical":
+            if sh > sw:
+                sw, sh = sh, sw
+
+        stickers_per_col = max(1, int((sub_w - 2 * inner_margin + gap) / (sw + gap)))
+        stickers_per_row = max(1, int((sub_h - 2 * inner_margin + gap) / (sh + gap)))
+        per_sub = stickers_per_col * stickers_per_row
+
+        sub_sheets_needed = math.ceil(quantity / per_sub)
+        sub_cols = max(1, int((config.media_width_mm + gap) / (sub_w + gap)))
+        sub_rows = math.ceil(sub_sheets_needed / sub_cols)
+
+        placements: list[Placement] = []
+        sticker_idx = 0
+
+        for sub_row in range(sub_rows):
+            for sub_col in range(sub_cols):
+                if sticker_idx >= quantity:
+                    break
+                sub_x = sub_col * (sub_w + gap)
+                sub_y = sub_row * (sub_h + gap)
+
+                for r in range(stickers_per_row):
+                    for c in range(stickers_per_col):
+                        if sticker_idx >= quantity:
+                            break
+                        x = sub_x + inner_margin + c * (sw + gap)
+                        y = sub_y + inner_margin + r * (sh + gap)
+                        placements.append(Placement(
+                            asset_id=asset_id,
+                            x_mm=round(x, 2),
+                            y_mm=round(y, 2),
+                            rotation_deg=90 if (sw != sticker_width_mm) else 0,
+                        ))
+                        sticker_idx += 1
+                    if sticker_idx >= quantity:
+                        break
+            if sticker_idx >= quantity:
+                break
+
+        total_height = sub_rows * (sub_h + gap) - gap
+        return LayoutResult(
+            placements=placements,
+            total_height_mm=total_height,
+            cols=stickers_per_col,
+            rows=stickers_per_row,
+            zones=sub_sheets_needed,
+        )
+
+    # Direct layout on roll (no sub-sheets)
+    available_w = config.media_width_mm - 2 * margin
+
     if orientation == "auto":
         cols_h = max(1, int((available_w + gap) / (sw + gap)))
         cols_v = max(1, int((available_w + gap) / (sh + gap)))
@@ -96,7 +172,7 @@ def auto_layout(
             rows_per_zone = total_rows
             zones = 1
 
-        placements: list[Placement] = []
+        placements = []
         sticker_idx = 0
         y_cursor = margin
 
@@ -238,44 +314,56 @@ def _draw_crop_marks(
     config: SheetConfig,
     total_height_mm: float,
 ) -> None:
-    """Draw crop marks at sheet edges."""
-    w_pt = config.media_width_mm * PT_PER_MM
-    h_pt = total_height_mm * PT_PER_MM
-    margin_pt = config.edge_margin_mm * PT_PER_MM
+    """Draw crop marks around sub-sheet groups (A4/A5/A3) within the roll.
+    
+    Crop marks appear at the corners of each sub-sheet rectangle, allowing
+    the printed roll to be guillotined into individual smaller sheets.
+    If no sub_sheet_size is set, no crop marks are drawn.
+    """
+    size = SUB_SHEET_SIZES.get(config.sub_sheet_size or "")
+    if not size:
+        return
+
+    sub_w_mm, sub_h_mm = size
+    gap = config.gap_mm
+    sheet_w_mm = config.media_width_mm
+    sheet_h_mm = total_height_mm
+
+    cols = int((sheet_w_mm + gap) / (sub_w_mm + gap))
+    rows = int((sheet_h_mm + gap) / (sub_h_mm + gap))
+
     mark_len = 3.0 * PT_PER_MM
-    offset = 2.0 * PT_PER_MM
-
+    offset = 1.5 * PT_PER_MM
     color = (0, 0, 0)
-    width = 0.25
+    width = 0.3
 
-    corners = [
-        (margin_pt, margin_pt),
-        (w_pt - margin_pt, margin_pt),
-        (margin_pt, h_pt - margin_pt),
-        (w_pt - margin_pt, h_pt - margin_pt),
-    ]
+    for row in range(rows):
+        for col in range(cols):
+            sx_pt = col * (sub_w_mm + gap) * PT_PER_MM
+            sy_pt = row * (sub_h_mm + gap) * PT_PER_MM
+            sw_pt = sub_w_mm * PT_PER_MM
+            sh_pt = sub_h_mm * PT_PER_MM
 
-    for cx, cy in corners:
-        page.draw_line(
-            pymupdf.Point(cx - mark_len - offset, cy),
-            pymupdf.Point(cx - offset, cy),
-            color=color, width=width,
-        )
-        page.draw_line(
-            pymupdf.Point(cx + offset, cy),
-            pymupdf.Point(cx + mark_len + offset, cy),
-            color=color, width=width,
-        )
-        page.draw_line(
-            pymupdf.Point(cx, cy - mark_len - offset),
-            pymupdf.Point(cx, cy - offset),
-            color=color, width=width,
-        )
-        page.draw_line(
-            pymupdf.Point(cx, cy + offset),
-            pymupdf.Point(cx, cy + mark_len + offset),
-            color=color, width=width,
-        )
+            corners = [
+                (sx_pt, sy_pt),
+                (sx_pt + sw_pt, sy_pt),
+                (sx_pt, sy_pt + sh_pt),
+                (sx_pt + sw_pt, sy_pt + sh_pt),
+            ]
+
+            for cx, cy in corners:
+                h_dir = -1 if cx == sx_pt else 1
+                page.draw_line(
+                    pymupdf.Point(cx + h_dir * offset, cy),
+                    pymupdf.Point(cx + h_dir * (offset + mark_len), cy),
+                    color=color, width=width,
+                )
+                v_dir = -1 if cy == sy_pt else 1
+                page.draw_line(
+                    pymupdf.Point(cx, cy + v_dir * offset),
+                    pymupdf.Point(cx, cy + v_dir * (offset + mark_len)),
+                    color=color, width=width,
+                )
 
 
 def _draw_registration_marks(

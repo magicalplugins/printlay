@@ -10,29 +10,40 @@ primary_region = "lhr"
 [env]
   ENVIRONMENT = "production"
 
-[http_service]
+# Expanded service config (equivalent to [http_service]) so we can use a TCP
+# health check instead of HTTP. Heavy sticker/image jobs are CPU-bound and can
+# peg the (shared) CPU for several seconds; an HTTP GET /api/health check then
+# times out, Fly marks the instance unhealthy, and the proxy drops ALL traffic
+# ("no healthy instances" → Cloudflare 524). A TCP check only verifies the port
+# is listening (the kernel completes the handshake even while Python is busy),
+# so the machine stays in rotation through CPU spikes — requests get slow under
+# load instead of the entire site going down.
+[[services]]
   internal_port = 8000
-  force_https = true
+  protocol = "tcp"
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
   max_machines_running = 5
 
-  [http_service.concurrency]
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [services.concurrency]
     type = "requests"
     soft_limit = 25
     hard_limit = 50
 
-# Tolerant health check: heavy sticker/image jobs can briefly peg the CPU.
-# A short timeout used to flap the check and make the Fly proxy drop ALL
-# traffic ("no healthy instances" → Cloudflare 524). Longer timeout + grace
-# keeps the machine in rotation through CPU spikes instead of going dark.
-[[http_service.checks]]
-  grace_period = "30s"
-  interval = "15s"
-  method = "GET"
-  timeout = "15s"
-  path = "/api/health"
+  [[services.tcp_checks]]
+    grace_period = "30s"
+    interval = "15s"
+    timeout = "10s"
 
 [[vm]]
   size = "shared-cpu-2x"

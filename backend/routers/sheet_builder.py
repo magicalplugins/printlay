@@ -78,6 +78,10 @@ class SheetIn(BaseModel):
     mark_offset_mm: float = Field(default=5.0, ge=0)
     placements: list[PlacementIn] | None = None
     cutter_preset_id: uuid.UUID | None = None
+    sub_sheet_fill_color: str | None = None
+    sub_sheet_title: str | None = None
+    sub_sheet_title_font: str | None = "Inter"
+    sub_sheet_title_size_mm: float | None = 5.0
 
 
 class SheetOut(BaseModel):
@@ -97,6 +101,11 @@ class SheetOut(BaseModel):
     mark_offset_mm: float
     placements: list[dict] | None
     cutter_preset_id: uuid.UUID | None
+    sub_sheet_fill_color: str | None = None
+    sub_sheet_bg_url: str | None = None
+    sub_sheet_title: str | None = None
+    sub_sheet_title_font: str | None = None
+    sub_sheet_title_size_mm: float | None = None
     output_url: str | None = None
 
 
@@ -241,6 +250,10 @@ def create_sheet(
         if payload.placements
         else [],
         cutter_preset_id=payload.cutter_preset_id,
+        sub_sheet_fill_color=payload.sub_sheet_fill_color,
+        sub_sheet_title=payload.sub_sheet_title,
+        sub_sheet_title_font=payload.sub_sheet_title_font,
+        sub_sheet_title_size_mm=payload.sub_sheet_title_size_mm,
     )
     db.add(sheet)
     db.commit()
@@ -276,6 +289,10 @@ def update_sheet(
         else sheet.placements
     )
     sheet.cutter_preset_id = payload.cutter_preset_id
+    sheet.sub_sheet_fill_color = payload.sub_sheet_fill_color
+    sheet.sub_sheet_title = payload.sub_sheet_title
+    sheet.sub_sheet_title_font = payload.sub_sheet_title_font
+    sheet.sub_sheet_title_size_mm = payload.sub_sheet_title_size_mm
     db.commit()
     db.refresh(sheet)
     return _sheet_to_out(sheet)
@@ -463,6 +480,12 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
             output_url = storage.presigned_get(s.output_r2_key, expires_in=3600)
         except Exception:
             pass
+    bg_url = None
+    if getattr(s, "sub_sheet_bg_r2_key", None):
+        try:
+            bg_url = storage.presigned_get(s.sub_sheet_bg_r2_key, expires_in=3600)
+        except Exception:
+            pass
     return SheetOut(
         id=s.id,
         name=s.name,
@@ -480,5 +503,10 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         mark_offset_mm=s.mark_offset_mm,
         placements=s.placements,
         cutter_preset_id=s.cutter_preset_id,
+        sub_sheet_fill_color=getattr(s, "sub_sheet_fill_color", None),
+        sub_sheet_bg_url=bg_url,
+        sub_sheet_title=getattr(s, "sub_sheet_title", None),
+        sub_sheet_title_font=getattr(s, "sub_sheet_title_font", None),
+        sub_sheet_title_size_mm=getattr(s, "sub_sheet_title_size_mm", None),
         output_url=output_url,
     )

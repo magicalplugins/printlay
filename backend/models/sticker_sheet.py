@@ -92,3 +92,26 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     output_r2_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     """R2 key for the last generated PDF export."""
+
+    sub_sheet_bg_r2_key: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    """R2 key for sub-sheet background image."""
+
+    sub_sheet_bg_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    """Presigned URL for the sub-sheet background (cached for frontend)."""
+
+    sub_sheet_fill_color: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    """CSS gradient or solid color for sub-sheet background, e.g.
+    '#ff6600' or 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'."""
+
+    sub_sheet_title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    """Title text displayed at the top of each sub-sheet."""
+
+    sub_sheet_title_font: Mapped[Optional[str]] = mapped_column(
+        String(60), nullable=True, default="Inter"
+    )
+    """Font family for the sub-sheet title."""
+
+    sub_sheet_title_size_mm: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=5.0
+    )
+    """Title font size in mm."""

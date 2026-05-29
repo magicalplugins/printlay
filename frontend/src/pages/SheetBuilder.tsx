@@ -55,12 +55,44 @@ export default function SheetBuilder() {
   async function loadAssets() {
     try {
       const cats = await listCategories();
-      if (cats.length > 0) {
-        const all = await listAssets(cats[0].id);
-        setAssets(all);
+      const allAssets: Asset[] = [];
+      for (const cat of cats) {
+        const catAssets = await listAssets(cat.id);
+        allAssets.push(...catAssets);
       }
+      setAssets(allAssets);
     } catch {}
   }
+
+  // Load thumbnail images for canvas rendering
+  const [assetImages, setAssetImages] = useState<Record<string, HTMLImageElement>>({});
+
+  useEffect(() => {
+    if (!assets.length) return;
+    const loaded: Record<string, HTMLImageElement> = {};
+    let pending = 0;
+
+    for (const a of assets) {
+      const url = a.thumbnail_url || a.preview_url;
+      if (!url || loaded[a.id]) continue;
+      pending++;
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        loaded[a.id] = img;
+        pending--;
+        if (pending === 0) setAssetImages({ ...loaded });
+      };
+      img.onerror = () => {
+        pending--;
+        if (pending === 0) setAssetImages({ ...loaded });
+      };
+      img.src = url;
+    }
+    if (pending === 0 && Object.keys(loaded).length > 0) {
+      setAssetImages(loaded);
+    }
+  }, [assets]);
 
   // Canvas draw
   const draw = useCallback(() => {
@@ -115,11 +147,26 @@ export default function SheetBuilder() {
         const rw = p.rotation_deg === 90 || p.rotation_deg === 270 ? ph : pw;
         const rh = p.rotation_deg === 90 || p.rotation_deg === 270 ? pw : ph;
 
-        // Sticker fill
-        ctx.fillStyle = "#f3f0ff";
-        ctx.fillRect(px, py, rw, rh);
+        // Draw actual thumbnail or fallback rectangle
+        const img = assetImages[p.asset_id];
+        if (img) {
+          ctx.save();
+          if (p.rotation_deg) {
+            ctx.translate(px + rw / 2, py + rh / 2);
+            ctx.rotate((p.rotation_deg * Math.PI) / 180);
+            ctx.drawImage(img, -pw / 2, -ph / 2, pw, ph);
+          } else {
+            ctx.drawImage(img, px, py, rw, rh);
+          }
+          ctx.restore();
+        } else {
+          ctx.fillStyle = "#f3f0ff";
+          ctx.fillRect(px, py, rw, rh);
+        }
+
+        // Sticker border
         ctx.strokeStyle = "#7c3aed";
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 0.5;
         ctx.strokeRect(px, py, rw, rh);
 
         // Dashed cut line
@@ -143,7 +190,7 @@ export default function SheetBuilder() {
     if (activeSheet.registration_type) {
       _drawRegMarksPreview(ctx, ox, oy, w, h, scale, activeSheet);
     }
-  }, [activeSheet, zoom, _panOffset, assets]);
+  }, [activeSheet, zoom, _panOffset, assets, assetImages]);
 
   useEffect(() => {
     draw();
@@ -548,6 +595,120 @@ export default function SheetBuilder() {
             </div>
           </section>
 
+          {/* Sub-sheet customisation */}
+          {activeSheet.sub_sheet_size && (
+            <section>
+              <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
+                Sub-Sheet Design
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Fill colour / gradient
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="#ffffff or linear-gradient(...)"
+                    value={activeSheet.sub_sheet_fill_color ?? ""}
+                    onChange={(e) =>
+                      setActiveSheet((s) =>
+                        s
+                          ? {
+                              ...s,
+                              sub_sheet_fill_color: e.target.value || null,
+                            }
+                          : null
+                      )
+                    }
+                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                  />
+                  {activeSheet.sub_sheet_fill_color && (
+                    <div
+                      className="mt-1 h-4 rounded border border-neutral-700"
+                      style={{
+                        background: activeSheet.sub_sheet_fill_color,
+                      }}
+                    />
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Title
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Sheet title..."
+                    value={activeSheet.sub_sheet_title ?? ""}
+                    onChange={(e) =>
+                      setActiveSheet((s) =>
+                        s
+                          ? { ...s, sub_sheet_title: e.target.value || null }
+                          : null
+                      )
+                    }
+                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                  />
+                </div>
+                {activeSheet.sub_sheet_title && (
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="block text-xs text-neutral-400 mb-1">
+                        Font
+                      </label>
+                      <select
+                        value={activeSheet.sub_sheet_title_font ?? "Inter"}
+                        onChange={(e) =>
+                          setActiveSheet((s) =>
+                            s
+                              ? {
+                                  ...s,
+                                  sub_sheet_title_font: e.target.value,
+                                }
+                              : null
+                          )
+                        }
+                        className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                      >
+                        <option value="Inter">Inter</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Helvetica">Helvetica</option>
+                        <option value="Georgia">Georgia</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                        <option value="Comic Sans MS">Comic Sans MS</option>
+                      </select>
+                    </div>
+                    <div className="w-16">
+                      <label className="block text-xs text-neutral-400 mb-1">
+                        Size
+                      </label>
+                      <input
+                        type="number"
+                        min={2}
+                        max={20}
+                        step={0.5}
+                        value={activeSheet.sub_sheet_title_size_mm ?? 5}
+                        onChange={(e) =>
+                          setActiveSheet((s) =>
+                            s
+                              ? {
+                                  ...s,
+                                  sub_sheet_title_size_mm: Number(
+                                    e.target.value
+                                  ),
+                                }
+                              : null
+                          )
+                        }
+                        className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Auto-layout */}
           <section>
             <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
@@ -778,6 +939,31 @@ function _drawSubSheets(
     for (let col = 0; col < cols; col++) {
       const sx = edge + col * (subW + subGap);
       const sy = edge + row * (subH + subGap);
+
+      // Fill colour/gradient background (behind stickers)
+      if (sheet.sub_sheet_fill_color) {
+        ctx.save();
+        ctx.fillStyle = sheet.sub_sheet_fill_color;
+        ctx.fillRect(ox + sx, oy + sy, subW, subH);
+        ctx.restore();
+      }
+
+      // Title at top of sub-sheet (inside padding area)
+      if (sheet.sub_sheet_title) {
+        const fontSize = (sheet.sub_sheet_title_size_mm ?? 5) * scale;
+        const font = sheet.sub_sheet_title_font ?? "Inter";
+        ctx.save();
+        ctx.font = `${fontSize}px ${font}, sans-serif`;
+        ctx.fillStyle = "#1a1a1a";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(
+          sheet.sub_sheet_title,
+          ox + sx + subW / 2,
+          oy + sy + padding * 0.2
+        );
+        ctx.restore();
+      }
 
       // Sub-sheet outline (dashed)
       ctx.setLineDash([4, 3]);

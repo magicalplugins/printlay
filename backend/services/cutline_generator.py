@@ -101,12 +101,21 @@ def generate_cutline(
 
 def _head_region_mask(img: Image.Image) -> "np.ndarray | None":
     """Build a binary mask limiting the subject to the head region for a
-    face sticker: from the chin up through the top of the hair.
+    face sticker: an oval from the top of the hair down to just under the
+    chin, excluding the neck/shoulders.
 
     Returns a uint8 (0/255) mask the same size as the image, or None if no
-    face is detected. The mask is the subject alpha intersected with an
-    ellipse sized around the detected face box and extended upward to take
-    in the hair and slightly below to keep the chin/jaw.
+    face is detected.
+
+    Strategy — keep the cut on par with the main background removal:
+      * ABOVE the chin we keep the *full* subject alpha untouched, so the
+        hair is exactly as crisp as the standard cutout (no ellipse slicing
+        through it, which is what made earlier face stickers look ragged).
+      * BELOW the chin we close the shape with a rounded chin/jaw cap so the
+        bottom curves under the chin into a smooth oval rather than running
+        down the neck onto the shoulders.
+    The downstream contour pipeline then dilates + smooths this into a
+    cut-friendly path just like every other sticker.
     """
     try:
         import cv2  # type: ignore[import-untyped]
@@ -137,33 +146,42 @@ def _head_region_mask(img: Image.Image) -> "np.ndarray | None":
         # Largest detected face = primary subject.
         fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
 
-        # Ellipse covering the head. The Haar box spans roughly brow→chin
-        # and cheek→cheek, so we extend generously upward for the hair/top
-        # of head, modestly sideways for ears/hair, and a touch below for
-        # the chin and a little neck.
-        cx = fx + fw / 2.0
-        top = fy - fh * 0.85          # above hairline
-        bottom = fy + fh * 1.30       # below chin / a little neck
-        ell_cy = (top + bottom) / 2.0
-        ell_ry = (bottom - top) / 2.0
-        ell_rx = fw * 0.95            # half-width (ear to ear + hair)
-
-        region = Image.new("L", (w_img, h_img), 0)
-        ImageDraw.Draw(region).ellipse(
-            [cx - ell_rx, ell_cy - ell_ry, cx + ell_rx, ell_cy + ell_ry],
-            fill=255,
-        )
-        # Soften the ellipse edge so the intersection with hair looks natural.
-        region = region.filter(ImageFilter.GaussianBlur(radius=max(2, int(fw * 0.03))))
-        region_arr = (np.array(region) > 80).astype(np.uint8) * 255
-
         alpha = np.array(img.split()[3])
         subject = (alpha > 20).astype(np.uint8) * 255
 
-        head = np.minimum(subject, region_arr)
+        cx = fx + fw / 2.0
+        # The Haar box bottom sits roughly at the chin; cut just below it.
+        chin_y = fy + fh * 1.02
+
+        # 1) Keep the full, high-quality cutout for everything above the chin
+        #    (hair + face, untouched → identical quality to the main system).
+        head = subject.copy()
+        cut_row = int(round(chin_y))
+        if cut_row < 0:
+            return None
+        if cut_row < h_img:
+            head[cut_row:, :] = 0
+
+        # 2) Add a rounded chin/jaw cap below the cut line so the underside
+        #    of the sticker curves smoothly under the chin (oval), limited to
+        #    ~jaw width and to the actual silhouette so the neck/shoulders are
+        #    never pulled in.
+        cap = Image.new("L", (w_img, h_img), 0)
+        cap_rx = fw * 0.55
+        cap_top = fy + fh * 0.78
+        cap_bottom = fy + fh * 1.20
+        cap_cy = (cap_top + cap_bottom) / 2.0
+        cap_ry = (cap_bottom - cap_top) / 2.0
+        ImageDraw.Draw(cap).ellipse(
+            [cx - cap_rx, cap_cy - cap_ry, cx + cap_rx, cap_cy + cap_ry],
+            fill=255,
+        )
+        cap_arr = np.array(cap)
+        head = np.maximum(head, np.minimum(subject, cap_arr))
+
         if int(head.sum()) == 0:
             return None
-        return head
+        return head.astype(np.uint8)
     except Exception:
         return None
 

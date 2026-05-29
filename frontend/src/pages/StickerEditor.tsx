@@ -6,9 +6,12 @@ import {
   regenerateSticker,
   editCutline,
   saveSticker,
+  aiStyleSticker,
+  AI_STYLES,
 } from "../api/sticker";
 import { Category, createCategory, listCategories } from "../api/catalogue";
 import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
+import { useMe } from "../auth/MeProvider";
 
 type Step = "upload" | "options" | "processing" | "preview" | "saving" | "done";
 type CutlineMode = "contour" | "rectangle" | "face";
@@ -16,6 +19,7 @@ type Precision = "tight" | "medium";
 
 export default function StickerEditor() {
   const navigate = useNavigate();
+  const { me } = useMe();
   const [step, setStep] = useState<Step>("upload");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
@@ -145,6 +149,42 @@ export default function StickerEditor() {
     [result]
   );
 
+  // AI illustration styles (cartoon, pencil, …) via the user's OpenAI key.
+  // The stylized image replaces the working cutout, so any filter/beautify
+  // baked onto the old artwork is reset to match the fresh server state.
+  const [aiStyling, setAiStyling] = useState<string | null>(null);
+
+  const handleAiStyle = useCallback(
+    async (style: string) => {
+      if (!result) return;
+      setAiStyling(style);
+      setError(null);
+      try {
+        const border = Math.max(-3, Math.min(6, BASE_OFFSET_MM - tighten));
+        const res = await aiStyleSticker(
+          result.session_id,
+          style,
+          border,
+          3.0,
+          cutlineMode
+        );
+        setResult(res);
+        setFilterId("none");
+        setBakedFilterId("none");
+        setBeautify({ smooth: 0, eyes: 0, tone: 0 });
+      } catch (e: any) {
+        setError(
+          e?.body?.detail ||
+            e?.message ||
+            "AI style failed. Please try again."
+        );
+      } finally {
+        setAiStyling(null);
+      }
+    },
+    [result, tighten, cutlineMode]
+  );
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
@@ -246,6 +286,10 @@ export default function StickerEditor() {
           regenerating={regenerating}
           onApply={applySettings}
           onEditApply={handleEditApply}
+          aiKeySet={!!me?.openai_key_set}
+          aiStyling={aiStyling}
+          onAiStyle={handleAiStyle}
+          onAddKey={() => navigate("/app/settings?tab=preferences")}
           categories={categories}
           categoryId={categoryId}
           setCategoryId={setCategoryId}
@@ -525,6 +569,10 @@ function PreviewState({
   regenerating,
   onApply,
   onEditApply,
+  aiKeySet,
+  aiStyling,
+  onAiStyle,
+  onAddKey,
   categories,
   categoryId,
   setCategoryId,
@@ -551,6 +599,10 @@ function PreviewState({
     tone?: number;
   }) => void;
   onEditApply: (points: [number, number][]) => Promise<void>;
+  aiKeySet: boolean;
+  aiStyling: string | null;
+  onAiStyle: (style: string) => void;
+  onAddKey: () => void;
   categories: Category[];
   categoryId: string | null;
   setCategoryId: (id: string | null) => void;
@@ -722,6 +774,71 @@ function PreviewState({
           <p className="text-[11px] text-neutral-500">
             Changes re-use the removed background — no extra AI credits used.
           </p>
+        </fieldset>
+      )}
+
+      {/* AI styles (OpenAI image-to-image, uses the user's own key) */}
+      {!editing && (
+        <fieldset className="rounded-xl border border-violet-500/30 bg-violet-500/5 p-5 space-y-3">
+          <legend className="px-2 text-xs uppercase tracking-widest text-violet-300/80">
+            AI styles
+          </legend>
+
+          {!aiKeySet ? (
+            <div className="text-sm text-neutral-300 space-y-2">
+              <p>
+                Turn your photo into a polished{" "}
+                <span className="text-white font-medium">cartoon</span>,{" "}
+                <span className="text-white font-medium">pencil sketch</span>,
+                anime, pop-art or watercolour illustration.
+              </p>
+              <p className="text-[12px] text-neutral-400">
+                Add your own OpenAI API key to unlock these — generation runs on
+                your OpenAI account.
+              </p>
+              <button
+                type="button"
+                onClick={onAddKey}
+                className="mt-1 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 transition"
+              >
+                Add OpenAI key in Settings
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                {AI_STYLES.map((s) => {
+                  const loading = aiStyling === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      disabled={!!aiStyling || regenerating}
+                      onClick={() => onAiStyle(s.id)}
+                      title={s.blurb}
+                      className="rounded-lg border border-neutral-700 px-2 py-3 text-center transition hover:border-violet-500 disabled:opacity-50"
+                    >
+                      {loading ? (
+                        <svg className="animate-spin h-4 w-4 mx-auto text-violet-300" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      ) : (
+                        <div className="text-xs font-medium text-neutral-200">
+                          {s.label}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-neutral-500">
+                {aiStyling
+                  ? "Generating your AI style — this can take 20–40 seconds."
+                  : "Redraws the subject and re-cuts around it. Uses your OpenAI credits (~1 image)."}
+              </p>
+            </>
+          )}
         </fieldset>
       )}
 

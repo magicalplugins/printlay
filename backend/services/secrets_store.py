@@ -111,6 +111,30 @@ def encryption_available() -> bool:
     return True
 
 
+def encrypt_value(plaintext: str) -> str:
+    """Fernet-encrypt an arbitrary string (e.g. a per-user API key) and
+    return an ASCII token suitable for storing in a DB column.
+
+    Raises StoreUnavailable if APP_SECRETS_MASTER_KEY is missing."""
+    return _fernet().encrypt(plaintext.encode("utf-8")).decode("ascii")
+
+
+def decrypt_value(token: str | None) -> str | None:
+    """Decrypt a token produced by `encrypt_value`. Returns None on a
+    missing/blank token, a bad token, or a missing master key."""
+    if not token:
+        return None
+    try:
+        fernet = _fernet()
+    except StoreUnavailable:
+        return None
+    try:
+        return fernet.decrypt(token.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError) as exc:
+        log.warning("Failed to decrypt per-user secret: %s (master key rotated?)", exc)
+        return None
+
+
 # ---- public surface ----------------------------------------------------------
 
 

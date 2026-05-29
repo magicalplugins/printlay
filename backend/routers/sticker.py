@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
+from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -359,6 +360,161 @@ def regenerate_sticker(
         except Exception as exc:
             raise HTTPException(
                 status.HTTP_500_INTERNAL_SERVER_ERROR, f"Regeneration failed: {exc}"
+            )
+
+    storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")
+    storage.put_bytes(f"{prefix}/border.png", result.border_png, "image/png")
+
+    cutline_payload = {
+        "points_px": [list(p) for p in result.cutline.points_px],
+        "points_pt": [list(p) for p in result.cutline.points_pt],
+        "width_px": result.cutline.width_px,
+        "height_px": result.cutline.height_px,
+        "width_pt": result.cutline.width_pt,
+        "height_pt": result.cutline.height_pt,
+        "width_mm": result.width_mm,
+        "height_mm": result.height_mm,
+        "work_dpi": result.work_dpi,
+    }
+    storage.put_bytes(
+        f"{prefix}/cutline.json",
+        json.dumps(cutline_payload).encode("utf-8"),
+        "application/json",
+    )
+
+    return ProcessResponse(
+        preview_url=storage.presigned_get(f"{prefix}/preview.png"),
+        border_url=storage.presigned_get(f"{prefix}/border.png"),
+        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
+        width_mm=result.width_mm,
+        height_mm=result.height_mm,
+        bg_type=result.bg_type,
+        removal_method=result.removal_method,
+        session_id=body.session_id,
+        cutline_points=_normalised_points(
+            result.cutline.points_px,
+            result.cutline.width_px,
+            result.cutline.height_px,
+        ),
+        img_w_px=result.cutline.width_px,
+        img_h_px=result.cutline.height_px,
+    )
+
+
+class AIStyleRequest(BaseModel):
+    session_id: str
+    style: str = "cartoon"
+    border_width_mm: float = 2.0
+    bleed_mm: float = 3.0
+    cutline_mode: str = "contour"
+
+
+def _fit_into(stylized_png: bytes, target_w: int, target_h: int) -> bytes:
+    """Scale the AI image to fit inside (target_w, target_h) without
+    distortion and centre it on a transparent canvas of exactly that size.
+
+    Keeps the sticker's pixel space (and therefore physical mm size and
+    cut-line coordinate system) identical to the original cutout."""
+    src = Image.open(io.BytesIO(stylized_png)).convert("RGBA")
+    if target_w <= 0 or target_h <= 0:
+        out = io.BytesIO()
+        src.save(out, format="PNG")
+        return out.getvalue()
+    scale = min(target_w / src.width, target_h / src.height)
+    new_w = max(1, round(src.width * scale))
+    new_h = max(1, round(src.height * scale))
+    src = src.resize((new_w, new_h), Image.LANCZOS)
+    canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+    canvas.paste(src, ((target_w - new_w) // 2, (target_h - new_h) // 2), src)
+    out = io.BytesIO()
+    canvas.save(out, format="PNG")
+    return out.getvalue()
+
+
+@router.post("/ai-style", response_model=ProcessResponse)
+def ai_style_sticker(
+    body: AIStyleRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Redraw the sticker subject in an AI illustration style (cartoon,
+    pencil, etc.) using the user's own OpenAI key, then re-cut around it.
+
+    The stylized image replaces the session cutout so subsequent tighten /
+    filter / hand-edit operations work on the new artwork.
+    """
+    from backend.services import ai_stylize, secrets_store
+
+    user = _resolve_user(db, auth)
+    ent = entitlements.for_user(user)
+    if not ent.allows("sticker_editor"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
+
+    if body.style not in ai_stylize.STYLE_PROMPTS:
+        raise HTTPException(400, f"Unknown AI style: {body.style}")
+
+    api_key = secrets_store.decrypt_value(user.openai_api_key_enc)
+    if not api_key:
+        raise HTTPException(
+            400,
+            "Add your OpenAI API key in Settings → Preferences to use AI styles.",
+        )
+
+    prefix = f"sticker-sessions/{user.id}/{body.session_id}"
+    try:
+        cutout = storage.get_bytes(f"{prefix}/cutout.png")
+    except Exception:
+        raise HTTPException(404, "Sticker session expired. Please re-upload.")
+
+    import json
+    work_dpi = 300.0
+    try:
+        meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
+        work_dpi = float(meta.get("work_dpi", 300.0))
+    except Exception:
+        work_dpi = 300.0
+
+    # Original cutout dimensions — we fit the AI result back into these so the
+    # sticker keeps its size and coordinate space.
+    try:
+        orig = Image.open(io.BytesIO(cutout)).convert("RGBA")
+        orig_w, orig_h = orig.size
+    except Exception:
+        orig_w, orig_h = 0, 0
+
+    # The OpenAI call is network-bound (tens of seconds) — keep it OUT of the
+    # CPU heavy-job slot so it doesn't block other stickers.
+    try:
+        stylized = ai_stylize.stylize_image(cutout, body.style, api_key)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"AI style failed: {exc}")
+
+    new_cutout = _fit_into(stylized, orig_w, orig_h)
+    # Replace the session cutout so later edits build on the stylized art.
+    storage.put_bytes(f"{prefix}/cutout.png", new_cutout, "image/png")
+
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face") else "contour"
+
+    from backend.services.cutline_generator import FaceNotFoundError
+    from backend.services.sticker_processor import regenerate_cutline
+
+    with _heavy_job_slot("process"):
+        try:
+            result = regenerate_cutline(
+                cutout_bytes=new_cutout,
+                border_width_mm=body.border_width_mm,
+                bleed_mm=body.bleed_mm,
+                dpi=work_dpi,
+                cutline_mode=mode,
+                cutline_precision="medium",
+            )
+        except FaceNotFoundError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, f"Cut line failed after AI style: {exc}"
             )
 
     storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")

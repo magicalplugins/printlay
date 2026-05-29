@@ -15,7 +15,12 @@ import {
   listColorProfiles,
   updateColorProfile,
 } from "../api/colorProfiles";
-import { updatePreferences, updateProfile } from "../api/me";
+import {
+  clearOpenAIKey,
+  setOpenAIKey,
+  updatePreferences,
+  updateProfile,
+} from "../api/me";
 import {
   SpotColour,
   listSpotColours,
@@ -495,6 +500,7 @@ function PreferencesTab() {
   return (
     <div className="space-y-6">
       <TimeSavedSection />
+      <OpenAIKeySection />
       <SpotColoursSection />
 
       <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6">
@@ -510,6 +516,119 @@ function PreferencesTab() {
         </ul>
       </section>
     </div>
+  );
+}
+
+function OpenAIKeySection() {
+  const { me, refresh, setMe } = useMe();
+  const keySet = !!me?.openai_key_set;
+  const [keyRaw, setKeyRaw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [savedHint, setSavedHint] = useState(false);
+
+  const onSave = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const next = await setOpenAIKey(keyRaw.trim());
+      setMe(next);
+      await refresh();
+      setKeyRaw("");
+      setSavedHint(true);
+      setTimeout(() => setSavedHint(false), 1800);
+    } catch (e) {
+      setErr(formatErr(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onClear = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const next = await clearOpenAIKey();
+      setMe(next);
+      await refresh();
+      setKeyRaw("");
+    } catch (e) {
+      setErr(formatErr(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6 space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold">AI image styles (OpenAI)</h2>
+          <p className="text-sm text-neutral-400 mt-1 max-w-xl leading-relaxed">
+            Add your own OpenAI API key to unlock high-quality AI styles in the
+            Sticker Builder — Cartoon, Pencil sketch, Anime, Pop art and
+            Watercolour. Generation runs on your OpenAI account, so you only pay
+            OpenAI for what you use. Your key is encrypted and never shown again.
+          </p>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${
+            keySet
+              ? "bg-emerald-500/15 text-emerald-300"
+              : "bg-neutral-700/40 text-neutral-400"
+          }`}
+        >
+          {keySet ? "Key set" : "Not set"}
+        </span>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <input
+          type="password"
+          value={keyRaw}
+          onChange={(e) => setKeyRaw(e.target.value)}
+          placeholder={keySet ? "Enter a new key to replace" : "sk-..."}
+          autoComplete="off"
+          className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white font-mono"
+        />
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={busy || !keyRaw.trim()}
+          className="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-neutral-200 disabled:opacity-40 whitespace-nowrap"
+        >
+          {busy ? "Saving…" : keySet ? "Replace key" : "Save key"}
+        </button>
+        {keySet && (
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={busy}
+            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 hover:border-neutral-500 disabled:opacity-40 whitespace-nowrap"
+          >
+            Remove
+          </button>
+        )}
+      </div>
+
+      {savedHint && (
+        <div className="text-xs text-emerald-400">Saved.</div>
+      )}
+      {err && <div className="text-xs text-rose-300">{err}</div>}
+
+      <p className="text-[11px] text-neutral-500">
+        Get a key at{" "}
+        <a
+          href="https://platform.openai.com/api-keys"
+          target="_blank"
+          rel="noreferrer"
+          className="text-violet-400 hover:underline"
+        >
+          platform.openai.com/api-keys
+        </a>
+        . You'll need image generation enabled on your OpenAI account.
+      </p>
+    </section>
   );
 }
 

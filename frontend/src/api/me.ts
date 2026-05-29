@@ -22,6 +22,9 @@ export type Me = {
   time_saved_show_enabled: boolean;
   time_saved_setup_minutes: number;
   time_saved_per_slot_seconds: number;
+  /** True when the user has stored an OpenAI API key (for AI image
+   *  styles). The key itself is never sent to the client. */
+  openai_key_set: boolean;
 };
 
 /** Fetch the calling user's app profile. If `inviteToken` is provided
@@ -60,3 +63,15 @@ export const updatePreferences = (payload: PreferencesUpdate) =>
     method: "PATCH",
     body: JSON.stringify(payload),
   });
+
+/** Store the user's own OpenAI API key (used for AI image styles).
+ *  Stored encrypted server-side; never returned. Pass an empty string
+ *  to clear it. */
+export const setOpenAIKey = (apiKey: string) =>
+  api<Me>("/api/auth/me/openai-key", {
+    method: "PUT",
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+
+export const clearOpenAIKey = () =>
+  api<Me>("/api/auth/me/openai-key", { method: "DELETE" });

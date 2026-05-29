@@ -64,10 +64,6 @@ export const FILTER_PRESETS: FilterPreset[] = [
   { id: "aden", label: "Aden", css: "saturate(0.85) brightness(1.1) hue-rotate(-15deg)" },
   { id: "moon", label: "Moon", css: "grayscale(1) brightness(1.1) contrast(1.15)" },
   { id: "invert", label: "Invert", css: "invert(1)" },
-  // Artistic looks (rendered by OpenCV on the server). The CSS here is only a
-  // rough hint — the true effect appears once it bakes server-side.
-  { id: "cartoon", label: "Cartoon", css: "saturate(1.6) contrast(1.5)" },
-  { id: "pencil", label: "Pencil", css: "grayscale(1) contrast(1.5) brightness(1.15)" },
 ];
 
 export function filterCss(id: string | undefined | null): string {

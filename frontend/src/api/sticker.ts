@@ -77,6 +77,35 @@ export async function regenerateSticker(
   });
 }
 
+/** AI illustration styles available in the sticker builder. These run
+ *  on the user's own OpenAI key (set in Settings → Preferences). */
+export const AI_STYLES: { id: string; label: string; blurb: string }[] = [
+  { id: "cartoon", label: "Cartoon", blurb: "Clean cartoon illustration" },
+  { id: "pencil", label: "Pencil", blurb: "Hand-drawn pencil sketch" },
+  { id: "anime", label: "Anime", blurb: "Anime / manga style" },
+  { id: "popart", label: "Pop art", blurb: "Bold comic-book look" },
+  { id: "watercolor", label: "Watercolour", blurb: "Soft painted look" },
+];
+
+export async function aiStyleSticker(
+  sessionId: string,
+  style: string,
+  borderWidthMm: number = 2.0,
+  bleedMm: number = 3.0,
+  cutlineMode: string = "contour"
+): Promise<ProcessResponse> {
+  return api<ProcessResponse>("/api/sticker/ai-style", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      style,
+      border_width_mm: borderWidthMm,
+      bleed_mm: bleedMm,
+      cutline_mode: cutlineMode,
+    }),
+  });
+}
+
 export async function editCutline(
   sessionId: string,
   points: [number, number][]

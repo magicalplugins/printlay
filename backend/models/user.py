@@ -100,6 +100,13 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Integer, nullable=False, default=40, server_default="40"
     )
 
+    # ---- Bring-your-own AI credentials ----
+    # Fernet-encrypted OpenAI API key (encrypted with APP_SECRETS_MASTER_KEY via
+    # services.secrets_store). Lets a user run AI image styles (cartoon/pencil)
+    # on their own OpenAI account/credits. Never returned to the client in
+    # plaintext — the API only exposes a boolean "is it set?".
+    openai_api_key_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+
     def has_completed_profile(self) -> bool:
         """True when the user has supplied the post-signup profile fields. We
         only require phone (company is optional). Used by /api/auth/me to set

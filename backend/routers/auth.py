@@ -16,6 +16,7 @@ from backend.config import get_settings
 from backend.database import get_db
 from backend.models import User
 from backend.schemas.auth import (
+    OpenAIKeyUpdate,
     PreferencesUpdate,
     ProfileUpdate,
     PublicConfig,
@@ -45,6 +46,7 @@ def _to_user_out(row: User) -> UserOut:
         time_saved_show_enabled=row.time_saved_show_enabled,
         time_saved_setup_minutes=row.time_saved_setup_minutes,
         time_saved_per_slot_seconds=row.time_saved_per_slot_seconds,
+        openai_key_set=bool(row.openai_api_key_enc),
     )
 
 
@@ -146,4 +148,62 @@ def update_preferences(
             "time_saved_per_slot_seconds": row.time_saved_per_slot_seconds,
         },
     )
+    return _to_user_out(row)
+
+
+@router.put("/auth/me/openai-key", response_model=UserOut)
+def set_openai_key(
+    payload: OpenAIKeyUpdate,
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    """Store (or clear) the user's own OpenAI API key, Fernet-encrypted.
+
+    A blank value clears it. We only do a light shape check here; the key
+    is validated for real the first time it's used to call OpenAI."""
+    from backend.services import secrets_store
+
+    row = db.query(User).filter(User.auth_id == user.auth_id).one_or_none()
+    if row is None:
+        raise HTTPException(404, "User not provisioned yet; call /api/auth/me first")
+
+    key = (payload.api_key or "").strip()
+    if not key:
+        row.openai_api_key_enc = None
+        db.commit()
+        db.refresh(row)
+        record(db, row, "openai_key.cleared", payload={})
+        return _to_user_out(row)
+
+    if not key.startswith("sk-") or len(key) < 20:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "That doesn't look like an OpenAI API key (it should start with 'sk-').",
+        )
+
+    try:
+        row.openai_api_key_enc = secrets_store.encrypt_value(key)
+    except secrets_store.StoreUnavailable:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Secure storage isn't configured on the server. Please contact support.",
+        )
+    db.commit()
+    db.refresh(row)
+    record(db, row, "openai_key.set", payload={})
+    return _to_user_out(row)
+
+
+@router.delete("/auth/me/openai-key", response_model=UserOut)
+def clear_openai_key(
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserOut:
+    row = db.query(User).filter(User.auth_id == user.auth_id).one_or_none()
+    if row is None:
+        raise HTTPException(404, "User not provisioned yet; call /api/auth/me first")
+    row.openai_api_key_enc = None
+    db.commit()
+    db.refresh(row)
+    record(db, row, "openai_key.cleared", payload={})
     return _to_user_out(row)

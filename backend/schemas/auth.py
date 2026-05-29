@@ -31,6 +31,16 @@ class UserOut(BaseModel):
     time_saved_show_enabled: bool = True
     time_saved_setup_minutes: int = 10
     time_saved_per_slot_seconds: int = 40
+    # ---- AI credentials (BYO OpenAI key) ----
+    # Only ever exposes whether a key is stored — never the key itself.
+    openai_key_set: bool = False
+
+
+class OpenAIKeyUpdate(BaseModel):
+    """Set the per-user OpenAI API key. Stored Fernet-encrypted; never
+    returned. An empty/blank value clears the stored key."""
+
+    api_key: str = Field(default="", max_length=300)
 
 
 # International phone format - very lenient. We're not validating carrier

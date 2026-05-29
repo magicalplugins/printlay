@@ -143,6 +143,9 @@ export type GenerateResponse = {
 export type GenerateOptions = {
   include_cut_lines?: boolean;
   cut_line_spot_color_id?: string | null;
+  registration_type?: string | null;
+  mark_offset_mm?: number;
+  max_zone_length_mm?: number | null;
 };
 
 export function generateOutput(id: string, options: GenerateOptions = {}) {
@@ -151,13 +154,17 @@ export function generateOutput(id: string, options: GenerateOptions = {}) {
   // existing colour-swap pipeline only).
   const hasAny =
     options.include_cut_lines === true ||
-    options.cut_line_spot_color_id != null;
+    options.cut_line_spot_color_id != null ||
+    !!options.registration_type;
   return api<GenerateResponse>(`/api/jobs/${id}/generate`, {
     method: "POST",
     body: hasAny
       ? JSON.stringify({
           include_cut_lines: !!options.include_cut_lines,
           cut_line_spot_color_id: options.cut_line_spot_color_id ?? null,
+          registration_type: options.registration_type ?? null,
+          mark_offset_mm: options.mark_offset_mm ?? 5.0,
+          max_zone_length_mm: options.max_zone_length_mm ?? null,
         })
       : undefined,
   });

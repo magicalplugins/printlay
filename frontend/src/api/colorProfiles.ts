@@ -61,11 +61,17 @@ export function duplicateColorProfile(id: string) {
 
 // ---- Job colour state ----
 
-export function getJobColors(jobId: string, opts: { detect?: boolean } = {}) {
+export function getJobColors(
+  jobId: string,
+  opts: { detect?: boolean; assetIds?: string[] } = {}
+) {
   const detect = opts.detect ?? true;
-  return api<JobColorsState>(
-    `/api/jobs/${jobId}/colors?detect=${detect ? "true" : "false"}`
-  );
+  const params = new URLSearchParams();
+  params.set("detect", detect ? "true" : "false");
+  // When provided, detect from the *current* queue's assets rather than
+  // only the job's saved assignments — so colours show before saving.
+  for (const id of opts.assetIds ?? []) params.append("asset_id", id);
+  return api<JobColorsState>(`/api/jobs/${jobId}/colors?${params.toString()}`);
 }
 
 export type JobColorAttachPayload = {

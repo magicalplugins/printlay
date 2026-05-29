@@ -1,14 +1,14 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.audit import record
 from backend.auth import AuthenticatedUser, get_current_user
 from backend.database import get_db
-from backend.models import Asset, ColorProfile, Job, Output, SpotColor, Template, User
+from backend.models import Asset, ColorProfile, Job, Output, Template, User
 from backend.rate_limit import generate_burst_limit, generate_limit, limiter
 from backend.routers.templates import _resolve_user
 from backend.schemas.asset import AssetOut
@@ -583,57 +583,54 @@ def duplicate_job(
 # ---------------------------------------------------------------------------
 
 
+def _hex_to_rgb_tuple(hex_str: str | None, fallback=(255, 0, 255)) -> tuple[int, int, int]:
+    """Parse '#RRGGBB' (or 'RRGGBB') → (r, g, b); fallback on anything odd."""
+    if not hex_str:
+        return fallback
+    s = hex_str.strip().lstrip("#")
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return fallback
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except ValueError:
+        return fallback
+
+
 def _resolve_cut_line_spec(
     db: Session, user: User, opts: GenerateOptions
 ) -> cut_lines.CutLineSpec:
-    """Pick which spot colour drives the cut layer.
+    """Pick which spot colour drives the cut layer, from the user's
+    `spot_colours` library (the same presets used in Settings / Sheets).
 
-    Resolution order:
-      1. ``opts.cut_line_spot_color_id`` if provided - explicit user choice.
-      2. The user's row flagged ``is_cut_line_default``.
-      3. 400 with a clear message - the operator must either pick one
-         on this generate call or set a library default in Settings.
+    If ``opts.cut_line_spot_color_id`` is given we use that preset; the
+    spot **name** becomes the PDF Separation name (so VersaWorks/Summa
+    pick it up as a cut plate) and its ``display_color`` is the RGB
+    alternate. With no selection we fall back to a standard 'CutContour'
+    magenta so generation never fails.
     """
+    from backend.models import SpotColour
+
+    row = None
     if opts.cut_line_spot_color_id is not None:
         row = (
-            db.query(SpotColor)
+            db.query(SpotColour)
             .filter(
-                SpotColor.id == opts.cut_line_spot_color_id,
-                SpotColor.user_id == user.id,
+                SpotColour.id == opts.cut_line_spot_color_id,
+                SpotColour.user_id == user.id,
             )
             .one_or_none()
         )
         if row is None:
             raise HTTPException(404, "Spot colour not found")
-    else:
-        row = (
-            db.query(SpotColor)
-            .filter(
-                SpotColor.user_id == user.id,
-                SpotColor.is_cut_line_default.is_(True),
-            )
-            .one_or_none()
-        )
-        if row is None:
-            raise HTTPException(
-                400,
-                detail={
-                    "code": "no_default_cut_line_spot",
-                    "message": (
-                        "No default cut-line spot colour is set on your "
-                        "account. Pick one on the job page or mark a "
-                        "library entry as the default."
-                    ),
-                },
-            )
 
-    rgb_list = list(row.rgb or [255, 0, 255])[:3]
-    while len(rgb_list) < 3:
-        rgb_list.append(0)
-    return cut_lines.CutLineSpec(
-        spot_name=row.name,
-        rgb=(int(rgb_list[0]), int(rgb_list[1]), int(rgb_list[2])),
-    )
+    if row is not None:
+        return cut_lines.CutLineSpec(
+            spot_name=row.name,
+            rgb=_hex_to_rgb_tuple(row.display_color),
+        )
+    return cut_lines.CutLineSpec(spot_name="CutContour", rgb=(255, 0, 255))
 
 
 def _resolve_active_swaps(db: Session, job: Job) -> list[dict]:
@@ -668,27 +665,32 @@ def _resolve_active_swaps(db: Session, job: Job) -> list[dict]:
 def get_job_colors(
     job_id: uuid.UUID,
     detect: bool = True,
+    asset_id: list[uuid.UUID] = Query(default=[]),
     auth: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> JobColorsResponse:
     """Return the job's current colour state plus (optionally) every
-    distinct RGB triple detected in the assets currently filling its
-    slots. Detection is on by default; disable with `?detect=false`
-    to skip the storage round-trip if the caller just wants state."""
+    distinct RGB triple detected in the relevant assets.
+
+    Detection source: if explicit `asset_id`s are passed (the live queue
+    on the fill page, which may not be saved yet) we scan those; otherwise
+    we fall back to the assets in the job's saved `assignments`. Detection
+    is on by default; disable with `?detect=false`."""
     user = _resolve_user(db, auth)
     job = _own_job(db, user, job_id)
 
     detected: list[tuple[int, int, int]] = []
     if detect:
         seen: set[tuple[int, int, int]] = set()
-        asset_ids: set[uuid.UUID] = set()
-        for assignment in (job.assignments or {}).values():
-            aid = assignment.get("asset_id")
-            if aid:
-                try:
-                    asset_ids.add(uuid.UUID(aid))
-                except ValueError:
-                    continue
+        asset_ids: set[uuid.UUID] = set(asset_id)
+        if not asset_ids:
+            for assignment in (job.assignments or {}).values():
+                aid = assignment.get("asset_id")
+                if aid:
+                    try:
+                        asset_ids.add(uuid.UUID(aid))
+                    except ValueError:
+                        continue
         if asset_ids:
             assets = (
                 db.query(Asset)
@@ -879,11 +881,26 @@ def generate_output(
     except pdf_compositor.CompositorError as exc:
         raise HTTPException(500, str(exc))
 
+    output_bytes = sheet.pdf_bytes
+    # Optional cutter registration marks (same shapes as the Sheet Builder).
+    if opts.registration_type:
+        from backend.services import job_registration
+
+        try:
+            output_bytes = job_registration.add_registration_marks(
+                output_bytes,
+                opts.registration_type,
+                mark_offset_mm=opts.mark_offset_mm,
+                max_zone_length_mm=opts.max_zone_length_mm,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            raise HTTPException(500, f"Failed to add registration marks: {exc}")
+
     output_id = uuid.uuid4()
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     name = f"{job.name} — {timestamp}.pdf"
     r2_key = f"users/{user.id}/outputs/{output_id}.pdf"
-    storage.put_bytes(r2_key, sheet.pdf_bytes, content_type="application/pdf")
+    storage.put_bytes(r2_key, output_bytes, content_type="application/pdf")
 
     out = Output(
         id=output_id,
@@ -891,7 +908,7 @@ def generate_output(
         job_id=job.id,
         name=name,
         r2_key=r2_key,
-        file_size=len(sheet.pdf_bytes),
+        file_size=len(output_bytes),
         slots_filled=sheet.slots_filled,
         slots_total=sheet.slots_total,
     )

@@ -20,6 +20,9 @@ type Props = {
   /** Total number of currently-assigned slots. Used to skip detection
    *  when the job has nothing in it yet. */
   filledSlotCount: number;
+  /** Asset IDs in the *current* (possibly unsaved) queue. Detection scans
+   *  these so colours appear before the queue is saved. */
+  assetIds?: string[];
 };
 
 /**
@@ -38,7 +41,15 @@ type Props = {
  *   5. At Generate PDF time the backend resolves profile (live) + draft
  *      and rewrites colour operators as DeviceRGB.
  */
-export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
+export default function JobColorsPanel({
+  jobId,
+  filledSlotCount,
+  assetIds = [],
+}: Props) {
+  // Stable, de-duplicated key for the current queue assets so the
+  // detection effect re-runs whenever the queue changes.
+  const assetKey = Array.from(new Set(assetIds)).sort().join(",");
+  const hasAssets = assetKey.length > 0 || filledSlotCount > 0;
   const [open, setOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [detected, setDetected] = useState<RGB[]>([]);
@@ -78,20 +89,27 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
     };
   }, [jobId]);
 
-  // Run colour detection (scans the asset PDFs in storage) only once
-  // the user opens the panel, and only if we haven't already.
+  // Run colour detection (scans the asset PDFs in storage) once the user
+  // opens the panel, and re-run whenever the queue's assets change. We
+  // scan the *current* queue (assetKey) so colours appear before saving.
   const [detectedLoaded, setDetectedLoaded] = useState(false);
+  const [lastDetectKey, setLastDetectKey] = useState<string | null>(null);
   useEffect(() => {
-    if (!open || detectedLoaded || filledSlotCount === 0) return;
+    if (!open || !hasAssets) return;
+    if (detectedLoaded && lastDetectKey === assetKey) return;
     let cancelled = false;
     (async () => {
       setBusy(true);
       setErr(null);
       try {
-        const state = await getJobColors(jobId, { detect: true });
+        const state = await getJobColors(jobId, {
+          detect: true,
+          assetIds: assetKey ? assetKey.split(",") : undefined,
+        });
         if (cancelled) return;
         setDetected(state.detected);
         setDetectedLoaded(true);
+        setLastDetectKey(assetKey);
       } catch (e) {
         if (!cancelled) setErr(formatErr(e));
       } finally {
@@ -101,7 +119,7 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [open, detectedLoaded, jobId, filledSlotCount]);
+  }, [open, detectedLoaded, lastDetectKey, assetKey, hasAssets, jobId]);
 
   // Auto-save draft and profile-link to the job whenever they change.
   // Debounced so picker drags don't hammer the API.
@@ -131,9 +149,13 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
     setBusy(true);
     setErr(null);
     try {
-      const state = await getJobColors(jobId, { detect: true });
+      const state = await getJobColors(jobId, {
+        detect: true,
+        assetIds: assetKey ? assetKey.split(",") : undefined,
+      });
       setDetected(state.detected);
       setDetectedLoaded(true);
+      setLastDetectKey(assetKey);
     } catch (e) {
       setErr(formatErr(e));
     } finally {
@@ -320,6 +342,16 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
             detected={detected}
           />
 
+          {/* Honest empty-detection hint: distinguishes "nothing filled"
+              from "scanned but no swappable colours" (raster art). */}
+          {detectedLoaded && detected.length === 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-200/90">
+              {hasAssets
+                ? "No swappable colours found in the assigned artwork. Colour swaps only work on vector PDF/SVG art — photo or raster (PNG/JPG) stickers can't be recoloured this way. You can still add a swap manually below."
+                : "Fill at least one slot to detect colours."}
+            </div>
+          )}
+
           {/* Active profile swaps - rendered below the draft so the user can
               SEE what the attached profile is contributing. Edits here PATCH
               the profile directly (with debounce) and propagate to every
@@ -338,10 +370,10 @@ export default function JobColorsPanel({ jobId, filledSlotCount }: Props) {
             <button
               type="button"
               onClick={redetect}
-              disabled={busy || filledSlotCount === 0}
+              disabled={busy || !hasAssets}
               className="text-xs text-violet-300 hover:text-violet-200 disabled:opacity-50"
               title={
-                filledSlotCount === 0
+                !hasAssets
                   ? "Fill at least one slot first"
                   : "Re-scan assigned assets"
               }

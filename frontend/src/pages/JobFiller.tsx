@@ -380,6 +380,9 @@ export default function JobFiller() {
   const [cutLineSpotColorId, setCutLineSpotColorId] = useState<string | null>(
     null
   );
+  // Per-generation cutter registration marks (same options as the Sheet
+  // Builder). Empty string = none. Resets per page load like cut lines.
+  const [registrationType, setRegistrationType] = useState<string>("");
 
   const totalSlots = job?.slot_order.length ?? 0;
   const queuedQty = rows.reduce((s, r) => s + r.qty, 0);
@@ -765,6 +768,7 @@ export default function JobFiller() {
       const out = await generateOutput(job.id, {
         include_cut_lines: includeCutLines,
         cut_line_spot_color_id: cutLineSpotColorId,
+        registration_type: registrationType || null,
       });
 
       // Surface colour-swap results so the user knows whether their
@@ -1189,6 +1193,7 @@ export default function JobFiller() {
           <JobColorsPanel
             jobId={job.id}
             filledSlotCount={Object.keys(job.assignments).length}
+            assetIds={rows.map((r) => r.asset.id)}
           />
 
           {/* Spot colours + the per-job "include cut lines" toggle. Sits
@@ -1201,6 +1206,30 @@ export default function JobFiller() {
             selectedSpotColorId={cutLineSpotColorId}
             onSelectedSpotColorIdChange={setCutLineSpotColorId}
           />
+
+          {/* Cutter registration marks — same options as the Sheet
+              Builder. Added to the output PDF at generate time. */}
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 backdrop-blur p-4 space-y-3">
+            <div>
+              <div className="text-xs uppercase tracking-widest text-neutral-500">
+                Registration marks
+              </div>
+              <div className="text-[11px] text-neutral-400 mt-0.5">
+                Adds optical alignment marks for your cutter to the output
+                PDF (corner marks read by the machine before cutting).
+              </div>
+            </div>
+            <select
+              value={registrationType}
+              onChange={(e) => setRegistrationType(e.target.value)}
+              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-sm focus:border-violet-500 focus:outline-none"
+            >
+              <option value="">None</option>
+              <option value="velloblade">Velloblade (6mm circles)</option>
+              <option value="summa_opos">Summa OPOS</option>
+              <option value="generic">Generic crosshairs</option>
+            </select>
+          </section>
         </aside>
       </div>
 

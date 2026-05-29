@@ -100,7 +100,17 @@ class GenerateOptions(BaseModel):
     plain artwork-only generate still works exactly as before."""
 
     cut_line_spot_color_id: uuid.UUID | None = None
-    """Which entry from the user's spot-colour library to use for the
-    cut path. None means "use the user's marked-default entry"; if no
-    default is set and `include_cut_lines` is True, the request fails
-    with 400 so the operator picks one explicitly."""
+    """Which preset from the user's `spot_colours` library to use for the
+    cut path (the same library managed in Settings / used on Sheets). Its
+    name becomes the PDF Separation name; its colour the RGB alternate.
+    None falls back to a standard 'CutContour' magenta."""
+
+    registration_type: str | None = None
+    """Cutter registration marks to draw on the output, matching the Sheet
+    Builder: 'velloblade' | 'summa_opos' | 'generic'. None = no marks."""
+
+    mark_offset_mm: float = 5.0
+    """Inset of registration marks from the page edges, in mm."""
+
+    max_zone_length_mm: float | None = None
+    """Optional vertical zoning — repeat marks every N mm down long pages."""

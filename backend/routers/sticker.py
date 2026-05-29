@@ -415,11 +415,21 @@ def edit_cutline(
 
     from backend.services.cutline_generator import (
         CutlineResult,
+        _chaikin_smooth,
         _enforce_min_corner_radius,
+        _smooth_oscillating_regions,
     )
 
     dpi = width_px * 25.4 / width_mm if width_mm > 0 else 300
+    # The freehand stroke is hand-drawn with a mouse, so smooth out the wobble
+    # before it becomes a cut path: target oscillating runs, round corners with
+    # Chaikin, then enforce a cutter-safe minimum radius so the knife never has
+    # to pivot in place.
     try:
+        points_px = _smooth_oscillating_regions(
+            points_px, iterations=10, window=6, wiggle_threshold=0.3, strength=0.55
+        )
+        points_px = _chaikin_smooth(points_px, iterations=3)
         points_px = _enforce_min_corner_radius(points_px, dpi=int(dpi), min_radius_mm=1.0)
     except Exception:
         pass

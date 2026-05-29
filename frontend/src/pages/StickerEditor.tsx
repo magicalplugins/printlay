@@ -538,6 +538,15 @@ function PreviewState({
             onApply={onEditApply}
             onClose={() => setEditing(false)}
           />
+        ) : result.cutline_points && result.cutline_points.length > 2 ? (
+          <LivePreview
+            borderUrl={result.border_url}
+            points={result.cutline_points}
+            offsetMm={tightenLocal - tighten}
+            widthMm={result.width_mm}
+            heightMm={result.height_mm}
+            busy={regenerating}
+          />
         ) : (
           <div
             className="relative mx-auto rounded-xl overflow-hidden bg-repeat"
@@ -758,6 +767,165 @@ function PreviewState({
           Start over
         </button>
       </div>
+      )}
+    </div>
+  );
+}
+
+// Offset a closed polygon by `amount` (positive = outward) using per-vertex
+// averaged edge normals with a miter clamp. Used purely for an instant
+// client-side preview while dragging the Tighten slider — the accurate
+// geometry is regenerated on the server when the slider is released.
+function offsetPolygonMm(
+  pts: [number, number][],
+  amount: number
+): [number, number][] {
+  const n = pts.length;
+  if (n < 3) return pts;
+  let area = 0;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[(i + 1) % n];
+    area += x1 * y2 - x2 * y1;
+  }
+  const ccw = area > 0;
+  const out: [number, number][] = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i];
+    const pr = pts[(i - 1 + n) % n];
+    const nx = pts[(i + 1) % n];
+    let e1x = p[0] - pr[0];
+    let e1y = p[1] - pr[1];
+    const l1 = Math.hypot(e1x, e1y) || 1;
+    e1x /= l1;
+    e1y /= l1;
+    let e2x = nx[0] - p[0];
+    let e2y = nx[1] - p[1];
+    const l2 = Math.hypot(e2x, e2y) || 1;
+    e2x /= l2;
+    e2y /= l2;
+    let n1x: number, n1y: number, n2x: number, n2y: number;
+    if (ccw) {
+      n1x = e1y;
+      n1y = -e1x;
+      n2x = e2y;
+      n2y = -e2x;
+    } else {
+      n1x = -e1y;
+      n1y = e1x;
+      n2x = -e2y;
+      n2y = e2x;
+    }
+    let vx = n1x + n2x;
+    let vy = n1y + n2y;
+    let ln = Math.hypot(vx, vy);
+    if (ln < 1e-6) {
+      vx = n1x;
+      vy = n1y;
+      ln = 1;
+    }
+    vx /= ln;
+    vy /= ln;
+    let cos = vx * n1x + vy * n1y;
+    if (cos < 0.25) cos = 0.25;
+    const m = amount / cos;
+    out.push([p[0] + vx * m, p[1] + vy * m]);
+  }
+  return out;
+}
+
+// Offset normalised cut points by `amountMm` (positive = outward) in real mm
+// space, so the offset is isotropic regardless of the sticker's aspect ratio.
+function offsetNormPoints(
+  points: [number, number][],
+  amountMm: number,
+  widthMm: number,
+  heightMm: number
+): [number, number][] {
+  if (widthMm <= 0 || heightMm <= 0 || points.length < 3) return points;
+  const mm: [number, number][] = points.map(([nx, ny]) => [
+    nx * widthMm,
+    ny * heightMm,
+  ]);
+  const off = offsetPolygonMm(mm, amountMm);
+  return off.map(([x, y]) => [x / widthMm, y / heightMm]);
+}
+
+function LivePreview({
+  borderUrl,
+  points,
+  offsetMm,
+  widthMm,
+  heightMm,
+  busy,
+}: {
+  borderUrl: string;
+  points: [number, number][];
+  offsetMm: number;
+  widthMm: number;
+  heightMm: number;
+  busy: boolean;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    const im = new Image();
+    im.onload = () => setImg(im);
+    im.src = borderUrl;
+  }, [borderUrl]);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || !img) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const maxDim = 800;
+    const scale = Math.min(
+      1,
+      maxDim / Math.max(img.naturalWidth, img.naturalHeight)
+    );
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+
+    let pts = points;
+    // offsetMm > 0 means "tighter" → pull the cut line inward (negative offset)
+    if (Math.abs(offsetMm) > 0.01 && points.length > 2) {
+      pts = offsetNormPoints(points, -offsetMm, widthMm, heightMm);
+    }
+    if (pts.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0] * c.width, pts[0][1] * c.height);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i][0] * c.width, pts[i][1] * c.height);
+      }
+      ctx.closePath();
+      ctx.setLineDash([8, 5]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#2684ff";
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }, [img, points, offsetMm, widthMm, heightMm]);
+
+  return (
+    <div
+      className="relative mx-auto rounded-xl overflow-hidden bg-repeat"
+      style={{
+        maxWidth: "400px",
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='10' height='10' fill='%23222'/%3E%3Crect x='10' y='10' width='10' height='10' fill='%23222'/%3E%3Crect x='10' width='10' height='10' fill='%23333'/%3E%3Crect y='10' width='10' height='10' fill='%23333'/%3E%3C/svg%3E")`,
+      }}
+    >
+      <canvas ref={canvasRef} className="w-full h-auto block" />
+      {busy && (
+        <div className="absolute inset-0 bg-neutral-950/40 flex items-center justify-center">
+          <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+        </div>
       )}
     </div>
   );

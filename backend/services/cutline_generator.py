@@ -372,9 +372,17 @@ def _generate_contour_cutline(
     bm_pil = Image.fromarray(bleed_mask, mode="L")
     border_img.paste(border_layer, mask=bm_pil)
     # For a face sticker the visible artwork is clipped to the head region so
-    # the body doesn't spill outside the cut. Otherwise use the full alpha.
+    # the body doesn't spill outside the cut. Crucially we keep the *soft*
+    # anti-aliased alpha inside that region (only zeroing it outside the head)
+    # — pasting with a hard 0/255 mask would slam the low-alpha hair/edge
+    # fringe to full opacity, producing the thin dark halo around hair. Using
+    # the original alpha gives face stickers the exact same crisp edges as the
+    # standard background removal.
     if subject_mask_override is not None:
-        paste_mask = Image.fromarray(subject_mask_override.astype(np.uint8), mode="L")
+        alpha_full = np.array(img.split()[3])
+        region = subject_mask_override.astype(bool)
+        soft = np.where(region, alpha_full, 0).astype(np.uint8)
+        paste_mask = Image.fromarray(soft, mode="L")
     else:
         paste_mask = img.split()[3]
     border_img.paste(img, (total_pad, total_pad), mask=paste_mask)

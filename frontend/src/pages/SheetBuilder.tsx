@@ -44,6 +44,10 @@ export default function SheetBuilder() {
   const [layoutOrientation, setLayoutOrientation] = useState<
     "auto" | "horizontal" | "vertical"
   >("auto");
+  // Placed sticker size (mm). Aspect-locked to the asset's native ratio so
+  // changing one dimension updates the other. Empty until an asset is picked.
+  const [layoutWidthMm, setLayoutWidthMm] = useState<string>("");
+  const [layoutHeightMm, setLayoutHeightMm] = useState<string>("");
   const [layoutResult, setLayoutResult] = useState<AutoLayoutResult | null>(
     null
   );
@@ -80,6 +84,46 @@ export default function SheetBuilder() {
       setLayoutAssetId(presetAssetId);
     }
   }, [presetAssetId, assets]);
+
+  // Native (designed) size of the selected sticker, in mm.
+  const MM_PER_PT = 25.4 / 72;
+  const selectedAsset = assets.find((a) => a.id === layoutAssetId) ?? null;
+  const nativeWmm = selectedAsset
+    ? selectedAsset.width_pt * MM_PER_PT
+    : 0;
+  const nativeHmm = selectedAsset
+    ? selectedAsset.height_pt * MM_PER_PT
+    : 0;
+  const nativeAspect = nativeHmm > 0 ? nativeWmm / nativeHmm : 1;
+
+  // Seed the size fields from the asset's native size whenever the selected
+  // sticker changes, so the user starts from its designed dimensions.
+  useEffect(() => {
+    if (selectedAsset && nativeWmm > 0 && nativeHmm > 0) {
+      setLayoutWidthMm(nativeWmm.toFixed(1));
+      setLayoutHeightMm(nativeHmm.toFixed(1));
+    } else {
+      setLayoutWidthMm("");
+      setLayoutHeightMm("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutAssetId, assets]);
+
+  function onWidthChange(v: string) {
+    setLayoutWidthMm(v);
+    const n = parseFloat(v);
+    if (!Number.isNaN(n) && n > 0 && nativeAspect > 0) {
+      setLayoutHeightMm((n / nativeAspect).toFixed(1));
+    }
+  }
+
+  function onHeightChange(v: string) {
+    setLayoutHeightMm(v);
+    const n = parseFloat(v);
+    if (!Number.isNaN(n) && n > 0) {
+      setLayoutWidthMm((n * nativeAspect).toFixed(1));
+    }
+  }
 
   // Load thumbnail images for canvas rendering
   const [assetImages, setAssetImages] = useState<Record<string, HTMLImageElement>>({});
@@ -167,11 +211,12 @@ export default function SheetBuilder() {
     if (activeSheet.placements) {
       for (const p of activeSheet.placements) {
         const asset = assets.find((a) => a.id === p.asset_id);
+        const placeScale = p.scale && p.scale > 0 ? p.scale : 1;
         const pw = asset
-          ? (asset.width_pt / (72 / 25.4)) * scale
+          ? (asset.width_pt / (72 / 25.4)) * placeScale * scale
           : 20 * scale;
         const ph = asset
-          ? (asset.height_pt / (72 / 25.4)) * scale
+          ? (asset.height_pt / (72 / 25.4)) * placeScale * scale
           : 20 * scale;
         const px = ox + p.x_mm * scale;
         const py = oy + p.y_mm * scale;
@@ -309,11 +354,13 @@ export default function SheetBuilder() {
       // Save current settings to backend first so auto-layout uses them
       await updateSheet(activeSheet.id, activeSheet);
 
+      const wMm = parseFloat(layoutWidthMm);
       const result = await autoLayout(
         activeSheet.id,
         layoutAssetId,
         layoutQty,
-        layoutOrientation
+        layoutOrientation,
+        !Number.isNaN(wMm) && wMm > 0 ? { width_mm: wMm } : undefined
       );
       setLayoutResult(result);
       setActiveSheet((prev) =>
@@ -538,6 +585,54 @@ export default function SheetBuilder() {
                   ))}
                 </select>
               </div>
+              {layoutAssetId && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs text-neutral-400">
+                      Sticker size (mm)
+                    </label>
+                    <span className="text-[10px] text-neutral-500">
+                      aspect locked 🔒
+                    </span>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      min={1}
+                      step={0.5}
+                      value={layoutWidthMm}
+                      onChange={(e) => onWidthChange(e.target.value)}
+                      className="flex-1 w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white text-right"
+                      title="Width (mm)"
+                    />
+                    <span className="text-neutral-500 text-xs">W</span>
+                    <span className="text-neutral-600">×</span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={0.5}
+                      value={layoutHeightMm}
+                      onChange={(e) => onHeightChange(e.target.value)}
+                      className="flex-1 w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white text-right"
+                      title="Height (mm)"
+                    />
+                    <span className="text-neutral-500 text-xs">H</span>
+                  </div>
+                  {nativeWmm > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLayoutWidthMm(nativeWmm.toFixed(1));
+                        setLayoutHeightMm(nativeHmm.toFixed(1));
+                      }}
+                      className="mt-1 text-[10px] text-violet-400 hover:text-violet-300"
+                    >
+                      Reset to design size ({nativeWmm.toFixed(0)}×
+                      {nativeHmm.toFixed(0)}mm)
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex gap-2">
                 <div className="flex-1">
                   <label className="block text-xs text-neutral-400 mb-1">

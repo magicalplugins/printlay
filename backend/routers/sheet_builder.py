@@ -139,6 +139,12 @@ class AutoLayoutIn(BaseModel):
     asset_id: uuid.UUID
     quantity: int = Field(gt=0, le=10000)
     orientation: str = "auto"
+    # Optional placed size override (mm). When given, every sticker is laid
+    # out at this size instead of its native size. Aspect ratio is enforced
+    # from the asset's native dimensions (scale derived from width). None =
+    # use the asset's native size.
+    width_mm: float | None = Field(default=None, gt=0, le=5000)
+    height_mm: float | None = Field(default=None, gt=0, le=5000)
 
 
 class AutoLayoutOut(BaseModel):
@@ -386,8 +392,20 @@ def run_auto_layout(
     if not asset:
         raise HTTPException(404, "Asset not found")
 
-    sticker_w_mm = asset.width_pt / (72.0 / 25.4)
-    sticker_h_mm = asset.height_pt / (72.0 / 25.4)
+    native_w_mm = asset.width_pt / (72.0 / 25.4)
+    native_h_mm = asset.height_pt / (72.0 / 25.4)
+
+    # Resolve the placed size. A custom width drives a uniform scale so the
+    # aspect ratio is preserved (the frontend locks the two together, but we
+    # re-derive here so the scale is exact and the PDF/SVG render matches).
+    if payload.width_mm and payload.width_mm > 0 and native_w_mm > 0:
+        scale = payload.width_mm / native_w_mm
+    elif payload.height_mm and payload.height_mm > 0 and native_h_mm > 0:
+        scale = payload.height_mm / native_h_mm
+    else:
+        scale = 1.0
+    sticker_w_mm = native_w_mm * scale
+    sticker_h_mm = native_h_mm * scale
 
     cfg = SheetConfig(
         media_width_mm=sheet.media_width_mm,
@@ -427,7 +445,7 @@ def run_auto_layout(
             "x_mm": round(p.x_mm, 2),
             "y_mm": round(p.y_mm, 2),
             "rotation_deg": p.rotation_deg,
-            "scale": p.scale,
+            "scale": round(scale, 4),
         }
         for p in result.placements
     ]

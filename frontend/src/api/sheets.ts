@@ -112,11 +112,18 @@ export function autoLayout(
   sheetId: string,
   assetId: string,
   quantity: number,
-  orientation: "auto" | "horizontal" | "vertical" = "auto"
+  orientation: "auto" | "horizontal" | "vertical" = "auto",
+  sizeMm?: { width_mm?: number | null; height_mm?: number | null }
 ) {
   return api<AutoLayoutResult>(`/api/sheets/${sheetId}/auto-layout`, {
     method: "POST",
-    body: JSON.stringify({ asset_id: assetId, quantity, orientation }),
+    body: JSON.stringify({
+      asset_id: assetId,
+      quantity,
+      orientation,
+      width_mm: sizeMm?.width_mm ?? null,
+      height_mm: sizeMm?.height_mm ?? null,
+    }),
   });
 }
 

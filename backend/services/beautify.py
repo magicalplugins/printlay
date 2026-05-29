@@ -51,21 +51,41 @@ def _skin_mask(bgr: "np.ndarray") -> "np.ndarray":
 
 
 def _smooth_skin(bgr: "np.ndarray", strength: float) -> "np.ndarray":
-    """Edge-preserving skin smoothing blended over a skin mask."""
+    """Makeup-style skin smoothing via frequency separation.
+
+    Instead of a flat blur, we split the image into a low-frequency layer
+    (tone / colour / blemishes) and a high-frequency layer (pores, fine
+    texture, edges). We smooth the low layer with an edge-preserving
+    filter and add back only a fraction of the high layer — so blemishes
+    and uneven tone melt away while the skin keeps believable texture and
+    sharp boundaries (the "foundation applied" look, not plastic blur).
+    """
     import cv2  # type: ignore[import-untyped]
 
     if strength <= 0:
         return bgr
-    # Diameter scales a little with image size so the effect is visible on
-    # higher-res working images, and a second lighter pass deepens the smooth.
-    sigma = 60 + 90 * strength
-    diam = 9 if min(bgr.shape[:2]) < 900 else 13
-    smoothed = cv2.bilateralFilter(bgr, diam, sigma, sigma)
+
+    f = bgr.astype(np.float32)
+    diam = 9 if min(bgr.shape[:2]) < 900 else 15
+    sigma = 40 + 60 * strength
+    low = cv2.bilateralFilter(bgr, diam, sigma, sigma).astype(np.float32)
+    # A second pass at higher strength flattens stubborn blemishes.
     if strength > 0.5:
-        smoothed = cv2.bilateralFilter(smoothed, diam, sigma, sigma)
+        low = cv2.bilateralFilter(
+            low.astype(np.uint8), diam, sigma, sigma
+        ).astype(np.float32)
+
+    high = f - low  # texture + edges
+    # Keep less texture as strength rises: 0.55 (subtle) → 0.12 (porcelain).
+    keep = 0.55 - 0.43 * strength
+    smoothed = low + high * keep
+    # Tiny radiance lift so smoothed skin looks lit, not muddy.
+    smoothed = smoothed * (1.0 + 0.05 * strength)
+    smoothed = np.clip(smoothed, 0, 255)
+
     mask = _skin_mask(bgr).astype(np.float32) / 255.0 * min(0.95, 0.95 * strength)
     mask3 = cv2.merge([mask, mask, mask])
-    out = bgr.astype(np.float32) * (1.0 - mask3) + smoothed.astype(np.float32) * mask3
+    out = f * (1.0 - mask3) + smoothed * mask3
     return np.clip(out, 0, 255).astype(np.uint8)
 
 

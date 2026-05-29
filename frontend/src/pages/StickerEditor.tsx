@@ -1375,32 +1375,46 @@ function CutlineEditor({
   // One Laplacian relaxation pass on the points under the brush. Repeated
   // passes (swiping back and forth) progressively pull each point toward the
   // midpoint of its neighbours, melting away notches/jaggies.
+  // Smooth the cut line under the brush. Runs several iterations of a
+  // 5-tap (±2) windowed average per pointer event, weighted by a radial
+  // falloff, so a single swipe visibly melts notches/indentations — and
+  // brushing back and forth keeps relaxing the same area until it's smooth.
   function smoothAt(n: [number, number]) {
     const c = canvasRef.current!;
     const cw = c.width;
     const ch = c.height;
     const r = brushRadiusPx();
-    const pts = ptsRef.current;
-    const len = pts.length;
-    if (len < 5) return;
-    const next = pts.slice() as [number, number][];
-    for (let i = 0; i < len; i++) {
-      const dx = (pts[i][0] - n[0]) * cw;
-      const dy = (pts[i][1] - n[1]) * ch;
-      const dist = Math.hypot(dx, dy);
-      if (dist > r) continue;
-      const w = 1 - dist / r;
-      const prev = pts[(i - 1 + len) % len];
-      const nxt = pts[(i + 1) % len];
-      const ax = (prev[0] + nxt[0]) / 2;
-      const ay = (prev[1] + nxt[1]) / 2;
-      const lambda = 0.5 * w;
-      next[i] = [
-        pts[i][0] + (ax - pts[i][0]) * lambda,
-        pts[i][1] + (ay - pts[i][1]) * lambda,
-      ];
+    const len = ptsRef.current.length;
+    if (len < 7) return;
+    let pts = ptsRef.current;
+    const ITER = 5;
+    for (let it = 0; it < ITER; it++) {
+      const src = pts;
+      const out = src.slice() as [number, number][];
+      let touched = false;
+      for (let i = 0; i < len; i++) {
+        const dx = (src[i][0] - n[0]) * cw;
+        const dy = (src[i][1] - n[1]) * ch;
+        const dist = Math.hypot(dx, dy);
+        if (dist > r) continue;
+        touched = true;
+        const w = 1 - dist / r; // 1 at centre → 0 at edge
+        const a = src[(i - 2 + len) % len];
+        const b = src[(i - 1 + len) % len];
+        const d = src[(i + 1) % len];
+        const e = src[(i + 2) % len];
+        const ax = (a[0] + b[0] + src[i][0] + d[0] + e[0]) / 5;
+        const ay = (a[1] + b[1] + src[i][1] + d[1] + e[1]) / 5;
+        const lambda = Math.min(0.9, 0.85 * w);
+        out[i] = [
+          src[i][0] + (ax - src[i][0]) * lambda,
+          src[i][1] + (ay - src[i][1]) * lambda,
+        ];
+      }
+      pts = out;
+      if (!touched) break;
     }
-    ptsRef.current = next;
+    ptsRef.current = pts;
   }
 
   function onDown(e: React.PointerEvent) {

@@ -32,6 +32,9 @@ class StickerProcessResult:
     height_mm: float
     bg_type: str
     removal_method: str | None
+    cutout_png: bytes | None = None
+    """Background-removed RGBA (pre-cutline). Cached so the cut line can be
+    regenerated (precision/mode/face) without re-running AI removal."""
 
 
 @dataclass
@@ -78,6 +81,10 @@ def process_sticker(
             rgba_bytes = remove_background(image_bytes, method="ai_basic")
             used_method = "ai_basic"
 
+    # The bg-removed (or original, for rectangle) RGBA — cached for cheap
+    # cut-line regeneration without re-spending AI credits.
+    cutout_bytes = rgba_bytes
+
     cutline = generate_cutline(
         rgba_bytes,
         border_width_mm=border_width_mm,
@@ -101,6 +108,45 @@ def process_sticker(
         height_mm=height_mm,
         bg_type=bg_type,
         removal_method=used_method,
+        cutout_png=cutout_bytes,
+    )
+
+
+def regenerate_cutline(
+    cutout_bytes: bytes,
+    border_width_mm: float = 5.0,
+    border_color: tuple[int, int, int] = (255, 255, 255),
+    dpi: int = 300,
+    cutline_mode: CutlineMode = "contour",
+    cutline_precision: CutlinePrecision = "medium",
+    bleed_mm: float = 3.0,
+) -> StickerProcessResult:
+    """Re-run only the cut-line step on an already background-removed image.
+
+    Used by the preview screen to switch precision/mode/face sticker without
+    re-running (and re-charging for) background removal.
+    """
+    cutline = generate_cutline(
+        cutout_bytes,
+        border_width_mm=border_width_mm,
+        border_color=border_color,
+        dpi=dpi,
+        mode=cutline_mode,
+        precision=cutline_precision,
+        bleed_mm=bleed_mm,
+    )
+    preview_png = _render_preview(cutline)
+    width_mm = cutline.width_pt * 25.4 / 72.0
+    height_mm = cutline.height_pt * 25.4 / 72.0
+    return StickerProcessResult(
+        preview_png=preview_png,
+        border_png=cutline.border_image,
+        cutline=cutline,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        bg_type="transparent",
+        removal_method=None,
+        cutout_png=cutout_bytes,
     )
 
 

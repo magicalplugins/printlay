@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import {
   ProcessResponse,
   processSticker,
+  regenerateSticker,
   saveSticker,
 } from "../api/sticker";
 
 type Step = "upload" | "options" | "processing" | "preview" | "saving" | "done";
-type CutlineMode = "contour" | "rectangle";
+type CutlineMode = "contour" | "rectangle" | "face";
 type Precision = "tight" | "medium";
 
 export default function StickerEditor() {
@@ -47,6 +48,29 @@ export default function StickerEditor() {
       setStep("options");
     }
   }, [file, cutlineMode, precision]);
+
+  const [regenerating, setRegenerating] = useState(false);
+
+  const handleRegenerate = useCallback(
+    async (mode: CutlineMode, prec: Precision) => {
+      if (!result) return;
+      setRegenerating(true);
+      setError(null);
+      try {
+        const res = await regenerateSticker(result.session_id, mode, prec);
+        setResult(res);
+        setCutlineMode(mode);
+        setPrecision(prec);
+      } catch (e: any) {
+        const msg =
+          e?.body?.detail || e?.message || "Could not update the cut line.";
+        setError(msg);
+      } finally {
+        setRegenerating(false);
+      }
+    },
+    [result]
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -128,7 +152,15 @@ export default function StickerEditor() {
       {step === "processing" && <ProcessingState originalPreview={preview} />}
 
       {step === "preview" && result && (
-        <PreviewState result={result} onApprove={handleSave} onRetry={reset} />
+        <PreviewState
+          result={result}
+          mode={cutlineMode}
+          precision={precision}
+          regenerating={regenerating}
+          onRegenerate={handleRegenerate}
+          onApprove={handleSave}
+          onRetry={reset}
+        />
       )}
 
       {step === "saving" && <SavingState />}
@@ -175,15 +207,29 @@ function OptionsStep({
         <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
           Sticker type
         </legend>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <ModeCard
             active={cutlineMode === "contour"}
             onClick={() => setCutlineMode("contour")}
-            title="Cut to shape"
+            title="Background Removal"
             desc="Remove background and cut around the subject"
             icon={
               <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M16 4c-6 0-10 5-10 12s4 12 10 12 10-5 10-12S22 4 16 4z" strokeDasharray="3 2" />
+              </svg>
+            }
+          />
+          <ModeCard
+            active={cutlineMode === "face"}
+            onClick={() => setCutlineMode("face")}
+            title="Face Sticker"
+            desc="Cut around the head only — chin up to the hair"
+            icon={
+              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <ellipse cx="16" cy="15" rx="8" ry="10" strokeDasharray="3 2" />
+                <circle cx="13" cy="14" r="1" fill="currentColor" stroke="none" />
+                <circle cx="19" cy="14" r="1" fill="currentColor" stroke="none" />
+                <path d="M13 19c1.5 1.5 4.5 1.5 6 0" />
               </svg>
             }
           />
@@ -199,6 +245,12 @@ function OptionsStep({
             }
           />
         </div>
+        {cutlineMode === "face" && (
+          <p className="text-xs text-neutral-500">
+            Tip: use a clear, front-facing photo. We remove the background and
+            place the cut line around the head and hair.
+          </p>
+        )}
       </fieldset>
 
       <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
@@ -225,7 +277,11 @@ function OptionsStep({
         onClick={onProcess}
         className="w-full rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
       >
-        {cutlineMode === "contour" ? "Remove background & generate" : "Generate sticker"}
+        {cutlineMode === "rectangle"
+          ? "Generate sticker"
+          : cutlineMode === "face"
+          ? "Create face sticker"
+          : "Remove background & generate"}
       </button>
     </div>
   );
@@ -367,10 +423,18 @@ function ProcessingState({ originalPreview }: { originalPreview: string | null }
 
 function PreviewState({
   result,
+  mode,
+  precision,
+  regenerating,
+  onRegenerate,
   onApprove,
   onRetry,
 }: {
   result: ProcessResponse;
+  mode: CutlineMode;
+  precision: Precision;
+  regenerating: boolean;
+  onRegenerate: (mode: CutlineMode, precision: Precision) => void;
   onApprove: () => void;
   onRetry: () => void;
 }) {
@@ -390,6 +454,14 @@ function PreviewState({
           }}
         >
           <img src={result.preview_url} alt="Sticker preview" className="w-full h-auto" />
+          {regenerating && (
+            <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center">
+              <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            </div>
+          )}
         </div>
 
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs text-neutral-400">
@@ -415,10 +487,59 @@ function PreviewState({
         </div>
       </div>
 
+      {/* Adjust the cut line without re-uploading */}
+      {mode !== "rectangle" && (
+        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
+          <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+            Adjust cut line
+          </legend>
+
+          <div>
+            <div className="text-xs text-neutral-400 mb-2">Precision</div>
+            <div className="grid grid-cols-2 gap-3">
+              <PrecisionCard
+                active={precision === "tight"}
+                onClick={() => !regenerating && onRegenerate(mode, "tight")}
+                title="Tight"
+                desc="Close to subject edge"
+              />
+              <PrecisionCard
+                active={precision === "medium"}
+                onClick={() => !regenerating && onRegenerate(mode, "medium")}
+                title="Medium"
+                desc="More buffer around subject"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs text-neutral-400 mb-2">Cut around</div>
+            <div className="grid grid-cols-2 gap-3">
+              <PrecisionCard
+                active={mode === "contour"}
+                onClick={() => !regenerating && onRegenerate("contour", precision)}
+                title="Whole subject"
+                desc="Body and head"
+              />
+              <PrecisionCard
+                active={mode === "face"}
+                onClick={() => !regenerating && onRegenerate("face", precision)}
+                title="Face only"
+                desc="Chin up to the hair"
+              />
+            </div>
+          </div>
+          <p className="text-[11px] text-neutral-500">
+            Changes re-use the removed background — no extra AI credits used.
+          </p>
+        </fieldset>
+      )}
+
       <div className="flex flex-col sm:flex-row gap-3">
         <button
           onClick={onApprove}
-          className="flex-1 rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition text-center"
+          disabled={regenerating}
+          className="flex-1 rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition text-center disabled:opacity-50"
         >
           Save to catalogue
         </button>

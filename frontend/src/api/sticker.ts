@@ -42,6 +42,25 @@ export async function processSticker(
   });
 }
 
+export async function regenerateSticker(
+  sessionId: string,
+  cutlineMode: string,
+  cutlinePrecision: string,
+  borderWidthMm: number = 2.0,
+  bleedMm: number = 3.0
+): Promise<ProcessResponse> {
+  return api<ProcessResponse>("/api/sticker/regenerate", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      cutline_mode: cutlineMode,
+      cutline_precision: cutlinePrecision,
+      border_width_mm: borderWidthMm,
+      bleed_mm: bleedMm,
+    }),
+  });
+}
+
 export async function saveSticker(
   sessionId: string,
   name: string = "Sticker",

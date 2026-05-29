@@ -180,6 +180,7 @@ def process_sticker(
             )
         _increment_usage(db, user.id)
 
+    from backend.services.cutline_generator import FaceNotFoundError
     from backend.services.sticker_processor import process_sticker as do_process
     with _heavy_job_slot("process"):
         try:
@@ -188,9 +189,11 @@ def process_sticker(
                 removal_method=removal_method,
                 border_width_mm=border_width_mm,
                 bleed_mm=bleed_mm,
-                cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle") else "contour",
+                cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle", "face") else "contour",
                 cutline_precision=cutline_precision if cutline_precision in ("tight", "medium") else "medium",
             )
+        except FaceNotFoundError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
         except RuntimeError as exc:
             raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
         except Exception as exc:
@@ -207,6 +210,8 @@ def process_sticker(
 
     storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")
     storage.put_bytes(f"{prefix}/border.png", result.border_png, "image/png")
+    if result.cutout_png:
+        storage.put_bytes(f"{prefix}/cutout.png", result.cutout_png, "image/png")
 
     import json
     cutline_payload = {
@@ -235,6 +240,92 @@ def process_sticker(
         bg_type=result.bg_type,
         removal_method=result.removal_method,
         session_id=session_id,
+    )
+
+
+class RegenerateRequest(BaseModel):
+    session_id: str
+    cutline_mode: str = "contour"
+    cutline_precision: str = "medium"
+    border_width_mm: float = 2.0
+    bleed_mm: float = 3.0
+
+
+@router.post("/regenerate", response_model=ProcessResponse)
+def regenerate_sticker(
+    body: RegenerateRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Re-run the cut line on an existing session's background-removed image.
+
+    Lets the preview screen change precision / switch to a face sticker
+    without re-uploading or re-charging for AI background removal.
+    """
+    user = _resolve_user(db, auth)
+    ent = entitlements.for_user(user)
+    if not ent.allows("sticker_editor"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
+
+    prefix = f"sticker-sessions/{user.id}/{body.session_id}"
+    try:
+        cutout = storage.get_bytes(f"{prefix}/cutout.png")
+    except Exception:
+        raise HTTPException(
+            404,
+            "Sticker session expired. Please re-upload to change the cut line.",
+        )
+
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face") else "contour"
+    precision = body.cutline_precision if body.cutline_precision in ("tight", "medium") else "medium"
+
+    from backend.services.cutline_generator import FaceNotFoundError
+    from backend.services.sticker_processor import regenerate_cutline
+
+    with _heavy_job_slot("process"):
+        try:
+            result = regenerate_cutline(
+                cutout_bytes=cutout,
+                border_width_mm=body.border_width_mm,
+                bleed_mm=body.bleed_mm,
+                cutline_mode=mode,
+                cutline_precision=precision,
+            )
+        except FaceNotFoundError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+        except Exception as exc:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, f"Regeneration failed: {exc}"
+            )
+
+    storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")
+    storage.put_bytes(f"{prefix}/border.png", result.border_png, "image/png")
+
+    import json
+    cutline_payload = {
+        "points_px": [list(p) for p in result.cutline.points_px],
+        "points_pt": [list(p) for p in result.cutline.points_pt],
+        "width_px": result.cutline.width_px,
+        "height_px": result.cutline.height_px,
+        "width_pt": result.cutline.width_pt,
+        "height_pt": result.cutline.height_pt,
+        "width_mm": result.width_mm,
+        "height_mm": result.height_mm,
+    }
+    storage.put_bytes(
+        f"{prefix}/cutline.json",
+        json.dumps(cutline_payload).encode("utf-8"),
+        "application/json",
+    )
+
+    return ProcessResponse(
+        preview_url=storage.presigned_get(f"{prefix}/preview.png"),
+        border_url=storage.presigned_get(f"{prefix}/border.png"),
+        width_mm=result.width_mm,
+        height_mm=result.height_mm,
+        bg_type=result.bg_type,
+        removal_method=result.removal_method,
+        session_id=body.session_id,
     )
 
 

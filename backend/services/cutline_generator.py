@@ -24,8 +24,12 @@ from PIL import Image, ImageDraw, ImageFilter
 from shapely.geometry import Polygon
 from skimage.measure import find_contours
 
-CutlineMode = Literal["contour", "rectangle"]
+CutlineMode = Literal["contour", "rectangle", "face"]
 CutlinePrecision = Literal["tight", "medium"]
+
+
+class FaceNotFoundError(ValueError):
+    """Raised when a face sticker is requested but no face is detected."""
 
 
 @dataclass
@@ -77,10 +81,91 @@ def generate_cutline(
         return _generate_rectangle_cutline(
             img, cut_offset_px, bleed_px, border_color, dpi, corner_radius_mm
         )
+    elif mode == "face":
+        # Restrict the subject alpha to the head region (chin → hair) so the
+        # cut line follows just the face/head silhouette, not the whole body.
+        head_mask = _head_region_mask(img)
+        if head_mask is None:
+            raise FaceNotFoundError(
+                "No face detected. Use a clear, front-facing photo for a face sticker."
+            )
+        return _generate_contour_cutline(
+            img, cut_offset_px, bleed_px, border_color, dpi, precision,
+            subject_mask_override=head_mask,
+        )
     else:
         return _generate_contour_cutline(
             img, cut_offset_px, bleed_px, border_color, dpi, precision
         )
+
+
+def _head_region_mask(img: Image.Image) -> "np.ndarray | None":
+    """Build a binary mask limiting the subject to the head region for a
+    face sticker: from the chin up through the top of the hair.
+
+    Returns a uint8 (0/255) mask the same size as the image, or None if no
+    face is detected. The mask is the subject alpha intersected with an
+    ellipse sized around the detected face box and extended upward to take
+    in the hair and slightly below to keep the chin/jaw.
+    """
+    try:
+        import cv2  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+
+    try:
+        rgb = np.array(img.convert("RGB"))
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+
+        face_xml = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(face_xml)
+        if face_cascade.empty():
+            return None
+
+        h_img, w_img = gray.shape[:2]
+        min_dim = min(h_img, w_img)
+        min_face_px = max(50, min_dim // 8)
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(min_face_px, min_face_px),
+        )
+        if len(faces) == 0:
+            return None
+
+        # Largest detected face = primary subject.
+        fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+
+        # Ellipse covering the head. The Haar box spans roughly brow→chin
+        # and cheek→cheek, so we extend generously upward for the hair/top
+        # of head, modestly sideways for ears/hair, and a touch below for
+        # the chin and a little neck.
+        cx = fx + fw / 2.0
+        top = fy - fh * 0.85          # above hairline
+        bottom = fy + fh * 1.30       # below chin / a little neck
+        ell_cy = (top + bottom) / 2.0
+        ell_ry = (bottom - top) / 2.0
+        ell_rx = fw * 0.95            # half-width (ear to ear + hair)
+
+        region = Image.new("L", (w_img, h_img), 0)
+        ImageDraw.Draw(region).ellipse(
+            [cx - ell_rx, ell_cy - ell_ry, cx + ell_rx, ell_cy + ell_ry],
+            fill=255,
+        )
+        # Soften the ellipse edge so the intersection with hair looks natural.
+        region = region.filter(ImageFilter.GaussianBlur(radius=max(2, int(fw * 0.03))))
+        region_arr = (np.array(region) > 80).astype(np.uint8) * 255
+
+        alpha = np.array(img.split()[3])
+        subject = (alpha > 20).astype(np.uint8) * 255
+
+        head = np.minimum(subject, region_arr)
+        if int(head.sum()) == 0:
+            return None
+        return head
+    except Exception:
+        return None
 
 
 def _face_clearance_bonus_mm(img: Image.Image) -> float:
@@ -207,6 +292,7 @@ def _generate_contour_cutline(
     border_color: tuple[int, int, int],
     dpi: int,
     precision: CutlinePrecision,
+    subject_mask_override: "np.ndarray | None" = None,
 ) -> CutlineResult:
     """Generate a contour-following cutline at a consistent distance from subject.
 
@@ -217,11 +303,18 @@ def _generate_contour_cutline(
       3. Dilate subject mask by cut_offset_px → this is where the cut line sits
       4. Trace the contour of the dilated mask → produces the cut path
       5. Fill white up to (cut_offset_px + bleed_px) for the visual border+bleed
+
+    `subject_mask_override` restricts the cut to a sub-region of the subject
+    (e.g. just the head for a face sticker) while the full artwork is still
+    composited inside the border.
     """
     w, h = img.size
 
-    alpha = np.array(img.split()[3])
-    mask = (alpha > 20).astype(np.uint8) * 255
+    if subject_mask_override is not None:
+        mask = subject_mask_override.astype(np.uint8)
+    else:
+        alpha = np.array(img.split()[3])
+        mask = (alpha > 20).astype(np.uint8) * 255
 
     total_pad = cut_offset_px + bleed_px
     padded_h = h + 2 * total_pad
@@ -254,7 +347,13 @@ def _generate_contour_cutline(
     border_layer = Image.new("RGBA", (padded_w, padded_h), (*border_color, 255))
     bm_pil = Image.fromarray(bleed_mask, mode="L")
     border_img.paste(border_layer, mask=bm_pil)
-    border_img.paste(img, (total_pad, total_pad), mask=img.split()[3])
+    # For a face sticker the visible artwork is clipped to the head region so
+    # the body doesn't spill outside the cut. Otherwise use the full alpha.
+    if subject_mask_override is not None:
+        paste_mask = Image.fromarray(subject_mask_override.astype(np.uint8), mode="L")
+    else:
+        paste_mask = img.split()[3]
+    border_img.paste(img, (total_pad, total_pad), mask=paste_mask)
 
     contours = find_contours(cut_mask.astype(float), 0.5)
     if not contours:

@@ -9,6 +9,7 @@ import {
   updateTemplate,
 } from "../api/templates";
 import PdfCanvas from "../components/app/PdfCanvas";
+import RegistrationMarksOverlay from "../components/app/RegistrationMarksOverlay";
 import SlotOverlay from "../components/app/SlotOverlay";
 import { autoReparseIfStale } from "../utils/reparseTemplate";
 
@@ -194,6 +195,12 @@ export default function TemplateDetail() {
               safePt={liveSafeMm * MM_TO_PT}
             />
           )}
+          <RegistrationMarksOverlay
+            registrationType={registrationType || null}
+            widthMm={(tpl.page_width * 25.4) / 72}
+            heightMm={(tpl.page_height * 25.4) / 72}
+            maxZoneMm={maxZone && Number(maxZone) >= 50 ? Number(maxZone) : null}
+          />
         </div>
 
         <aside className="space-y-4 lg:sticky lg:top-20">

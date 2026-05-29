@@ -8,6 +8,7 @@ import {
   uploadTemplate,
 } from "../api/templates";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
+import RegistrationMarksOverlay from "../components/app/RegistrationMarksOverlay";
 import { formatApiError, FormattedApiError } from "../utils/apiError";
 import { useMe } from "../auth/MeProvider";
 
@@ -240,7 +241,10 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
       },
       registration_type: registrationType || null,
       mark_offset_mm: 5.0,
-      max_zone_length_mm: maxZone ? Number(maxZone) : null,
+      // Zoning only makes sense on long sheets; the backend requires >= 50mm.
+      // Treat anything smaller (or blank) as "no zoning" so generate never 422s.
+      max_zone_length_mm:
+        maxZone && Number(maxZone) >= 50 ? Number(maxZone) : null,
     };
     try {
       const tpl = await generateTemplate(req);
@@ -506,6 +510,9 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
           kind={kind}
           cornerRadius={kind === "rect" ? cornerRadius : 0}
           layout={layout}
+          registrationType={registrationType || null}
+          maxZoneMm={maxZone ? Number(maxZone) : null}
+          unitToMm={units === "mm" ? 1 : units === "in" ? 25.4 : 25.4 / 72}
         />
       </div>
     </form>
@@ -722,6 +729,9 @@ function GeneratorPreview({
   kind,
   cornerRadius,
   layout,
+  registrationType,
+  maxZoneMm,
+  unitToMm,
 }: {
   artboardW: number;
   artboardH: number;
@@ -731,6 +741,9 @@ function GeneratorPreview({
   kind: "rect" | "circle" | "ellipse";
   cornerRadius: number;
   layout: Layout;
+  registrationType: RegistrationType | null;
+  maxZoneMm: number | null;
+  unitToMm: number;
 }) {
   // Render purely in artboard units and let the SVG viewBox handle scaling
   // to whatever width the container gives us. That keeps the preview
@@ -818,6 +831,12 @@ function GeneratorPreview({
           );
         })}
       </svg>
+      <RegistrationMarksOverlay
+        registrationType={registrationType}
+        widthMm={artboardW * unitToMm}
+        heightMm={artboardH * unitToMm}
+        maxZoneMm={maxZoneMm && maxZoneMm >= 50 ? maxZoneMm : null}
+      />
       {showSafeZone && (
         <div className="absolute bottom-2 right-2 text-[10px] uppercase tracking-widest text-violet-500/80 bg-white/70 px-2 py-0.5 rounded">
           safe&nbsp;zone

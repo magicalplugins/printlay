@@ -1157,6 +1157,8 @@ function replaceArc(
   return polyArea(polyA) >= polyArea(polyB) ? polyA : polyB;
 }
 
+type EditTool = "redraw" | "smooth";
+
 function CutlineEditor({
   borderUrl,
   points,
@@ -1170,18 +1172,23 @@ function CutlineEditor({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [img, setImg] = useState<HTMLImageElement | null>(null);
-  const [localPoints, setLocalPoints] = useState<[number, number][]>(points);
+  const [tool, setTool] = useState<EditTool>("redraw");
+  const [brush, setBrush] = useState(40);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Live geometry lives in a ref so the smooth brush can mutate it every
+  // pointer-move without forcing a React re-render of the whole editor.
+  const ptsRef = useRef<[number, number][]>(points);
   const drawingRef = useRef(false);
   const strokeRef = useRef<[number, number][]>([]);
   const startIdxRef = useRef(0);
-
-  useEffect(() => {
-    setLocalPoints(points);
-    setDirty(false);
-  }, [points]);
+  const brushPosRef = useRef<[number, number] | null>(null);
+  const toolRef = useRef<EditTool>(tool);
+  toolRef.current = tool;
+  const brushRef = useRef(brush);
+  brushRef.current = brush;
 
   useEffect(() => {
     const im = new Image();
@@ -1189,8 +1196,14 @@ function CutlineEditor({
     im.src = borderUrl;
   }, [borderUrl]);
 
+  const brushRadiusPx = useCallback(() => {
+    const c = canvasRef.current;
+    const w = c ? c.width : 400;
+    return w * (0.05 + (brushRef.current / 100) * 0.13);
+  }, []);
+
   const redraw = useCallback(
-    (stroke?: [number, number][]) => {
+    (opts?: { stroke?: [number, number][]; brush?: [number, number] | null }) => {
       const c = canvasRef.current;
       if (!c || !img) return;
       const ctx = c.getContext("2d");
@@ -1200,11 +1213,12 @@ function CutlineEditor({
       ctx.clearRect(0, 0, cw, ch);
       ctx.drawImage(img, 0, 0, cw, ch);
 
-      if (localPoints.length > 1) {
+      const pts = ptsRef.current;
+      if (pts.length > 1) {
         ctx.beginPath();
-        ctx.moveTo(localPoints[0][0] * cw, localPoints[0][1] * ch);
-        for (let i = 1; i < localPoints.length; i++) {
-          ctx.lineTo(localPoints[i][0] * cw, localPoints[i][1] * ch);
+        ctx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i][0] * cw, pts[i][1] * ch);
         }
         ctx.closePath();
         ctx.setLineDash([8, 5]);
@@ -1214,7 +1228,7 @@ function CutlineEditor({
         ctx.setLineDash([]);
       }
 
-      const s = stroke ?? strokeRef.current;
+      const s = opts?.stroke;
       if (s && s.length > 1) {
         ctx.beginPath();
         ctx.moveTo(s[0][0] * cw, s[0][1] * ch);
@@ -1225,10 +1239,21 @@ function CutlineEditor({
         ctx.strokeStyle = "#84cc16";
         ctx.stroke();
       }
+
+      const b = opts && "brush" in opts ? opts.brush : brushPosRef.current;
+      if (b) {
+        ctx.beginPath();
+        ctx.arc(b[0] * cw, b[1] * ch, brushRadiusPx(), 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(132,204,22,0.9)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      }
     },
-    [img, localPoints]
+    [img, brushRadiusPx]
   );
 
+  // Size the canvas to the image and reset geometry when the source changes.
   useEffect(() => {
     const c = canvasRef.current;
     if (!c || !img) return;
@@ -1243,8 +1268,10 @@ function CutlineEditor({
   }, [img, redraw]);
 
   useEffect(() => {
+    ptsRef.current = points;
+    setDirty(false);
     redraw();
-  }, [redraw]);
+  }, [points, redraw]);
 
   function toNorm(e: React.PointerEvent): [number, number] {
     const c = canvasRef.current!;
@@ -1258,18 +1285,50 @@ function CutlineEditor({
     const c = canvasRef.current!;
     const cw = c.width;
     const ch = c.height;
+    const pts = ptsRef.current;
     let best = 0;
     let bd = Infinity;
-    localPoints.forEach((p, i) => {
-      const dx = (p[0] - n[0]) * cw;
-      const dy = (p[1] - n[1]) * ch;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = (pts[i][0] - n[0]) * cw;
+      const dy = (pts[i][1] - n[1]) * ch;
       const d = dx * dx + dy * dy;
       if (d < bd) {
         bd = d;
         best = i;
       }
-    });
+    }
     return best;
+  }
+
+  // One Laplacian relaxation pass on the points under the brush. Repeated
+  // passes (swiping back and forth) progressively pull each point toward the
+  // midpoint of its neighbours, melting away notches/jaggies.
+  function smoothAt(n: [number, number]) {
+    const c = canvasRef.current!;
+    const cw = c.width;
+    const ch = c.height;
+    const r = brushRadiusPx();
+    const pts = ptsRef.current;
+    const len = pts.length;
+    if (len < 5) return;
+    const next = pts.slice() as [number, number][];
+    for (let i = 0; i < len; i++) {
+      const dx = (pts[i][0] - n[0]) * cw;
+      const dy = (pts[i][1] - n[1]) * ch;
+      const dist = Math.hypot(dx, dy);
+      if (dist > r) continue;
+      const w = 1 - dist / r;
+      const prev = pts[(i - 1 + len) % len];
+      const nxt = pts[(i + 1) % len];
+      const ax = (prev[0] + nxt[0]) / 2;
+      const ay = (prev[1] + nxt[1]) / 2;
+      const lambda = 0.5 * w;
+      next[i] = [
+        pts[i][0] + (ax - pts[i][0]) * lambda,
+        pts[i][1] + (ay - pts[i][1]) * lambda,
+      ];
+    }
+    ptsRef.current = next;
   }
 
   function onDown(e: React.PointerEvent) {
@@ -1277,44 +1336,80 @@ function CutlineEditor({
     e.preventDefault();
     (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
     const n = toNorm(e);
-    startIdxRef.current = nearestIdx(n);
-    strokeRef.current = [n];
     drawingRef.current = true;
+    if (toolRef.current === "redraw") {
+      startIdxRef.current = nearestIdx(n);
+      strokeRef.current = [n];
+    } else {
+      brushPosRef.current = n;
+      smoothAt(n);
+      setDirty(true);
+      redraw({ brush: n });
+    }
   }
 
   function onMove(e: React.PointerEvent) {
-    if (!drawingRef.current) return;
     const n = toNorm(e);
-    const last = strokeRef.current[strokeRef.current.length - 1];
-    const c = canvasRef.current!;
-    const dx = (n[0] - last[0]) * c.width;
-    const dy = (n[1] - last[1]) * c.height;
-    if (dx * dx + dy * dy < 9) return;
-    strokeRef.current.push(n);
-    redraw(strokeRef.current);
+    if (!drawingRef.current) {
+      // Show the brush ring on hover for the smooth tool.
+      if (toolRef.current === "smooth") {
+        brushPosRef.current = n;
+        redraw({ brush: n });
+      }
+      return;
+    }
+    if (toolRef.current === "redraw") {
+      const last = strokeRef.current[strokeRef.current.length - 1];
+      const c = canvasRef.current!;
+      const dx = (n[0] - last[0]) * c.width;
+      const dy = (n[1] - last[1]) * c.height;
+      if (dx * dx + dy * dy < 9) return;
+      strokeRef.current.push(n);
+      redraw({ stroke: strokeRef.current });
+    } else {
+      brushPosRef.current = n;
+      smoothAt(n);
+      redraw({ brush: n });
+    }
   }
 
   function onUp(e: React.PointerEvent) {
     if (!drawingRef.current) return;
     drawingRef.current = false;
     const n = toNorm(e);
-    const endIdx = nearestIdx(n);
-    const stroke = strokeRef.current;
-    strokeRef.current = [];
-    if (stroke.length < 2) {
+    if (toolRef.current === "redraw") {
+      const endIdx = nearestIdx(n);
+      const stroke = strokeRef.current;
+      strokeRef.current = [];
+      if (stroke.length < 2) {
+        redraw();
+        return;
+      }
+      ptsRef.current = replaceArc(
+        ptsRef.current,
+        startIdxRef.current,
+        endIdx,
+        stroke
+      );
+      setDirty(true);
       redraw();
-      return;
+    } else {
+      brushPosRef.current = n;
+      redraw({ brush: n });
     }
-    const next = replaceArc(localPoints, startIdxRef.current, endIdx, stroke);
-    setLocalPoints(next);
-    setDirty(true);
+  }
+
+  function onLeave() {
+    if (drawingRef.current) return;
+    brushPosRef.current = null;
+    redraw({ brush: null });
   }
 
   async function apply() {
     setBusy(true);
     setErr(null);
     try {
-      await onApply(localPoints);
+      await onApply(ptsRef.current);
       onClose();
     } catch (e: any) {
       setErr(e?.body?.detail || e?.message || "Could not save the edit.");
@@ -1323,8 +1418,63 @@ function CutlineEditor({
     }
   }
 
+  function resetPts() {
+    ptsRef.current = points;
+    setDirty(false);
+    redraw();
+  }
+
   return (
     <div className="space-y-3">
+      {/* Tool switcher */}
+      <div className="flex items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={() => setTool("redraw")}
+          className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+            tool === "redraw"
+              ? "bg-violet-600 text-white"
+              : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M16.5 4.5l3 3L8 19l-4 1 1-4 11.5-11.5z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Redraw
+        </button>
+        <button
+          type="button"
+          onClick={() => setTool("smooth")}
+          className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+            tool === "smooth"
+              ? "bg-violet-600 text-white"
+              : "border border-neutral-700 text-neutral-300 hover:border-neutral-500"
+          }`}
+        >
+          <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M4 16c4-8 12-8 16 0" strokeLinecap="round" />
+          </svg>
+          Smooth
+        </button>
+      </div>
+
+      {tool === "smooth" && (
+        <div className="flex items-center gap-3 max-w-[400px] mx-auto px-1">
+          <span className="text-[11px] text-neutral-400 whitespace-nowrap">
+            Brush size
+          </span>
+          <input
+            type="range"
+            min={10}
+            max={100}
+            step={5}
+            value={brush}
+            onChange={(e) => setBrush(parseInt(e.target.value, 10))}
+            className="flex-1 accent-violet-500"
+          />
+        </div>
+      )}
+
       <div
         className="relative mx-auto rounded-xl overflow-hidden border border-violet-500/40 bg-repeat"
         style={{
@@ -1338,6 +1488,7 @@ function CutlineEditor({
           onPointerMove={onMove}
           onPointerUp={onUp}
           onPointerCancel={onUp}
+          onPointerLeave={onLeave}
           className="w-full h-auto block touch-none cursor-crosshair"
         />
         {busy && (
@@ -1351,8 +1502,9 @@ function CutlineEditor({
       </div>
 
       <p className="text-[11px] text-neutral-400 text-center px-2">
-        Drag from one spot on the blue cut line to another to redraw that
-        section — the excess you draw across is trimmed off.
+        {tool === "redraw"
+          ? "Drag from one spot on the blue cut line to another to redraw that section — the excess you draw across is trimmed off."
+          : "Swipe back and forth over a notchy area to gradually smooth it out. The more you swipe, the smoother it gets."}
       </p>
 
       {err && (
@@ -1372,10 +1524,7 @@ function CutlineEditor({
         </button>
         <button
           type="button"
-          onClick={() => {
-            setLocalPoints(points);
-            setDirty(false);
-          }}
+          onClick={resetPts}
           disabled={busy || !dirty}
           className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
         >

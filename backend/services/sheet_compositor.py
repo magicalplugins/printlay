@@ -54,6 +54,9 @@ class SheetConfig:
     sub_sheet_bleed_mm: float = 0.0
     sub_sheet_title: str | None = None
     sub_sheet_title_size_mm: float = 5.0
+    spot_color_marks: str | None = None
+    """Colour for registration + crop marks (hex like '#000000' or a spot
+    name). Drawn in this colour on the printed PDF."""
 
 
 SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
@@ -61,6 +64,24 @@ SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
     "a4": (210.0, 297.0),
     "a3": (297.0, 420.0),
 }
+
+
+def _hex_to_rgb(value: str | None) -> tuple[float, float, float]:
+    """Convert a hex colour ('#RRGGBB') to a 0-1 RGB tuple for pymupdf.
+
+    Non-hex values (e.g. a spot name like 'CutContour') fall back to black —
+    spot separations aren't representable as device RGB on a flat PDF page,
+    and marks are practically always a plain colour.
+    """
+    if not value or not value.startswith("#") or len(value) != 7:
+        return (0.0, 0.0, 0.0)
+    try:
+        r = int(value[1:3], 16) / 255.0
+        g = int(value[3:5], 16) / 255.0
+        b = int(value[5:7], 16) / 255.0
+        return (r, g, b)
+    except ValueError:
+        return (0.0, 0.0, 0.0)
 
 
 def resolve_sub_size(config: "SheetConfig") -> tuple[float, float] | None:
@@ -398,7 +419,7 @@ def _draw_crop_marks(
 
     mark_len = 3.0 * PT_PER_MM
     offset = 1.5 * PT_PER_MM
-    color = (0, 0, 0)
+    color = _hex_to_rgb(config.spot_color_marks)
     width = 0.3
 
     for row in range(rows):
@@ -459,6 +480,7 @@ def _draw_velloblade_marks(
     h_pt = total_height_mm * PT_PER_MM
     offset = config.mark_offset_mm * PT_PER_MM
     circle_r = (6.0 / 2.0) * PT_PER_MM  # 6mm diameter
+    mark_color = _hex_to_rgb(config.spot_color_marks)
 
     if config.max_zone_length_mm:
         zone_h_pt = config.max_zone_length_mm * PT_PER_MM
@@ -484,8 +506,8 @@ def _draw_velloblade_marks(
             page.draw_circle(
                 pymupdf.Point(cx, cy),
                 circle_r,
-                color=(0, 0, 0),
-                fill=(0, 0, 0),
+                color=mark_color,
+                fill=mark_color,
                 width=0.25,
             )
 
@@ -500,6 +522,7 @@ def _draw_summa_marks(
     h_pt = total_height_mm * PT_PER_MM
     offset = config.mark_offset_mm * PT_PER_MM
     arm_len = 1.5 * PT_PER_MM
+    mark_color = _hex_to_rgb(config.spot_color_marks)
 
     if config.max_zone_length_mm:
         zone_h_pt = config.max_zone_length_mm * PT_PER_MM
@@ -520,12 +543,12 @@ def _draw_summa_marks(
             page.draw_line(
                 pymupdf.Point(x - arm_len, y),
                 pymupdf.Point(x + arm_len, y),
-                color=(0, 0, 0), width=0.3,
+                color=mark_color, width=0.3,
             )
             page.draw_line(
                 pymupdf.Point(x, y - arm_len),
                 pymupdf.Point(x, y + arm_len),
-                color=(0, 0, 0), width=0.3,
+                color=mark_color, width=0.3,
             )
 
 
@@ -539,6 +562,7 @@ def _draw_generic_marks(
     h_pt = total_height_mm * PT_PER_MM
     offset = config.mark_offset_mm * PT_PER_MM
     arm_len = 2.0 * PT_PER_MM
+    mark_color = _hex_to_rgb(config.spot_color_marks)
 
     corners = [
         (offset, offset),
@@ -551,16 +575,16 @@ def _draw_generic_marks(
         page.draw_line(
             pymupdf.Point(cx - arm_len, cy),
             pymupdf.Point(cx + arm_len, cy),
-            color=(0, 0, 0), width=0.3,
+            color=mark_color, width=0.3,
         )
         page.draw_line(
             pymupdf.Point(cx, cy - arm_len),
             pymupdf.Point(cx, cy + arm_len),
-            color=(0, 0, 0), width=0.3,
+            color=mark_color, width=0.3,
         )
         page.draw_circle(
             pymupdf.Point(cx, cy),
             arm_len * 0.6,
-            color=(0, 0, 0),
+            color=mark_color,
             width=0.2,
         )

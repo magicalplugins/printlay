@@ -409,6 +409,7 @@ def run_auto_layout(
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
         sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
         sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
+        spot_color_marks=getattr(sheet, "spot_color_marks", None),
     )
 
     result = auto_layout(
@@ -494,6 +495,7 @@ def export_sheet_pdf(
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
         sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
         sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
+        spot_color_marks=getattr(sheet, "spot_color_marks", None),
     )
 
     placements_typed = [

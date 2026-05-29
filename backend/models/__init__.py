@@ -2,12 +2,17 @@ from backend.models.app_setting import AppSetting
 from backend.models.asset import Asset, AssetCategory, CatalogueSubscription
 from backend.models.audit import AuditEvent
 from backend.models.base import Base
+from backend.models.changelog_entry import ChangelogEntry
 from backend.models.color_profile import ColorProfile
+from backend.models.cutter_preset import CutterPreset
 from backend.models.job import Job
 from backend.models.lead import Lead
 from backend.models.output import Output
 from backend.models.spot_color import SpotColor
+from backend.models.sticker_sheet import StickerSheet
+from backend.models.sticker_usage import StickerUsage
 from backend.models.stripe_event import StripeEvent
+from backend.models.support_grant import SupportGrant
 from backend.models.template import Template
 from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
@@ -19,12 +24,17 @@ __all__ = [
     "AuditEvent",
     "Base",
     "CatalogueSubscription",
+    "ChangelogEntry",
     "ColorProfile",
+    "CutterPreset",
     "Job",
     "Lead",
     "Output",
     "SpotColor",
+    "StickerSheet",
+    "StickerUsage",
     "StripeEvent",
+    "SupportGrant",
     "Template",
     "TrialInvite",
     "User",

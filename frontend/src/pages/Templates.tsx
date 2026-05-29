@@ -47,6 +47,7 @@ function SourceBadge({ source }: { source: string }) {
 export default function Templates() {
   const [items, setItems] = useState<Template[] | null>(null);
   const [err, setErr] = useState<FormattedApiError | null>(null);
+  const [loading, setLoading] = useState(true);
   const reportErr = (e: unknown) => setErr(formatApiError(e));
   const [view, setView] = useState<View>(() => {
     try { return (localStorage.getItem("printlay.templatesView") as View) || "grid"; }
@@ -56,11 +57,15 @@ export default function Templates() {
   const [deleting, setDeleting] = useState(false);
 
   async function load() {
+    setLoading(true);
+    setErr(null);
     try {
       const data = await listTemplates();
       setItems(data);
     } catch (e) {
       reportErr(e);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -161,13 +166,17 @@ export default function Templates() {
         </div>
       </div>
 
-      {err && (
+      {err && items !== null && (
         <div className="mb-4">
           <QuotaErrorBanner error={err} />
         </div>
       )}
 
-      {items === null ? (
+      {items === null && loading ? (
+        <CardGridSkeleton />
+      ) : items === null && err ? (
+        <LoadFailed onRetry={load} error={err} />
+      ) : items === null ? (
         <CardGridSkeleton />
       ) : items.length === 0 ? (
         <Empty />
@@ -364,6 +373,43 @@ export default function Templates() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+function LoadFailed({
+  onRetry,
+  error,
+}: {
+  onRetry: () => void;
+  error: FormattedApiError;
+}) {
+  return (
+    <div className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-8 text-center">
+      <div className="mx-auto mb-3 h-10 w-10 rounded-full bg-rose-500/15 border border-rose-500/40 flex items-center justify-center">
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
+          <path
+            d="M9 3v6M9 12.5v.5"
+            stroke="rgb(252, 165, 165)"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
+      <p className="text-sm font-semibold text-neutral-100">
+        Couldn't load your templates
+      </p>
+      <p className="mt-1 text-xs text-neutral-400">
+        {error.message ||
+          "Something went wrong on our end. It usually clears up in a few seconds."}
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-neutral-200"
+      >
+        ↻ Try again
+      </button>
     </div>
   );
 }

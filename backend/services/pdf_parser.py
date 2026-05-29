@@ -70,7 +70,11 @@ class ParsedTemplate:
     shapes: list[ParsedShape]
 
 
-POSITION_LAYER_CANDIDATES = ("POSITIONS", "POSITION", "SLOTS", "SLOT")
+POSITION_LAYER_CANDIDATES = (
+    "POSITIONS", "POSITION", "SLOTS", "SLOT",
+    "JIG", "JIGS", "DIE", "DIELINE", "DIE LINE", "DIECUT", "DIE CUT",
+    "CUT", "CUTLINE", "CUT LINE",
+)
 
 
 def parse(pdf_bytes: bytes, *, layer_hint: str | None = None) -> ParsedTemplate:

@@ -2,8 +2,12 @@ import { ComponentType, lazy } from "react";
 
 const RELOAD_KEY = "printlay:chunk-reload-attempted";
 // Flag is auto-cleared after this many ms so a stuck "1" can't permanently
-// disable the auto-reload escape hatch.
-const RELOAD_FLAG_TTL_MS = 30_000;
+// disable the auto-reload escape hatch. We keep it short (~10s) so a user
+// who hits a chunk error, reloads, then immediately hits ANOTHER stale
+// chunk reference (possible when multiple deploys happened in quick
+// succession) still gets recovered automatically by the next route change.
+const RELOAD_FLAG_TTL_MS = 10_000;
+const NETWORK_RETRY_DELAY_MS = 500;
 
 function isChunkLoadError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -70,20 +74,30 @@ export function lazyWithRetry<T extends ComponentType<unknown>>(
   factory: () => Promise<{ default: T }>
 ): React.LazyExoticComponent<T> {
   return lazy(async () => {
+    // Single in-process retry first to absorb transient network blips
+    // (mobile flaky wifi, dropped packets, brief Fly machine cold start)
+    // without a full-page reload.
     try {
       const mod = await factory();
       clearReloadFlag();
       return mod;
     } catch (err) {
-      if (isChunkLoadError(err)) {
-        if (!readReloadFlag()) {
-          setReloadFlag();
-          forceReload();
-          // Hang forever; the page is about to be replaced.
-          return new Promise<{ default: T }>(() => {});
+      if (!isChunkLoadError(err)) throw err;
+      try {
+        await new Promise((r) => setTimeout(r, NETWORK_RETRY_DELAY_MS));
+        const mod = await factory();
+        clearReloadFlag();
+        return mod;
+      } catch (err2) {
+        if (isChunkLoadError(err2)) {
+          if (!readReloadFlag()) {
+            setReloadFlag();
+            forceReload();
+            return new Promise<{ default: T }>(() => {});
+          }
         }
+        throw err2;
       }
-      throw err;
     }
   });
 }

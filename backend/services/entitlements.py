@@ -43,6 +43,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "color_profiles_max": 0,
         "asset_size_mb_max": 0,
         "storage_mb_max": 0,
+        "bg_removals_per_month": 0,
     },
     "starter": {
         "templates_max": 10,
@@ -51,6 +52,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "color_profiles_max": 2,
         "asset_size_mb_max": 50,
         "storage_mb_max": 20 * 1024,       # 20 GB
+        "bg_removals_per_month": 25,
     },
     "pro": {
         "templates_max": 20,
@@ -59,6 +61,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "color_profiles_max": 5,
         "asset_size_mb_max": 100,
         "storage_mb_max": 50 * 1024,       # 50 GB
+        "bg_removals_per_month": 200,
     },
     "studio": {
         "templates_max": 50,
@@ -67,6 +70,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "color_profiles_max": 20,
         "asset_size_mb_max": 500,
         "storage_mb_max": 250 * 1024,      # 250 GB
+        "bg_removals_per_month": 1000,
     },
     "enterprise": {
         "templates_max": None,
@@ -75,6 +79,7 @@ PLAN_LIMITS: dict[Plan, dict[str, int | None]] = {
         "color_profiles_max": None,
         "asset_size_mb_max": 1024,         # 1 GB per asset
         "storage_mb_max": None,            # unlimited
+        "bg_removals_per_month": None,     # unlimited
     },
 }
 
@@ -92,6 +97,7 @@ PLAN_FEATURES: dict[Plan, set[str]] = {
         "colour_swap",
         "catalogue",
         "manual_positioning",
+        "sticker_editor",
     },
     "pro": {
         "pdf_export",
@@ -100,6 +106,7 @@ PLAN_FEATURES: dict[Plan, set[str]] = {
         "manual_positioning",
         "catalogue_sharing",
         "priority_support",
+        "sticker_editor",
     },
     "studio": {
         "pdf_export",
@@ -111,6 +118,7 @@ PLAN_FEATURES: dict[Plan, set[str]] = {
         "white_label_pdf",
         "api_access",
         "advanced_layouts",
+        "sticker_editor",
     },
     "enterprise": {"all"},
 }

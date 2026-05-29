@@ -34,6 +34,9 @@ class AssetOut(BaseModel):
     width_pt: float
     height_pt: float
     file_size: int
+    page_count: int = 1
+    """How many pages/artboards the source PDF contains. 1 for rasters
+    and single-page PDFs."""
     thumbnail_url: str | None = None
     preview_url: str | None = None
     """Highest-fidelity preview URL the browser can render directly.

@@ -92,6 +92,9 @@ class NormalisedAsset:
     height_pt: float
     thumbnail_jpg: bytes | None
     original_kept: bool
+    page_count: int = 1
+    """Number of pages in the normalised PDF. >1 indicates a multi-side
+    artwork (front/back stickers, multi-up artboards)."""
     original_bytes: bytes | None = None
     """Bytes to store as the browser-served `original`. None means use the
     caller's raw upload bytes. We override this for SVG so the served
@@ -210,6 +213,14 @@ def _pdf_dimensions(pdf_bytes: bytes) -> tuple[float, float]:
         doc.close()
 
 
+def _pdf_page_count(pdf_bytes: bytes) -> int:
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        return int(doc.page_count)
+    finally:
+        doc.close()
+
+
 def _thumbnail_from_pdf(pdf_bytes: bytes) -> bytes:
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     try:
@@ -248,6 +259,7 @@ def normalise(
         original_kept = True
 
     thumb = _thumbnail_from_pdf(pdf_bytes)
+    page_count = _pdf_page_count(pdf_bytes) if kind == "pdf" else 1
     return NormalisedAsset(
         kind=kind,
         pdf_bytes=pdf_bytes,
@@ -255,5 +267,6 @@ def normalise(
         height_pt=height,
         thumbnail_jpg=thumb,
         original_kept=original_kept,
+        page_count=max(1, page_count),
         original_bytes=original_bytes,
     )

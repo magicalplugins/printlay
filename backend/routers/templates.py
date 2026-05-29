@@ -129,7 +129,7 @@ async def upload_template(
         raise HTTPException(
             422,
             "No slot shapes found in this PDF. Make sure the file has rectangles "
-            "or circles on a layer named POSITIONS, then re-export.",
+            "or circles on a layer named POSITIONS (or JIG, SLOTS, DIELINE, CUT), then re-export.",
         )
 
     template_id = uuid.uuid4()

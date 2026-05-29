@@ -59,6 +59,13 @@ class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     width_pt: Mapped[float] = mapped_column(Float, nullable=False)
     height_pt: Mapped[float] = mapped_column(Float, nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    page_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    """How many pages/artboards the source PDF contains. 1 for rasters
+    and most PDFs; >1 for multi-side designs (front/back stickers,
+    multi-up artwork). Per-assignment `page_index` picks which page is
+    used in a given slot."""
     is_official: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )

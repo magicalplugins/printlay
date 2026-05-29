@@ -8,10 +8,12 @@ import {
 } from "../api/templates";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
 import { formatApiError, FormattedApiError } from "../utils/apiError";
+import { useMe } from "../auth/MeProvider";
 
 type Path = "choose" | "upload" | "generate";
 
 export default function TemplateWizard() {
+  const navigate = useNavigate();
   const [path, setPath] = useState<Path>("choose");
 
   return (
@@ -23,28 +25,50 @@ export default function TemplateWizard() {
         </p>
       </div>
 
-      {path === "choose" && <Choose onPick={setPath} />}
+      {path === "choose" && <Choose onPick={setPath} onSticker={() => navigate("/app/templates/new/sticker")} />}
       {path === "upload" && <UploadStep onBack={() => setPath("choose")} />}
       {path === "generate" && <GenerateStep onBack={() => setPath("choose")} />}
     </div>
   );
 }
 
-function Choose({ onPick }: { onPick: (p: Path) => void }) {
+function Choose({ onPick, onSticker }: { onPick: (p: Path) => void; onSticker: () => void }) {
+  const { me } = useMe();
+  const showSticker = !!me?.is_admin;
+
   return (
-    <div className="grid md:grid-cols-2 gap-5">
-      <Card
-        title="Upload your template"
-        body="Drop in an Illustrator-exported PDF. We'll preserve your artboard exactly and detect slots on a POSITIONS layer."
-        cta="Upload AI/PDF"
-        onClick={() => onPick("upload")}
-      />
-      <Card
-        title="Generate one here"
-        body="Specify the artboard, the shape (rectangle, circle, or oval), and the gap. We auto-fit and centre the grid for you."
-        cta="Build a template"
-        onClick={() => onPick("generate")}
-      />
+    <div className="space-y-5">
+      <div className="grid md:grid-cols-2 gap-5">
+        <Card
+          title="Upload your template"
+          body="Drop in an Illustrator-exported PDF. We'll preserve your artboard exactly and detect slots on a POSITIONS or JIG layer."
+          cta="Upload AI/PDF"
+          onClick={() => onPick("upload")}
+        />
+        <Card
+          title="Generate one here"
+          body="Specify the artboard, the shape (rectangle, circle, or oval), and the gap. We auto-fit and centre the grid for you."
+          cta="Build a template"
+          onClick={() => onPick("generate")}
+        />
+      </div>
+
+      {showSticker && (
+        <div className="pt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] uppercase tracking-widest text-violet-400 font-semibold">
+              Admin · In development
+            </span>
+          </div>
+          <Card
+            title="Sticker Builder"
+            body="Upload artwork and we'll remove the background, generate a smooth cut line with white border, and create a print-ready sticker."
+            cta="Create sticker"
+            onClick={onSticker}
+            accent
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -54,20 +78,26 @@ function Card({
   body,
   cta,
   onClick,
+  accent,
 }: {
   title: string;
   body: string;
   cta: string;
   onClick: () => void;
+  accent?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className="text-left rounded-2xl border border-neutral-800 bg-neutral-900/50 p-7 hover:border-neutral-500 transition group"
+      className={`text-left rounded-2xl border p-7 transition group ${
+        accent
+          ? "border-violet-500/50 bg-violet-500/5 hover:border-violet-400 hover:bg-violet-500/10"
+          : "border-neutral-800 bg-neutral-900/50 hover:border-neutral-500"
+      }`}
     >
       <div className="text-2xl font-bold">{title}</div>
       <p className="text-neutral-400 mt-2">{body}</p>
-      <div className="mt-6 inline-flex items-center gap-2 text-sm font-medium text-white">
+      <div className={`mt-6 inline-flex items-center gap-2 text-sm font-medium ${accent ? "text-violet-300" : "text-white"}`}>
         {cta} <span className="transition group-hover:translate-x-1">→</span>
       </div>
     </button>
@@ -114,7 +144,9 @@ function UploadStep({ onBack }: { onBack: () => void }) {
         <p className="text-xs text-neutral-500 mt-2">
           Tip: in Illustrator, put your slot shapes (rectangles, ovals, hexagons,
           stars — any closed path) on a layer named{" "}
-          <code className="text-neutral-300">POSITIONS</code> before exporting.
+          <code className="text-neutral-300">POSITIONS</code>,{" "}
+          <code className="text-neutral-300">JIG</code>, or{" "}
+          <code className="text-neutral-300">DIELINE</code> before exporting.
         </p>
       </div>
       <div>

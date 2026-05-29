@@ -120,6 +120,11 @@ class Settings(BaseSettings):
     """E.164 number / Messaging Service SID. Optional - SMS is silently
     disabled if any of these three are missing."""
 
+    replicate_api_token: str | None = None
+    """Replicate API token for AI background removal (BiRefNet model).
+    Get one at https://replicate.com/account/api-tokens.
+    Set via `fly secrets set REPLICATE_API_TOKEN=...`."""
+
     @property
     def admin_email_set(self) -> set[str]:
         """Lower-cased set of admin emails for O(1) membership checks."""

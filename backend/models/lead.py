@@ -43,6 +43,12 @@ class Lead(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """The URL the user was on when they opened the widget — useful
     context for replies ('I see you were on the Pro pricing page...')."""
 
+    phone: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    """Optional callback number. Offered (but not required) for
+    pre-sales enquiries so we can ring back quickly when someone is
+    actively shopping. Stored as the user typed it — no normalisation,
+    since international formats vary too much for a reliable parse."""
+
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -56,6 +62,16 @@ class Lead(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(16), nullable=False, server_default="new", index=True
     )
     """One of: new | read | responded | archived. See module docstring."""
+
+    category: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="general", index=True
+    )
+    """User-selected category at submission time. One of:
+        support       — existing customer needs help
+        presales      — questions before buying
+        bug_feature   — bug report or feature request
+        general       — fallback for legacy / non-widget sources
+    Lets the admin filter the inbox by request type."""
 
     def __repr__(self) -> str:
         return f"<Lead {self.email!r} status={self.status}>"

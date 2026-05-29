@@ -18,6 +18,11 @@ export type JobAssignment = {
    *  safe rect renders as a uniform white border. Lets users design
    *  freely and "frame" the result with one click as a finishing step. */
   safe_crop?: boolean;
+  /** Which page/artboard of the source PDF to render in this slot.
+   *  Defaults to 0. Only meaningful for multi-page PDFs (e.g. double-
+   *  sided sticker artwork) — other slots can pick different pages off
+   *  the same asset. */
+  page_index?: number;
 };
 
 export type Job = {
@@ -87,6 +92,7 @@ export type QueueItem = {
   h_mm?: number | null;
   filter_id?: string;
   safe_crop?: boolean;
+  page_index?: number;
 };
 
 export function applyJobQueue(id: string, queue: QueueItem[]) {

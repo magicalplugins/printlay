@@ -72,6 +72,11 @@ class SlotTransform:
     # only the clipping rectangle tightens. No-op when the shape has
     # no `safe_pt` declared (templates without a safe area).
     safe_crop: bool = False
+    # Which page of the source asset PDF to render in this slot. 0 for
+    # single-page assets (rasters, single-page PDFs). >0 for multi-page
+    # PDFs (e.g. front/back of a double-sided sticker — different slots
+    # can pick different pages off the same source asset).
+    page_index: int = 0
 
 
 def composite(
@@ -183,10 +188,26 @@ def composite(
             rot = _nearest_orthogonal(rot_free)
             is_orthogonal = abs(rot - rot_free) < 0.01
 
-            asset_doc = pymupdf.open(stream=asset_bytes, filetype="pdf")
+            raw_asset_doc = pymupdf.open(stream=asset_bytes, filetype="pdf")
             try:
-                if asset_doc.page_count == 0:
+                if raw_asset_doc.page_count == 0:
                     continue
+                # Clamp page selection — a stale UI could submit an index
+                # past the end if the asset got reuploaded with fewer
+                # pages; falling back to 0 is always safe.
+                pidx = max(0, min(int(t.page_index or 0), raw_asset_doc.page_count - 1))
+                # Bake any source /Rotate flag into a clean PDF so every
+                # downstream call (show_pdf_page, matrix-rewrite path) sees a
+                # mediabox-orientation == visual-orientation source. Without
+                # this, PDFs whose designer exported a portrait gaff card as
+                # a 252x180 landscape MediaBox + /Rotate=90 would compose as
+                # landscape and clipped, because show_pdf_page ignores
+                # /Rotate and renders the raw MediaBox content.
+                #
+                # For multi-page sources we bake only the chosen page so
+                # we still get the rotation fix without dragging all the
+                # other pages into the placement document.
+                asset_doc = _bake_source_rotation(raw_asset_doc, page_index=pidx)
                 asset_page = asset_doc[0]
                 aw = float(asset_page.rect.width)
                 ah = float(asset_page.rect.height)
@@ -267,25 +288,34 @@ def composite(
                     # drastically larger than the slot (e.g. a raster photo
                     # at 300 DPI), contain-fit it so it doesn't overflow
                     # into adjacent slots.
+                    #
+                    # CRITICAL: the cap math runs in the asset's NATIVE
+                    # orientation (nat_w/nat_h) then we swap for display.
+                    # Earlier this used `fit_aw/fit_ah` (already swapped for
+                    # 90/270 rotation), which made portrait-after-rotation
+                    # assets shrink to the slot's HEIGHT-as-cap rather than
+                    # the user-expected slot WIDTH. The preview overlay
+                    # (SlotOverlay.tsx) caps in native orientation and then
+                    # rotates via CSS; matching that here keeps the two
+                    # views identical for a 169x96 mm screenshot rotated
+                    # 90 deg into a 88x63 mm cell.
                     cx = x + w / 2.0
                     cy = y_top + h / 2.0
-                    # Use orientation-swapped dims only for the orthogonal
-                    # fast path; the arbitrary-angle path uses the native
-                    # asset rect (see `nat_w/nat_h` comment above).
-                    rect_w = fit_aw if is_orthogonal else nat_w
-                    rect_h = fit_ah if is_orthogonal else nat_h
-                    # Cap: if asset exceeds the slot+bleed box by >50%,
-                    # it's almost certainly a large raster not a matched
-                    # PDF artwork. Shrink to fit inside the slot.
+                    nat_disp_w = nat_w
+                    nat_disp_h = nat_h
                     cap_w = ew * 1.5
                     cap_h = eh * 1.5
-                    if rect_w > cap_w or rect_h > cap_h:
-                        ar = rect_w / rect_h
-                        rect_w = w
-                        rect_h = w / ar
-                        if rect_h > h:
-                            rect_h = h
-                            rect_w = h * ar
+                    if nat_disp_w > cap_w or nat_disp_h > cap_h:
+                        ar = nat_disp_w / nat_disp_h
+                        nat_disp_w = w
+                        nat_disp_h = w / ar
+                        if nat_disp_h > h:
+                            nat_disp_h = h
+                            nat_disp_w = h * ar
+                    if is_orthogonal and rot in (90, 270):
+                        rect_w, rect_h = nat_disp_h, nat_disp_w
+                    else:
+                        rect_w, rect_h = nat_disp_w, nat_disp_h
                     target_rect = pymupdf.Rect(
                         cx - rect_w / 2.0,
                         cy - rect_h / 2.0,
@@ -355,7 +385,9 @@ def composite(
                         place_doc.close()
                 slots_filled += 1
             finally:
-                asset_doc.close()
+                if asset_doc is not raw_asset_doc:
+                    asset_doc.close()
+                raw_asset_doc.close()
 
         _disable_layer(doc, positions_layer)
         _strip_illustrator_private_data(doc)
@@ -416,6 +448,57 @@ def _nearest_orthogonal(deg: float) -> int:
     placement when the angle is already orthogonal."""
     d = int(round(deg)) % 360
     return min((0, 90, 180, 270), key=lambda x: abs(x - d))
+
+
+def _bake_source_rotation(
+    src_doc: "pymupdf.Document", page_index: int = 0
+) -> "pymupdf.Document":
+    """Extract `page_index` from `src_doc` as a single-page PDF whose
+    MediaBox matches the source's visual rect and whose content has any
+    /Rotate flag baked in.
+
+    Two responsibilities rolled into one to keep the compositor hot path
+    tight:
+
+    1. **Page extraction**: when the source is a multi-page PDF the
+       caller wants a specific page (front/back/etc). We return a fresh
+       single-page doc whose page 0 is the requested source page.
+    2. **Rotation bake-in**: `Page.show_pdf_page` and our matrix-rewrite
+       path both render the raw MediaBox content and IGNORE /Rotate. A
+       portrait gaff card exported as a 252x180 landscape MediaBox +
+       /Rotate=90 would otherwise compose as a landscape, content-clipped
+       mess. We bake the rotation in once, then every downstream call sees
+       a clean source where MediaBox == visual rect.
+
+    When `page_index == 0` and /Rotate == 0 we return `src_doc` untouched
+    (the common single-page fast path).
+    """
+    pidx = max(0, min(int(page_index), src_doc.page_count - 1))
+    src_page = src_doc[pidx]
+    src_rotation = int(src_page.rotation) % 360
+
+    if pidx == 0 and src_rotation == 0:
+        return src_doc
+
+    vis_rect = src_page.rect
+    vis_w = float(vis_rect.width)
+    vis_h = float(vis_rect.height)
+
+    # Copy bytes -> mutate copy without affecting the caller's doc identity.
+    copy = pymupdf.open(stream=src_doc.tobytes(), filetype="pdf")
+    try:
+        copy[pidx].set_rotation(0)
+        baked = pymupdf.open()
+        baked_page = baked.new_page(width=vis_w, height=vis_h)
+        baked_page.show_pdf_page(
+            baked_page.rect,
+            copy,
+            pno=pidx,
+            rotate=src_rotation,
+        )
+        return baked
+    finally:
+        copy.close()
 
 
 def _wrap_image_as_pdf(

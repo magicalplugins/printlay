@@ -1,7 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { submitLead } from "../api/leads";
+import { LeadCategory, submitLead } from "../api/leads";
 import { useMe } from "../auth/MeProvider";
+
+const CATEGORIES: {
+  id: LeadCategory;
+  label: string;
+  emoji: string;
+  desc: string;
+}[] = [
+  {
+    id: "support",
+    label: "Support",
+    emoji: "🛠",
+    desc: "I need help with something",
+  },
+  {
+    id: "presales",
+    label: "Pre-Sales",
+    emoji: "💬",
+    desc: "Question before buying",
+  },
+  {
+    id: "bug_feature",
+    label: "Bug / Feature",
+    emoji: "💡",
+    desc: "Report an issue or suggest an idea",
+  },
+];
 
 /**
  * Floating chat-style contact widget. Sits bottom-right on every page.
@@ -26,9 +52,12 @@ export default function LeadChatWidget() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const [category, setCategory] = useState<LeadCategory | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [message, setMessage] = useState("");
+  const [profileOpen, setProfileOpen] = useState(false);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const messageRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -38,16 +67,17 @@ export default function LeadChatWidget() {
     if (me?.company_name && !name) setName(me.company_name);
   }, [me, email, name]);
 
-  // Focus the first empty field exactly once per open. Depending on `name`
-  // here would re-fire on every keystroke and snatch focus mid-type, so we
-  // snapshot which field to focus on the open transition only.
+  // Focus the first empty field when the form becomes visible (either on
+  // open if category is already chosen, or when a category gets picked).
+  // Snapshot on the transition so typing doesn't re-fire the effect and
+  // snatch focus mid-type.
   useEffect(() => {
-    if (!open) return;
+    if (!open || !category) return;
     const target = name ? messageRef.current : nameRef.current;
     const t = window.setTimeout(() => target?.focus(), 50);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, category]);
 
   // Auto-close 4s after a successful send (gives time to read the confirm).
   useEffect(() => {
@@ -58,6 +88,8 @@ export default function LeadChatWidget() {
       window.setTimeout(() => {
         setSent(false);
         setMessage("");
+        setPhone("");
+        setCategory(null);
       }, 300);
     }, 4000);
     return () => window.clearTimeout(t);
@@ -71,6 +103,29 @@ export default function LeadChatWidget() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  // Anywhere on the page can open the widget — and optionally pre-select
+  // a category — by dispatching `new CustomEvent("printlay:openchat",
+  // { detail: { category: "bug_feature" } })`. Used by the dashboard's
+  // "Submit Bug" link, can be reused for any other deep-link CTAs.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const detail = (e as CustomEvent<{ category?: LeadCategory }>).detail;
+      if (detail?.category) setCategory(detail.category);
+      setSent(false);
+      setProfileOpen(false);
+      setOpen(true);
+    };
+    window.addEventListener("printlay:openchat", onOpen);
+    return () => window.removeEventListener("printlay:openchat", onOpen);
+  }, []);
+
+  // Closing the panel should reset the profile view so the next open
+  // lands back on the chat. (Don't reset category — they may have
+  // half-finished typing.)
+  useEffect(() => {
+    if (!open) setProfileOpen(false);
   }, [open]);
 
   const hidden = useMemo(() => {
@@ -94,6 +149,7 @@ export default function LeadChatWidget() {
   if (hidden) return null;
 
   const canSend =
+    !!category &&
     name.trim().length > 0 &&
     /.+@.+\..+/.test(email) &&
     message.trim().length > 0 &&
@@ -101,7 +157,7 @@ export default function LeadChatWidget() {
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSend) return;
+    if (!canSend || !category) return;
     setBusy(true);
     setErr(null);
     try {
@@ -109,6 +165,8 @@ export default function LeadChatWidget() {
         name: name.trim(),
         email: email.trim(),
         message: message.trim(),
+        category,
+        phone: phone.trim() || undefined,
         page_url:
           typeof window !== "undefined" ? window.location.href : undefined,
       });
@@ -142,18 +200,37 @@ export default function LeadChatWidget() {
 
           {/* Header */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-neutral-800 bg-gradient-to-br from-violet-500/10 to-fuchsia-500/5">
-            <div className="relative h-9 w-9 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex items-center justify-center text-white font-semibold text-sm shrink-0">
-              P
-              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-400 border-2 border-neutral-950" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-neutral-100">
+            <button
+              type="button"
+              onClick={() => setProfileOpen((v) => !v)}
+              aria-label="View founder profile"
+              aria-expanded={profileOpen}
+              className="relative h-11 w-11 shrink-0 rounded-full focus:outline-none focus:ring-2 focus:ring-violet-400/60 focus:ring-offset-2 focus:ring-offset-neutral-950 hover:scale-[1.04] transition-transform"
+            >
+              <div className="h-full w-full rounded-full overflow-hidden ring-2 ring-violet-500/40">
+                <img
+                  src="/avatar-anthony.jpg"
+                  alt="Anthony, PrintLay founder"
+                  className="h-full w-full object-cover"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
+              <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-400 border-2 border-neutral-950" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setProfileOpen((v) => !v)}
+              className="flex-1 min-w-0 text-left group"
+              aria-label="View founder profile"
+            >
+              <div className="text-sm font-semibold text-neutral-100 group-hover:text-white">
                 PrintLay Team
               </div>
-              <div className="text-[11px] text-neutral-400">
+              <div className="text-[11px] text-neutral-400 group-hover:text-neutral-300">
                 Usually replies within 6 hours
               </div>
-            </div>
+            </button>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -172,7 +249,54 @@ export default function LeadChatWidget() {
           </div>
 
           {/* Body */}
-          {sent ? (
+          {profileOpen ? (
+            /* Founder profile card */
+            <div className="px-5 py-5 text-center">
+              <div className="relative mx-auto h-20 w-20 mb-3">
+                <div className="h-full w-full rounded-full overflow-hidden ring-2 ring-violet-500/50 shadow-lg shadow-violet-500/20">
+                  <img
+                    src="/avatar-anthony.jpg"
+                    alt="James Anthony, founder of PrintLay"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <span className="absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-emerald-400 border-2 border-neutral-950" />
+              </div>
+              <h3 className="text-base font-semibold text-neutral-100">
+                James Anthony
+              </h3>
+              <p className="text-[11px] uppercase tracking-widest text-violet-300/90 mt-0.5">
+                Founder · PrintLay
+              </p>
+              <p className="mt-3 text-xs leading-relaxed text-neutral-300 text-left">
+                Hi — I built PrintLay after years of filling print layouts by
+                hand for my own studio. There had to be a faster, smarter way
+                to get artwork press-ready, so I made one.
+              </p>
+              <p className="mt-2 text-xs leading-relaxed text-neutral-400 text-left">
+                I read every message that comes through this chat personally
+                and reply within a few hours. Whether it's a question, a bug,
+                or just a hello — I'd love to hear from you.
+              </p>
+              <button
+                type="button"
+                onClick={() => setProfileOpen(false)}
+                className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-4 h-9 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 hover:from-violet-400 hover:to-fuchsia-400 transition w-full"
+              >
+                Start a chat
+                <svg width="13" height="13" viewBox="0 0 14 14" aria-hidden>
+                  <path
+                    d="M5 3l4 4-4 4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          ) : sent ? (
             <div className="px-5 py-8 text-center">
               <div className="mx-auto h-10 w-10 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center mb-3">
                 <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
@@ -195,15 +319,72 @@ export default function LeadChatWidget() {
                 hours.
               </p>
             </div>
+          ) : !category ? (
+            /* Step 1: pick a category */
+            <div className="px-4 pt-4 pb-4">
+              <div className="inline-block max-w-[90%] rounded-2xl rounded-tl-sm bg-neutral-900 border border-neutral-800 px-3.5 py-2.5 text-sm text-neutral-200 mb-3">
+                Hi there! How can we help?{" "}
+                <span className="text-neutral-400">
+                  Pick the option that fits best.
+                </span>
+              </div>
+              <div className="space-y-2">
+                {CATEGORIES.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setCategory(c.id)}
+                    className="w-full text-left flex items-center gap-3 rounded-lg border border-neutral-800 bg-neutral-900/60 px-3 py-2.5 hover:border-violet-500/50 hover:bg-violet-500/[0.05] transition group"
+                  >
+                    <span className="text-xl shrink-0">{c.emoji}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-neutral-100 group-hover:text-white">
+                        {c.label}
+                      </div>
+                      <div className="text-[11px] text-neutral-500 group-hover:text-neutral-400">
+                        {c.desc}
+                      </div>
+                    </div>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 14 14"
+                      className="text-neutral-600 group-hover:text-violet-400 shrink-0"
+                    >
+                      <path
+                        d="M5 3l4 4-4 4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : (
             <>
-              {/* Greeting bubble */}
-              <div className="px-4 pt-4 pb-2">
-                <div className="inline-block max-w-[85%] rounded-2xl rounded-tl-sm bg-neutral-900 border border-neutral-800 px-3.5 py-2.5 text-sm text-neutral-200">
-                  Hi! Got a question or want a quick demo?{" "}
-                  <span className="text-neutral-400">
-                    Pop your details below and we'll get back to you soon.
+              {/* Selected category breadcrumb + change */}
+              <div className="px-4 pt-3 pb-1 flex items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-widest text-neutral-500">
+                  Enquiry type
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setCategory(null)}
+                  className="text-[11px] text-violet-300 hover:text-violet-200"
+                >
+                  Change
+                </button>
+              </div>
+              <div className="px-4 pb-2">
+                <div className="inline-flex items-center gap-1.5 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-xs font-medium text-violet-200">
+                  <span>
+                    {CATEGORIES.find((c) => c.id === category)?.emoji}
                   </span>
+                  {CATEGORIES.find((c) => c.id === category)?.label}
                 </div>
               </div>
 
@@ -230,6 +411,24 @@ export default function LeadChatWidget() {
                   style={{ fontSize: 16 }}
                   className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 placeholder:text-neutral-500 outline-none focus:border-violet-500/60"
                 />
+                {category === "presales" && (
+                  <div className="relative">
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="Phone (optional, for a faster reply)"
+                      maxLength={40}
+                      autoComplete="tel"
+                      inputMode="tel"
+                      style={{ fontSize: 16 }}
+                      className="w-full rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-2 pr-16 text-sm text-neutral-100 placeholder:text-neutral-500 outline-none focus:border-violet-500/60"
+                    />
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] uppercase tracking-widest text-violet-300/80 pointer-events-none">
+                      Recommended
+                    </span>
+                  </div>
+                )}
                 <textarea
                   ref={messageRef}
                   value={message}

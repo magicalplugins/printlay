@@ -2,9 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AdminInvite,
+  AdminLead,
   InviteStatus,
   createAdminInvite,
   getAdminInvites,
+  getAdminLeads,
   resendAdminInvite,
   revokeAdminInvite,
 } from "../api/admin";
@@ -74,6 +76,39 @@ export default function AdminInvites() {
   const [composerErr, setComposerErr] = useState<string | null>(null);
   const [justSent, setJustSent] = useState<AdminInvite | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+
+  // Lead picker state
+  const [leads, setLeads] = useState<AdminLead[]>([]);
+  const [leadQuery, setLeadQuery] = useState("");
+  const [showLeadPicker, setShowLeadPicker] = useState(false);
+
+  useEffect(() => {
+    getAdminLeads(undefined, null, 200, 0)
+      .then((res) => setLeads(res.items))
+      .catch(() => {});
+  }, []);
+
+  const filteredLeads = useMemo(() => {
+    if (!leadQuery.trim()) return leads.slice(0, 8);
+    const q = leadQuery.toLowerCase();
+    return leads
+      .filter(
+        (l) =>
+          l.email.toLowerCase().includes(q) ||
+          l.name.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [leads, leadQuery]);
+
+  function fillFromLead(lead: AdminLead) {
+    setEmail(lead.email);
+    const parts = [`Lead: ${lead.name}`];
+    if (lead.message) parts.push(lead.message.slice(0, 200));
+    if (lead.page_url) parts.push(`Source: ${lead.page_url}`);
+    setNote(parts.join("\n"));
+    setShowLeadPicker(false);
+    setLeadQuery("");
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -195,6 +230,73 @@ export default function AdminInvites() {
               with their unique signup link.
             </p>
           </div>
+
+          {/* Lead picker */}
+          {!showLeadPicker ? (
+            <button
+              type="button"
+              onClick={() => setShowLeadPicker(true)}
+              className="w-full rounded-lg border border-dashed border-neutral-700 px-3 h-9 text-xs text-neutral-400 hover:border-violet-500/50 hover:text-violet-300 transition flex items-center justify-center gap-2"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                <circle cx="6" cy="6" r="4" />
+                <path d="M9 9l3.5 3.5" />
+              </svg>
+              Fill from a lead
+            </button>
+          ) : (
+            <div className="rounded-lg border border-violet-500/30 bg-neutral-950/60 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase tracking-widest text-violet-300">
+                  Pick a lead
+                </span>
+                <button
+                  type="button"
+                  onClick={() => { setShowLeadPicker(false); setLeadQuery(""); }}
+                  className="text-[10px] text-neutral-500 hover:text-white"
+                >
+                  Cancel
+                </button>
+              </div>
+              <input
+                type="text"
+                value={leadQuery}
+                onChange={(e) => setLeadQuery(e.target.value)}
+                placeholder="Search by name or email..."
+                autoFocus
+                className="w-full rounded-md border border-neutral-800 bg-neutral-950 px-3 h-8 text-xs outline-none focus:border-violet-500/50"
+              />
+              {filteredLeads.length > 0 ? (
+                <ul className="max-h-[200px] overflow-y-auto space-y-0.5">
+                  {filteredLeads.map((lead) => (
+                    <li key={lead.id}>
+                      <button
+                        type="button"
+                        onClick={() => fillFromLead(lead)}
+                        className="w-full text-left rounded-md px-2.5 py-2 hover:bg-violet-500/10 transition group"
+                      >
+                        <div className="text-xs font-medium text-neutral-200 group-hover:text-white truncate">
+                          {lead.name}
+                        </div>
+                        <div className="text-[11px] text-neutral-500 truncate">
+                          {lead.email}
+                          {lead.message && (
+                            <span className="ml-2 text-neutral-600">
+                              — {lead.message.slice(0, 60)}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-xs text-neutral-500 py-2 text-center">
+                  No leads found
+                </div>
+              )}
+            </div>
+          )}
 
           <form onSubmit={onSubmit} className="space-y-4">
             <div>

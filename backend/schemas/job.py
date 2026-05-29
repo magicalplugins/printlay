@@ -27,6 +27,11 @@ class JobAssignment(BaseModel):
     # so the user can flip safe_crop off and the original layout is
     # exactly as they left it.
     safe_crop: bool = False
+    # Which page/artboard of the source PDF to render in this slot.
+    # Always 0 for single-page assets (rasters, single-page PDFs).
+    # Multi-page PDFs (e.g. double-sided sticker art) can pick a
+    # different page per slot.
+    page_index: int = 0
 
 
 class JobOut(BaseModel):
@@ -71,6 +76,7 @@ class QueueItem(BaseModel):
     h_mm: float | None = None
     filter_id: str = "none"
     safe_crop: bool = False
+    page_index: int = 0
 
 
 class QueueRequest(BaseModel):

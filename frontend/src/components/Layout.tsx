@@ -8,15 +8,20 @@ import {
 } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { useMe } from "../auth/MeProvider";
+import ImpersonationBanner from "./app/ImpersonationBanner";
+import SupportAccessModal from "./app/SupportAccessModal";
 import TrialBanner from "./app/TrialBanner";
+import UpdateBanner from "./app/UpdateBanner";
 
 const NAV = [
   { to: "/app", label: "Dashboard", end: true },
   { to: "/app/templates", label: "Templates" },
   { to: "/app/jobs", label: "Jobs" },
   { to: "/app/catalogue", label: "Catalogue" },
+  { to: "/app/sheets", label: "Sheets" },
   { to: "/app/outputs", label: "Outputs" },
   { to: "/app/settings", label: "Settings" },
+  { to: "/app/help", label: "Help" },
 ];
 
 export default function Layout() {
@@ -55,6 +60,8 @@ export default function Layout() {
 
   return (
     <div className="min-h-full flex flex-col">
+      <UpdateBanner />
+      <ImpersonationBanner />
       <header className="border-b border-neutral-900 bg-neutral-950/80 backdrop-blur sticky top-0 z-30">
         <div className="max-w-7xl mx-auto flex items-center gap-4 sm:gap-8 px-3 sm:px-6 h-14">
           <Link to="/app" className="font-bold tracking-tight text-base sm:text-lg">
@@ -153,6 +160,7 @@ export default function Layout() {
         isAdmin={me?.is_admin ?? false}
       />
 
+      <SupportAccessModal />
       <TrialBanner />
       <LockedBar />
 

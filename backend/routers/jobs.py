@@ -77,6 +77,7 @@ def _asset_to_out(a: Asset) -> AssetOut:
         thumbnail_url=thumb_url,
         preview_url=preview,
         created_at=a.created_at,
+        page_count=max(1, int(getattr(a, "page_count", 1) or 1)),
     )
 
 
@@ -337,6 +338,7 @@ async def upload_job_asset(
         width_pt=norm.width_pt,
         height_pt=norm.height_pt,
         file_size=len(norm.pdf_bytes),
+        page_count=norm.page_count,
     )
     db.add(asset)
     db.commit()
@@ -408,6 +410,12 @@ def apply_queue(
         for _ in range(item.quantity):
             if cursor >= len(slot_order):
                 break
+            page_index = max(0, int(item.page_index or 0))
+            # Clamp to actual asset page_count so a stale picker can't
+            # write an out-of-range index that 500s at compose time.
+            pc = max(1, int(getattr(asset, "page_count", 1) or 1))
+            if page_index >= pc:
+                page_index = 0
             assignments[str(slot_order[cursor])] = {
                 "asset_id": str(asset.id),
                 "asset_kind": asset.kind,
@@ -420,6 +428,7 @@ def apply_queue(
                 "h_mm": item.h_mm,
                 "filter_id": item.filter_id or "none",
                 "safe_crop": bool(item.safe_crop),
+                "page_index": page_index,
             }
             cursor += 1
         if cursor >= len(slot_order):
@@ -838,6 +847,7 @@ def generate_output(
             h_pt=(float(assignment["h_mm"]) * mm_to_pt) if assignment.get("h_mm") else None,
             filter_id=str(assignment.get("filter_id") or "none"),
             safe_crop=bool(assignment.get("safe_crop")),
+            page_index=int(assignment.get("page_index") or 0),
         )
 
     # Inject per-template bleed AND safe insets (in PDF points) onto each

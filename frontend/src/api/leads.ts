@@ -1,10 +1,14 @@
 import { api } from "./client";
 
+export type LeadCategory = "support" | "presales" | "bug_feature" | "general";
+
 export type LeadSubmit = {
   name: string;
   email: string;
   message: string;
   page_url?: string;
+  category: LeadCategory;
+  phone?: string;
 };
 
 export const submitLead = (payload: LeadSubmit) =>

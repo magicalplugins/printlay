@@ -114,7 +114,7 @@ export default function TemplateDetail() {
               <span className="text-emerald-400">POSITIONS layer detected</span>
             ) : (
               <span className="text-amber-400">
-                no POSITIONS layer — output will not hide slot rectangles
+                no recognised layer — output will not hide slot rectangles
               </span>
             )}
           </p>

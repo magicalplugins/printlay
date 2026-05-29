@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,12 +14,16 @@ from backend.routers import admin as admin_router
 from backend.routers import auth as auth_router
 from backend.routers import billing as billing_router
 from backend.routers import catalogue as catalogue_router
+from backend.routers import changelog as changelog_router
 from backend.routers import color_profiles as color_profiles_router
 from backend.routers import invites as invites_router
 from backend.routers import jobs as jobs_router
 from backend.routers import leads as leads_router
 from backend.routers import outputs as outputs_router
+from backend.routers import sheet_builder as sheet_builder_router
 from backend.routers import spot_colors as spot_colors_router
+from backend.routers import sticker as sticker_router
+from backend.routers import support_access as support_access_router
 from backend.routers import templates as templates_router
 
 settings = get_settings()
@@ -53,12 +58,48 @@ app.include_router(spot_colors_router.router)
 app.include_router(outputs_router.router)
 app.include_router(leads_router.router)
 app.include_router(invites_router.router)
+app.include_router(sticker_router.router)
+app.include_router(sheet_builder_router.router)
+app.include_router(support_access_router.admin_router)
+app.include_router(support_access_router.user_router)
+app.include_router(changelog_router.public_router)
+app.include_router(changelog_router.admin_router)
 app.include_router(admin_router.router)
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.environment}
+
+
+# ---- Frontend build version ----
+# We expose the hash of the main JS bundle so the client can detect when a
+# new deploy has happened (lazy chunks change names) and prompt the user to
+# refresh BEFORE they hit a 404 on a stale chunk reference. The value is
+# extracted once at startup and cached for the life of the process.
+
+_BUILD_HASH: str | None = None
+_BUILD_HASH_RE = re.compile(r"/assets/index-([A-Za-z0-9_-]+)\.js")
+
+
+def _read_build_hash() -> str:
+    index = Path(__file__).resolve().parent / "static" / "index.html"
+    if not index.exists():
+        return "dev"
+    try:
+        text = index.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return "unknown"
+    m = _BUILD_HASH_RE.search(text)
+    return m.group(1) if m else "unknown"
+
+
+@app.get("/api/build")
+def build_version() -> dict[str, str]:
+    global _BUILD_HASH
+    if _BUILD_HASH is None:
+        _BUILD_HASH = _read_build_hash()
+    return {"build": _BUILD_HASH}
 
 
 # ---- Static frontend (built React/Vite app) ----

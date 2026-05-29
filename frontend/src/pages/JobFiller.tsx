@@ -21,6 +21,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Asset,
   Category,
+  getAssetPageThumbnail,
   listAssets,
   listCategories,
 } from "../api/catalogue";
@@ -74,6 +75,10 @@ type QueueRow = {
    *  preview and the generated PDF). Doesn't touch the placement
    *  coords above — the user can flip it off and keep editing. */
   safeCrop: boolean;
+  /** Which page/artboard of the source PDF to render. 0 for single-page
+   *  assets. Multi-page PDFs (e.g. double-sided sticker artwork) can
+   *  set this per row so different slots show different sides. */
+  pageIndex: number;
 };
 
 function uid(): string {
@@ -86,6 +91,7 @@ function sameTransform(a: QueueRow, asg: NonNullable<Job["assignments"][string]>
   if (a.fitMode !== (asg.fit_mode || "contain")) return false;
   if ((a.filterId || "none") !== (asg.filter_id || "none")) return false;
   if (Boolean(a.safeCrop) !== Boolean(asg.safe_crop)) return false;
+  if ((a.pageIndex || 0) !== (asg.page_index || 0)) return false;
   if (a.fitMode === "manual") {
     return (
       a.xMm === (asg.x_mm || 0) &&
@@ -125,6 +131,7 @@ function rowsFromJob(job: Job, assets: Asset[]): QueueRow[] {
         hMm: a.h_mm ?? null,
         filterId: a.filter_id || "none",
         safeCrop: Boolean(a.safe_crop),
+        pageIndex: a.page_index || 0,
       });
     }
   }
@@ -437,6 +444,39 @@ export default function JobFiller() {
     listAssets(activeCat.id).then(setCatAssets).catch((e) => reportErr(e));
   }, [activeCat]);
 
+  // Resolve per-page thumbnail URLs for every row that has selected a
+  // non-default page on a multi-page asset. Without this, the live preview
+  // would always show page 0's thumbnail even after the user picks page 2
+  // in the PagePicker (the final exported PDF already uses the correct
+  // page, this only affects on-screen feedback). We dedupe by
+  // (assetId, pageIndex) so multiple rows on the same page share one fetch.
+  const [pagePreviewUrls, setPagePreviewUrls] = useState<
+    Record<string, string>
+  >({});
+  useEffect(() => {
+    const wanted = new Set<string>();
+    for (const row of rows) {
+      if (row.pageIndex > 0) wanted.add(`${row.asset.id}:${row.pageIndex}`);
+    }
+    if (wanted.size === 0) return;
+    let cancelled = false;
+    for (const key of wanted) {
+      if (pagePreviewUrls[key]) continue;
+      const [assetId, idxStr] = key.split(":");
+      fetchPageThumb(assetId, Number(idxStr))
+        .then((url) => {
+          if (cancelled) return;
+          setPagePreviewUrls((prev) =>
+            prev[key] === url ? prev : { ...prev, [key]: url }
+          );
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [rows, pagePreviewUrls]);
+
   // Live preview: derive a slotNumbers map AND a placement map (artwork
   // thumbnail + transform per slot) from the current queue order so the PDF
   // overlay updates as the user reorders/changes quantities/rotates/customises.
@@ -477,8 +517,13 @@ export default function JobFiller() {
         }
         const slotIdx = job.slot_order[cursor];
         nums[slotIdx] = n++;
+        const pageUrl =
+          row.pageIndex > 0
+            ? pagePreviewUrls[`${row.asset.id}:${row.pageIndex}`]
+            : undefined;
         placements[slotIdx] = {
-          thumbnailUrl: row.asset.preview_url ?? row.asset.thumbnail_url ?? null,
+          thumbnailUrl:
+            pageUrl ?? row.asset.preview_url ?? row.asset.thumbnail_url ?? null,
           rotationDeg: row.rotationDeg,
           fitMode: row.fitMode,
           xMm: row.xMm,
@@ -505,7 +550,7 @@ export default function JobFiller() {
       slotToRowKey: slotToRow,
       rowKeyToFirstSlot: rowToSlot,
     };
-  }, [rows, job]);
+  }, [rows, job, pagePreviewUrls]);
 
   // Derive the slot to ring from the currently-highlighted row key. If
   // the highlighted row no longer exists (deleted) or no longer maps to
@@ -574,6 +619,7 @@ export default function JobFiller() {
           hMm: null,
           filterId: "none",
           safeCrop: false,
+          pageIndex: 0,
         },
       ];
     });
@@ -589,6 +635,14 @@ export default function JobFiller() {
     setRows((prev) =>
       prev.map((r) =>
         r.key === key ? { ...r, rotationDeg: (r.rotationDeg + 90) % 360 } : r
+      )
+    );
+  }
+
+  function setRowPage(key: string, pageIndex: number) {
+    setRows((prev) =>
+      prev.map((r) =>
+        r.key === key ? { ...r, pageIndex: Math.max(0, pageIndex) } : r
       )
     );
   }
@@ -681,6 +735,7 @@ export default function JobFiller() {
       h_mm: r.hMm,
       filter_id: r.filterId || "none",
       safe_crop: r.safeCrop,
+      page_index: r.pageIndex || 0,
     }));
     const updated = await applyJobQueue(job.id, queue);
     setJob(updated);
@@ -995,6 +1050,7 @@ export default function JobFiller() {
                         onRotate={() => rotateRow(row.key)}
                         onCustomize={() => setDesignerForKey(row.key)}
                         onRemove={() => removeRowAndAsset(row)}
+                        onPageChange={(p) => setRowPage(row.key, p)}
                       />
                     ))}
                   </ul>
@@ -1263,6 +1319,268 @@ function pickRepresentativeShape(shapes: Template["shapes"]): Template["shapes"]
   )!;
 }
 
+/** Process-wide cache for per-page thumbnail URLs.
+ *
+ *  Hitting the on-demand endpoint per row + per page would be wasteful
+ *  when the same multi-page asset appears in dozens of rows. We dedupe
+ *  by (assetId, pageIndex) so each unique page is fetched at most once
+ *  per session. Presigned URLs live for an hour which comfortably
+ *  outlives a JobFiller session.
+ */
+const pageThumbCache = new Map<string, Promise<string>>();
+
+function fetchPageThumb(assetId: string, pageIndex: number): Promise<string> {
+  const key = `${assetId}:${pageIndex}`;
+  let p = pageThumbCache.get(key);
+  if (!p) {
+    p = getAssetPageThumbnail(assetId, pageIndex).then((r) => r.url);
+    pageThumbCache.set(key, p);
+    // Drop the cache entry if the fetch failed so the next render retries.
+    p.catch(() => pageThumbCache.delete(key));
+  }
+  return p;
+}
+
+/** Resolves the thumbnail URL for `pageIndex` of `assetId`, falling back
+ *  to `defaultUrl` (the asset's primary thumbnail) while loading or on
+ *  error. Page 0 always returns the default immediately. */
+function usePageThumbnail(
+  assetId: string,
+  pageIndex: number,
+  defaultUrl: string | null
+): { url: string | null; loading: boolean } {
+  const [state, setState] = useState<{ url: string | null; loading: boolean }>(
+    pageIndex === 0
+      ? { url: defaultUrl, loading: false }
+      : { url: null, loading: true }
+  );
+  useEffect(() => {
+    if (pageIndex === 0) {
+      setState({ url: defaultUrl, loading: false });
+      return;
+    }
+    let cancelled = false;
+    setState({ url: null, loading: true });
+    fetchPageThumb(assetId, pageIndex)
+      .then((u) => {
+        if (!cancelled) setState({ url: u, loading: false });
+      })
+      .catch(() => {
+        if (!cancelled) setState({ url: defaultUrl, loading: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId, pageIndex, defaultUrl]);
+  return state;
+}
+
+/** Inline page picker for multi-page PDF assets. Renders a compact pill
+ *  showing "Pg X/N"; clicking it opens a popover with lazy-loaded
+ *  thumbnails of every page so the user can pick the side/artboard for
+ *  this slot. No-op when the asset is single-page. */
+function PagePicker({
+  asset,
+  pageIndex,
+  onChange,
+}: {
+  asset: Asset;
+  pageIndex: number;
+  onChange: (pageIndex: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  const pageCount = asset.page_count ?? 1;
+
+  // Click-outside to close.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (pageCount <= 1) return null;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="h-11 px-2.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-200 hover:border-amber-400 hover:bg-amber-500/15 flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+        title={`Pick which page to use (this asset has ${pageCount} pages)`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+      >
+        <span className="font-mono tabular-nums">
+          Pg {pageIndex + 1}/{pageCount}
+        </span>
+        <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden>
+          <path
+            d={open ? "M2 6.5L5 3.5L8 6.5" : "M2 4l3 3 3-3"}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Choose page"
+          className="absolute right-0 top-full mt-1.5 z-30 w-[260px] rounded-lg border border-neutral-700 bg-neutral-950 shadow-2xl shadow-black/40 p-3"
+        >
+          <div className="text-[10px] uppercase tracking-widest text-neutral-500 mb-2">
+            Choose page · {pageCount} available
+          </div>
+          <div className="grid grid-cols-3 gap-2 max-h-[260px] overflow-y-auto">
+            {Array.from({ length: pageCount }).map((_, n) => (
+              <PageThumb
+                key={n}
+                asset={asset}
+                pageIndex={n}
+                selected={n === pageIndex}
+                onPick={() => {
+                  onChange(n);
+                  setOpen(false);
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PageThumb({
+  asset,
+  pageIndex,
+  selected,
+  onPick,
+}: {
+  asset: Asset;
+  pageIndex: number;
+  selected: boolean;
+  onPick: () => void;
+}) {
+  const { url, loading } = usePageThumbnail(
+    asset.id,
+    pageIndex,
+    asset.preview_url ?? asset.thumbnail_url ?? null
+  );
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      className={`relative aspect-square rounded-md overflow-hidden border bg-neutral-900 flex items-center justify-center group transition ${
+        selected
+          ? "border-violet-400 ring-2 ring-violet-400/40"
+          : "border-neutral-800 hover:border-violet-500/60"
+      }`}
+      aria-pressed={selected}
+      aria-label={`Use page ${pageIndex + 1}`}
+    >
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          className="w-full h-full object-contain p-1"
+          loading="lazy"
+        />
+      ) : loading ? (
+        <span
+          className="h-4 w-4 rounded-full border-2 border-neutral-700 border-t-violet-400 animate-spin"
+          aria-label="Loading preview"
+        />
+      ) : (
+        <span className="text-[10px] text-neutral-500">no preview</span>
+      )}
+      <span className="absolute bottom-0.5 right-0.5 text-[9px] font-mono tabular-nums bg-black/70 text-neutral-200 px-1 rounded">
+        {pageIndex + 1}
+      </span>
+    </button>
+  );
+}
+
+/** Thumbnail button that opens the placement designer.
+ *
+ *  Pulled out of `SortableQueueRow` so it can use a hook to load a
+ *  page-specific preview for multi-page PDFs (page 0 falls through to
+ *  the asset's primary thumbnail; pages 1+ fetch on demand and cache
+ *  in `pageThumbCache`). */
+function RowThumbnailButton({
+  asset,
+  pageIndex,
+  rotationDeg,
+  onCustomize,
+}: {
+  asset: Asset;
+  pageIndex: number;
+  rotationDeg: number;
+  onCustomize: () => void;
+}) {
+  const { url, loading } = usePageThumbnail(
+    asset.id,
+    pageIndex,
+    asset.preview_url ?? asset.thumbnail_url ?? null
+  );
+  return (
+    <button
+      onClick={onCustomize}
+      className="h-11 w-11 shrink-0 rounded-md border border-neutral-800 overflow-hidden bg-neutral-900 flex items-center justify-center hover:border-violet-500 transition relative group"
+      title="Open designer to customise placement"
+      aria-label="Open designer"
+    >
+      {url ? (
+        <img
+          src={url}
+          alt=""
+          className="w-full h-full object-contain p-1.5 transition-transform"
+          style={{ transform: `rotate(${rotationDeg}deg)` }}
+        />
+      ) : loading ? (
+        <span
+          className="h-3.5 w-3.5 rounded-full border-2 border-neutral-700 border-t-violet-400 animate-spin"
+          aria-label="Loading preview"
+        />
+      ) : (
+        <span className="text-[10px] text-neutral-500 uppercase">
+          {asset.kind}
+        </span>
+      )}
+      <div className="absolute inset-0 flex items-center justify-center bg-violet-500/0 group-hover:bg-violet-500/30 transition">
+        <svg
+          className="opacity-0 group-hover:opacity-100 transition text-white"
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" />
+        </svg>
+      </div>
+    </button>
+  );
+}
+
 function SortableQueueRow({
   row,
   index,
@@ -1272,6 +1590,7 @@ function SortableQueueRow({
   onRotate,
   onCustomize,
   onRemove,
+  onPageChange,
 }: {
   row: QueueRow;
   index: number;
@@ -1286,6 +1605,10 @@ function SortableQueueRow({
   onRotate: () => void;
   onCustomize: () => void;
   onRemove: () => void;
+  /** Called with a new 0-based page index when the user picks a
+   *  different page from a multi-page PDF asset. Only meaningful when
+   *  `row.asset.page_count > 1`. */
+  onPageChange: (pageIndex: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: row.key });
@@ -1334,40 +1657,12 @@ function SortableQueueRow({
           <circle cx="11" cy="16" r="1.6" />
         </svg>
       </button>
-      <button
-        onClick={onCustomize}
-        className="h-11 w-11 shrink-0 rounded-md border border-neutral-800 overflow-hidden bg-neutral-900 flex items-center justify-center hover:border-violet-500 transition relative group"
-        title="Open designer to customise placement"
-        aria-label="Open designer"
-      >
-        {row.asset.preview_url || row.asset.thumbnail_url ? (
-          <img
-            src={row.asset.preview_url ?? row.asset.thumbnail_url ?? ""}
-            alt=""
-            className="w-full h-full object-contain p-1.5 transition-transform"
-            style={{ transform: `rotate(${row.rotationDeg}deg)` }}
-          />
-        ) : (
-          <span className="text-[10px] text-neutral-500 uppercase">
-            {row.asset.kind}
-          </span>
-        )}
-        <div className="absolute inset-0 flex items-center justify-center bg-violet-500/0 group-hover:bg-violet-500/30 transition">
-          <svg
-            className="opacity-0 group-hover:opacity-100 transition text-white"
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M11.5 2.5l2 2L6 12l-3 1 1-3 7.5-7.5z" />
-          </svg>
-        </div>
-      </button>
+      <RowThumbnailButton
+        asset={row.asset}
+        pageIndex={row.pageIndex}
+        rotationDeg={row.rotationDeg}
+        onCustomize={onCustomize}
+      />
       <button
         type="button"
         onClick={onLocate}
@@ -1381,11 +1676,11 @@ function SortableQueueRow({
         aria-pressed={highlighted}
       >
         <div
-          className="text-sm text-neutral-200 truncate flex items-center gap-1"
+          className="text-sm text-neutral-200 flex items-start gap-1 leading-tight"
           title={row.asset.name}
         >
-          <span className="text-neutral-500 font-mono">{index}.</span>
-          <span className="truncate">{row.asset.name}</span>
+          <span className="text-neutral-500 font-mono shrink-0">{index}.</span>
+          <span className="line-clamp-2 break-words">{row.asset.name}</span>
         </div>
         <div className="text-[11px] text-neutral-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span>{row.asset.job_id ? "Uploaded" : "Catalogue"}</span>
@@ -1427,6 +1722,11 @@ function SortableQueueRow({
           </span>
         </div>
       </button>
+      <PagePicker
+        asset={row.asset}
+        pageIndex={row.pageIndex}
+        onChange={onPageChange}
+      />
       <button
         onClick={onRotate}
         className="h-11 w-9 rounded-md border border-neutral-800 text-neutral-400 hover:border-violet-500 hover:text-violet-300 flex items-center justify-center"

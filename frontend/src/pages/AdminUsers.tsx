@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AdminUserRow,
@@ -8,6 +8,11 @@ import {
   getUserDetail,
   patchAdminUser,
 } from "../api/admin";
+import { api } from "../api/client";
+import { startImpersonation } from "../auth/impersonation";
+import UserWorldMap from "../components/admin/UserWorldMap";
+
+type ViewMode = "table" | "map";
 
 const PAGE_SIZE = 50;
 
@@ -152,6 +157,8 @@ export default function AdminUsers() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("table");
+  const [allUsers, setAllUsers] = useState<AdminUserRow[]>([]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -188,9 +195,22 @@ export default function AdminUsers() {
     return () => { cancelled = true; };
   }, [debouncedQ, page]);
 
+  // Load all users for map view (up to 500)
+  useEffect(() => {
+    if (viewMode !== "map") return;
+    getAdminUsers(undefined, 500, 0)
+      .then((res) => setAllUsers(res.items))
+      .catch(() => {});
+  }, [viewMode]);
+
   const filtered = useMemo(
     () => (rows ?? []).filter((u) => matchesStatus(u, statusFilter)),
     [rows, statusFilter]
+  );
+
+  const filteredMapUsers = useMemo(
+    () => allUsers.filter((u) => matchesStatus(u, statusFilter)),
+    [allUsers, statusFilter]
   );
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -217,8 +237,43 @@ export default function AdminUsers() {
             Search, filter, and manage every account — plan, billing status, and usage.
           </p>
         </div>
-        <div className="text-sm text-neutral-400">
-          {loading ? "Loading…" : `${total} user${total === 1 ? "" : "s"} total`}
+        <div className="flex items-center gap-3">
+          <div className="flex rounded-lg border border-neutral-800 overflow-hidden">
+            <button
+              onClick={() => setViewMode("table")}
+              className={`px-3 h-8 text-xs flex items-center gap-1.5 ${
+                viewMode === "table"
+                  ? "bg-violet-500/15 text-violet-200"
+                  : "text-neutral-400 hover:bg-neutral-900"
+              }`}
+              title="Table view"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="1" y="1" width="12" height="3" rx="0.5" />
+                <rect x="1" y="5.5" width="12" height="3" rx="0.5" />
+                <rect x="1" y="10" width="12" height="3" rx="0.5" />
+              </svg>
+              List
+            </button>
+            <button
+              onClick={() => setViewMode("map")}
+              className={`px-3 h-8 text-xs flex items-center gap-1.5 ${
+                viewMode === "map"
+                  ? "bg-violet-500/15 text-violet-200"
+                  : "text-neutral-400 hover:bg-neutral-900"
+              }`}
+              title="Map view"
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="7" cy="7" r="5.5" />
+                <path d="M1.5 7h11M7 1.5c-1.5 2-2 3.5-2 5.5s.5 3.5 2 5.5M7 1.5c1.5 2 2 3.5 2 5.5s-.5 3.5-2 5.5" />
+              </svg>
+              Map
+            </button>
+          </div>
+          <div className="text-sm text-neutral-400">
+            {loading ? "Loading…" : `${total} user${total === 1 ? "" : "s"} total`}
+          </div>
         </div>
       </header>
 
@@ -252,6 +307,13 @@ export default function AdminUsers() {
 
       {err && <div className="text-rose-400 text-sm">{err}</div>}
 
+      {viewMode === "map" ? (
+        <UserWorldMap
+          users={filteredMapUsers.length > 0 ? filteredMapUsers : (rows ?? []).filter((u) => matchesStatus(u, statusFilter))}
+          onUserClick={(id) => setOpenId(id)}
+        />
+      ) : (
+      <>
       {/* Table */}
       <div className="rounded-xl border border-neutral-800 overflow-x-auto">
         <table className="w-full text-sm min-w-[720px]">
@@ -336,6 +398,8 @@ export default function AdminUsers() {
             className="rounded-md border border-neutral-800 px-3 h-8 hover:border-neutral-600 disabled:opacity-40"
           >Next →</button>
         </div>
+      )}
+      </>
       )}
 
       {openId && (
@@ -566,6 +630,9 @@ function UserDrawer({
               </div>
             </section>
 
+            {/* Support Access */}
+            <SupportAccessSection userId={userId} userEmail={data.email} />
+
             {/* Profile */}
             <section className="space-y-2">
               <h3 className="text-xs uppercase tracking-widest text-neutral-500">Profile</h3>
@@ -666,5 +733,174 @@ function UserDrawer({
         )}
       </div>
     </div>
+  );
+}
+
+// ---- Support Access section for UserDrawer ----
+
+interface GrantStatus {
+  id: string;
+  admin_user_id: string;
+  target_user_id: string;
+  admin_email: string | null;
+  target_email: string | null;
+  status: string;
+  requested_at: string;
+  accepted_at: string | null;
+  expires_at: string;
+  ended_at: string | null;
+  ended_reason: string | null;
+}
+
+function SupportAccessSection({
+  userId,
+  userEmail,
+}: {
+  userId: string;
+  userEmail: string;
+}) {
+  const [grant, setGrant] = useState<GrantStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const checkStatus = useCallback(async () => {
+    try {
+      const g = await api<GrantStatus | null>(
+        `/api/admin/support-access/${userId}/status`
+      );
+      setGrant(g ?? null);
+    } catch {
+      setGrant(null);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    checkStatus();
+  }, [checkStatus]);
+
+  useEffect(() => {
+    if (!grant || grant.status !== "pending") return;
+    const id = setInterval(checkStatus, 5_000);
+    return () => clearInterval(id);
+  }, [grant, checkStatus]);
+
+  const requestAccess = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const g = await api<GrantStatus>(
+        `/api/admin/support-access/${userId}/request`,
+        { method: "POST" }
+      );
+      setGrant(g);
+    } catch (e: any) {
+      setErr(e?.body?.detail || "Failed to request access");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const endSession = async () => {
+    if (!grant) return;
+    setBusy(true);
+    try {
+      await api(`/api/admin/support-access/${grant.id}/end`, {
+        method: "POST",
+      });
+      setGrant(null);
+    } catch {
+      // Will catch on next status poll
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const enterAsUser = () => {
+    if (!grant) return;
+    startImpersonation({
+      userId,
+      userEmail,
+      grantId: grant.id,
+      expiresAt: grant.expires_at,
+    });
+    window.location.href = "/app";
+  };
+
+  const remaining = grant?.expires_at
+    ? Math.max(0, Math.ceil((new Date(grant.expires_at).getTime() - Date.now()) / 60_000))
+    : 0;
+
+  return (
+    <section className="space-y-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+      <h3 className="text-xs uppercase tracking-widest text-emerald-400">
+        Support Access
+      </h3>
+
+      {err && <div className="text-xs text-rose-300">{err}</div>}
+
+      {!grant && (
+        <>
+          <p className="text-xs text-neutral-400">
+            Request temporary access to view this user's account. They will see
+            a popup and must approve before you can proceed.
+          </p>
+          <button
+            onClick={requestAccess}
+            disabled={busy}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50 transition"
+          >
+            {busy ? "Requesting..." : "Request Access"}
+          </button>
+        </>
+      )}
+
+      {grant?.status === "pending" && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-sm text-amber-200">
+              Waiting for user to approve...
+            </span>
+          </div>
+          <p className="text-xs text-neutral-500">
+            The user will see a popup on their next page load or within 15
+            seconds if they're online. Request expires in {remaining} min.
+          </p>
+          <button
+            onClick={endSession}
+            disabled={busy}
+            className="rounded-md border border-neutral-700 px-3 py-1.5 text-xs text-neutral-400 hover:text-white hover:border-neutral-500 disabled:opacity-50"
+          >
+            Cancel request
+          </button>
+        </div>
+      )}
+
+      {grant?.status === "active" && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="text-sm text-emerald-200">
+              Access granted &mdash; {remaining} min remaining
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={enterAsUser}
+              className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 transition"
+            >
+              Sign in as {userEmail.split("@")[0]}
+            </button>
+            <button
+              onClick={endSession}
+              disabled={busy}
+              className="rounded-lg border border-neutral-700 px-3 py-2.5 text-xs text-neutral-400 hover:text-white hover:border-neutral-500 disabled:opacity-50"
+            >
+              End
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }

@@ -250,15 +250,19 @@ export const patchAdminUser = (userId: string, patch: UserPatch) =>
 
 export type LeadStatus = "new" | "read" | "responded" | "archived";
 
+export type LeadCategory = "support" | "presales" | "bug_feature" | "general";
+
 export type AdminLead = {
   id: string;
   name: string;
   email: string;
+  phone: string | null;
   message: string;
   source: string;
   page_url: string | null;
   user_id: string | null;
   status: LeadStatus;
+  category: LeadCategory;
   created_at: string;
 };
 
@@ -266,15 +270,18 @@ export type AdminLeadsPage = {
   total: number;
   unread: number;
   items: AdminLead[];
+  counts_by_category: Record<LeadCategory, number>;
 };
 
 export const getAdminLeads = (
   status?: LeadStatus,
+  category?: LeadCategory | null,
   limit = 100,
   offset = 0
 ) => {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
+  if (category) params.set("category", category);
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   return api<AdminLeadsPage>(`/api/admin/leads?${params.toString()}`);

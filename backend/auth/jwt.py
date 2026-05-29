@@ -178,3 +178,86 @@ def get_current_user_optional(
         return get_current_user(creds)
     except HTTPException:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Impersonation-aware user resolution
+# ---------------------------------------------------------------------------
+
+from fastapi import Request  # noqa: E402
+
+
+def get_effective_user(
+    request: Request,
+    auth: AuthenticatedUser = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """Return *auth* unless an ``X-Impersonate`` header is present AND the
+    caller has an active, unexpired support grant for the target user.
+
+    When impersonation is active the returned ``AuthenticatedUser`` has its
+    ``auth_id`` and ``email`` swapped to the target user's values, and a
+    private ``_impersonated_by`` dict attached for audit purposes.
+
+    Billing routes should keep using ``get_current_user`` directly so
+    impersonation can never trigger payment-changing actions.
+    """
+    impersonate_id = request.headers.get("X-Impersonate")
+    if not impersonate_id:
+        return auth
+
+    from backend.auth.admin import is_admin_email
+    if not is_admin_email(auth.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only admins may impersonate",
+        )
+
+    import uuid as _uuid
+    try:
+        target_uuid = _uuid.UUID(impersonate_id)
+    except ValueError:
+        raise HTTPException(400, "X-Impersonate must be a valid UUID")
+
+    from backend.database import get_db as _get_db_fn
+    from backend.models import User
+    from backend.models.support_grant import SupportGrant
+
+    db_session = next(_get_db_fn())
+    try:
+        from backend.routers.templates import _resolve_user
+        admin_user = _resolve_user(db_session, auth)
+
+        from datetime import datetime, timezone as _tz
+        now = datetime.now(_tz.utc)
+        grant = (
+            db_session.query(SupportGrant)
+            .filter(
+                SupportGrant.admin_user_id == admin_user.id,
+                SupportGrant.target_user_id == target_uuid,
+                SupportGrant.status == "active",
+                SupportGrant.expires_at > now,
+            )
+            .first()
+        )
+        if not grant:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No active support-access grant for this user",
+            )
+
+        target_user = db_session.query(User).filter(User.id == target_uuid).first()
+        if not target_user:
+            raise HTTPException(404, "Target user not found")
+    finally:
+        db_session.close()
+
+    return AuthenticatedUser(
+        auth_id=target_user.auth_id,
+        email=target_user.email,
+        raw={**auth.raw, "_impersonated_by": {
+            "admin_auth_id": auth.auth_id,
+            "admin_email": auth.email,
+            "admin_user_id": str(admin_user.id),
+            "grant_id": str(grant.id),
+        }},
+    )

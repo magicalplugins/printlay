@@ -240,6 +240,21 @@ export default function Admin() {
             </svg>
             Integrations
           </Link>
+          <Link
+            to="/app/admin/changelog"
+            className="inline-flex items-center gap-2 rounded-lg border border-neutral-700 px-4 h-10 text-sm font-medium text-neutral-200 hover:border-neutral-500"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+              <path
+                d="M2 3h10M2 7h7M2 11h5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+            Changelog
+          </Link>
           <button
             onClick={() => setComposerOpen(true)}
             className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-4 h-10 text-sm font-semibold text-white hover:from-violet-400 hover:to-fuchsia-400"

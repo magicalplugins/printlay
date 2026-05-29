@@ -73,6 +73,16 @@ def delete(key: str) -> None:
     _client().delete_object(Bucket=_bucket(), Key=key)
 
 
+def exists(key: str) -> bool:
+    """Cheap HEAD against the object store. Returns False for any error
+    (missing key, permission, transient) — caller decides what to do."""
+    try:
+        _client().head_object(Bucket=_bucket(), Key=key)
+        return True
+    except Exception:
+        return False
+
+
 def presigned_get(
     key: str,
     expires_in: int = 3600,

@@ -18,11 +18,23 @@ export type Asset = {
   width_pt: number;
   height_pt: number;
   file_size: number;
+  page_count?: number;
   thumbnail_url: string | null;
   preview_url: string | null;
   created_at: string;
   is_official?: boolean;
 };
+
+export type AssetPageThumbnail = {
+  url: string;
+  page_index: number;
+  page_count: number;
+};
+
+export const getAssetPageThumbnail = (assetId: string, pageIndex: number) =>
+  api<AssetPageThumbnail>(
+    `/api/assets/${assetId}/pages/${pageIndex}/thumbnail`
+  );
 
 export const listCategories = () => api<Category[]>("/api/categories");
 

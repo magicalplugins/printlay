@@ -21,12 +21,14 @@ const Register = lazyWithRetry(() => import("./pages/Register"));
 const Dashboard = lazyWithRetry(() => import("./pages/Dashboard"));
 const Templates = lazyWithRetry(() => import("./pages/Templates"));
 const TemplateWizard = lazyWithRetry(() => import("./pages/TemplateWizard"));
+const StickerEditor = lazyWithRetry(() => import("./pages/StickerEditor"));
 const TemplateDetail = lazyWithRetry(() => import("./pages/TemplateDetail"));
 const Jobs = lazyWithRetry(() => import("./pages/Jobs"));
 const JobProgrammer = lazyWithRetry(() => import("./pages/JobProgrammer"));
 const JobFiller = lazyWithRetry(() => import("./pages/JobFiller"));
 const Catalogue = lazyWithRetry(() => import("./pages/Catalogue"));
 const Outputs = lazyWithRetry(() => import("./pages/Outputs"));
+const SheetBuilder = lazyWithRetry(() => import("./pages/SheetBuilder"));
 const Settings = lazyWithRetry(() => import("./pages/Settings"));
 const ProfileSetup = lazyWithRetry(() => import("./pages/ProfileSetup"));
 const Admin = lazyWithRetry(() => import("./pages/Admin"));
@@ -34,6 +36,8 @@ const AdminUsers = lazyWithRetry(() => import("./pages/AdminUsers"));
 const AdminLeads = lazyWithRetry(() => import("./pages/AdminLeads"));
 const AdminInvites = lazyWithRetry(() => import("./pages/AdminInvites"));
 const AdminIntegrations = lazyWithRetry(() => import("./pages/AdminIntegrations"));
+const AdminChangelog = lazyWithRetry(() => import("./pages/AdminChangelog"));
+const Help = lazyWithRetry(() => import("./pages/Help"));
 const Pricing = lazyWithRetry(() => import("./pages/Pricing"));
 const Terms = lazyWithRetry(() => import("./pages/Terms"));
 const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
@@ -83,6 +87,14 @@ export default function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="templates" element={<Templates />} />
                 <Route path="templates/new" element={<TemplateWizard />} />
+                <Route
+                  path="templates/new/sticker"
+                  element={
+                    <RequireAdmin>
+                      <StickerEditor />
+                    </RequireAdmin>
+                  }
+                />
                 <Route path="templates/:id" element={<TemplateDetail />} />
                 <Route path="jobs" element={<Jobs />} />
                 <Route path="jobs/new" element={<JobProgrammer />} />
@@ -90,7 +102,9 @@ export default function App() {
                 <Route path="jobs/:id/fill" element={<JobFiller />} />
                 <Route path="catalogue" element={<Catalogue />} />
                 <Route path="outputs" element={<Outputs />} />
+                <Route path="sheets" element={<SheetBuilder />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="help" element={<Help />} />
                 <Route
                   path="admin"
                   element={
@@ -128,6 +142,14 @@ export default function App() {
                   element={
                     <RequireAdmin>
                       <AdminIntegrations />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="admin/changelog"
+                  element={
+                    <RequireAdmin>
+                      <AdminChangelog />
                     </RequireAdmin>
                   }
                 />

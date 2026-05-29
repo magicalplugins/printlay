@@ -220,6 +220,47 @@ export default function Dashboard() {
           </div>
         </section>
       )}
+
+      {/* ─── Submit a bug / feature CTA ─────────────────────────────── */}
+      <SubmitBugFooter />
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   Lightweight prompt at the very bottom of the dashboard. Clicking
+   pops open the chat widget pre-set to the "Bug / Feature" category
+   via a custom event the widget listens for.
+   ───────────────────────────────────────────────────────────────────── */
+function SubmitBugFooter() {
+  const openChat = () => {
+    window.dispatchEvent(
+      new CustomEvent("printlay:openchat", {
+        detail: { category: "bug_feature" },
+      })
+    );
+  };
+  return (
+    <div className="pt-4 text-center">
+      <button
+        type="button"
+        onClick={openChat}
+        className="inline-flex items-center gap-2 rounded-full border border-neutral-800 bg-neutral-900/40 px-4 py-1.5 text-xs text-neutral-400 hover:border-violet-500/50 hover:text-violet-200 hover:bg-violet-500/[0.05] transition"
+      >
+        <span aria-hidden>💡</span>
+        Found a bug or have an idea?
+        <span className="text-violet-300 font-semibold">Submit via chat</span>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
+          <path
+            d="M4 2.5l3.5 3.5L4 9.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
     </div>
   );
 }

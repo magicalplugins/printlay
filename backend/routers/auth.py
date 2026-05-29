@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.audit import record
-from backend.auth import AuthenticatedUser, get_current_user, is_admin_email
+from backend.auth import AuthenticatedUser, get_current_user, get_effective_user, is_admin_email
 from backend.config import get_settings
 from backend.database import get_db
 from backend.models import User
@@ -70,7 +70,7 @@ def me(
             "extend an existing trial."
         ),
     ),
-    user: AuthenticatedUser = Depends(get_current_user),
+    user: AuthenticatedUser = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ) -> UserOut:
     if not user.email:

@@ -265,6 +265,7 @@ def list_assets(
                 preview_url=preview_url,
                 created_at=r.created_at,
                 is_official=r.is_official,
+                page_count=max(1, int(getattr(r, "page_count", 1) or 1)),
             )
         )
     return out
@@ -375,6 +376,7 @@ async def upload_asset(
         height_pt=norm.height_pt,
         file_size=len(norm.pdf_bytes),
         is_official=cat.is_official,
+        page_count=norm.page_count,
     )
     db.add(asset)
     db.commit()
@@ -395,6 +397,119 @@ async def upload_asset(
         preview_url=preview_url,
         created_at=asset.created_at,
         is_official=asset.is_official,
+        page_count=max(1, int(getattr(asset, "page_count", 1) or 1)),
+    )
+
+
+class PageThumbnailOut(BaseModel):
+    """URL to a rendered preview of a single PDF page/artboard."""
+
+    url: str
+    page_index: int
+    page_count: int
+
+
+@router.get(
+    "/assets/{asset_id}/pages/{page_index}/thumbnail",
+    response_model=PageThumbnailOut,
+)
+def get_asset_page_thumbnail(
+    asset_id: uuid.UUID,
+    page_index: int,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> PageThumbnailOut:
+    """Return a presigned URL for a single page of a multi-page asset.
+
+    Thumbnails are generated on demand on the first request and cached
+    in R2 (`<r2_key>_thumb_p<n>.jpg`) so subsequent loads are instant.
+    Owner-only access — official catalogue assets the user has
+    subscribed to are also allowed."""
+    user = _resolve_user(db, auth)
+    asset = db.query(Asset).filter(Asset.id == asset_id).one_or_none()
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+
+    if asset.user_id != user.id and not asset.is_official:
+        raise HTTPException(404, "Asset not found")
+    if asset.is_official and asset.user_id != user.id:
+        # Check subscription to the parent catalogue
+        sub = (
+            db.query(CatalogueSubscription)
+            .filter(
+                CatalogueSubscription.user_id == user.id,
+                CatalogueSubscription.category_id == asset.category_id,
+            )
+            .one_or_none()
+        )
+        if sub is None:
+            raise HTTPException(404, "Asset not found")
+
+    if asset.kind != "pdf":
+        # Non-PDF assets are single-page by definition; redirect to
+        # the existing thumbnail.
+        if not asset.thumbnail_r2_key:
+            raise HTTPException(404, "No thumbnail available")
+        return PageThumbnailOut(
+            url=storage.presigned_get(asset.thumbnail_r2_key, expires_in=3600),
+            page_index=0,
+            page_count=1,
+        )
+
+    pc = max(1, int(asset.page_count or 1))
+    if page_index < 0 or page_index >= pc:
+        raise HTTPException(400, f"page_index out of range (0..{pc - 1})")
+
+    # Page 0 reuses the existing primary thumbnail.
+    if page_index == 0 and asset.thumbnail_r2_key:
+        return PageThumbnailOut(
+            url=storage.presigned_get(asset.thumbnail_r2_key, expires_in=3600),
+            page_index=0,
+            page_count=pc,
+        )
+
+    # Cache key sits next to the asset PDF so cleanup follows naturally.
+    thumb_key = f"{asset.r2_key}.thumb_p{page_index}.jpg"
+    if storage.exists(thumb_key):
+        return PageThumbnailOut(
+            url=storage.presigned_get(thumb_key, expires_in=3600),
+            page_index=page_index,
+            page_count=pc,
+        )
+
+    try:
+        pdf_bytes = storage.get_bytes(asset.r2_key)
+    except Exception as exc:
+        raise HTTPException(503, f"Could not read source PDF: {exc}") from exc
+
+    import io
+    import pymupdf  # type: ignore[import-untyped]
+    from PIL import Image
+
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if page_index >= doc.page_count:
+            raise HTTPException(400, "page_index out of range")
+        page = doc[page_index]
+        scale = asset_pipeline.THUMBNAIL_MAX_PX / max(
+            page.rect.width, page.rect.height
+        )
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
+        png = pix.tobytes("png")
+    finally:
+        doc.close()
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    img.thumbnail(
+        (asset_pipeline.THUMBNAIL_MAX_PX, asset_pipeline.THUMBNAIL_MAX_PX)
+    )
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=80, optimize=True)
+    storage.put_bytes(thumb_key, out.getvalue(), "image/jpeg")
+
+    return PageThumbnailOut(
+        url=storage.presigned_get(thumb_key, expires_in=3600),
+        page_index=page_index,
+        page_count=pc,
     )
 
 
@@ -416,6 +531,12 @@ def delete_asset(
                 storage.delete(k)
             except Exception:
                 pass
+    # Per-page thumbnails (lazy-generated for multi-page PDFs)
+    for n in range(1, int(asset.page_count or 1)):
+        try:
+            storage.delete(f"{asset.r2_key}.thumb_p{n}.jpg")
+        except Exception:
+            pass
     db.delete(asset)
     db.commit()
 
@@ -841,6 +962,33 @@ def admin_unassign_subscriber(
         target_type="category", target_id=cat_id,
         payload={"target_user_id": str(user_id)},
     )
+
+
+@router.post("/admin/assets/refresh-thumbnails", status_code=status.HTTP_200_OK)
+def refresh_all_thumbnails(
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Regenerate thumbnails and refresh stored dimensions for every PDF asset.
+    Useful after a pymupdf upgrade that changes how page rotation / mediabox
+    are resolved. Does NOT modify the stored PDF bytes -- only the thumbnail
+    and the cached width_pt/height_pt in the DB."""
+    assets = db.query(Asset).filter(Asset.r2_key.isnot(None), Asset.kind == "pdf").all()
+    refreshed, errors = 0, []
+    for a in assets:
+        try:
+            pdf_bytes = storage.get_bytes(a.r2_key)
+            new_thumb = asset_pipeline._thumbnail_from_pdf(pdf_bytes)
+            if a.thumbnail_r2_key:
+                storage.put_bytes(a.thumbnail_r2_key, new_thumb, content_type="image/jpeg")
+            w, h = asset_pipeline._pdf_dimensions(pdf_bytes)
+            a.width_pt = w
+            a.height_pt = h
+            refreshed += 1
+        except Exception as exc:
+            errors.append({"asset_id": str(a.id), "name": a.name, "error": str(exc)})
+    db.commit()
+    return {"refreshed": refreshed, "errors": errors}
 
 
 @router.post("/admin/categories/{cat_id}/rotate-assets", status_code=status.HTTP_200_OK)

@@ -1021,11 +1021,13 @@ class LeadRow(BaseModel):
     id: str
     name: str
     email: str
+    phone: str | None
     message: str
     source: str
     page_url: str | None
     user_id: str | None
     status: str
+    category: str
     created_at: str
 
 
@@ -1033,6 +1035,7 @@ class LeadsPage(BaseModel):
     total: int
     unread: int
     items: list[LeadRow]
+    counts_by_category: dict[str, int]
 
 
 class LeadPatch(BaseModel):
@@ -1044,6 +1047,9 @@ def list_leads(
     status: str | None = Query(
         None, description="Filter by status. Omit to see everything except archived."
     ),
+    category: str | None = Query(
+        None, description="Filter by category (support|presales|bug_feature|general)."
+    ),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     _admin: User = Depends(require_admin),
@@ -1053,12 +1059,16 @@ def list_leads(
 
     Default view hides archived; pass `status=archived` to see the
     archive. `unread` is the count of `status='new'` regardless of the
-    current filter (drives the nav badge)."""
+    current filter (drives the nav badge). `counts_by_category` always
+    reflects unarchived leads matching the current status filter so the
+    UI tabs show meaningful counts."""
     q = db.query(Lead)
     if status:
         q = q.filter(Lead.status == status)
     else:
         q = q.filter(Lead.status != "archived")
+    if category:
+        q = q.filter(Lead.category == category)
 
     total = q.count()
     rows = (
@@ -1069,19 +1079,39 @@ def list_leads(
         db.query(func.count(Lead.id)).filter(Lead.status == "new").scalar() or 0
     )
 
+    # Counts across categories for the same status filter (without the
+    # category restriction) so the tabs always show how many of each
+    # category are available to filter into.
+    count_q = db.query(Lead.category, func.count(Lead.id))
+    if status:
+        count_q = count_q.filter(Lead.status == status)
+    else:
+        count_q = count_q.filter(Lead.status != "archived")
+    counts_by_category: dict[str, int] = {
+        "support": 0,
+        "presales": 0,
+        "bug_feature": 0,
+        "general": 0,
+    }
+    for cat, n in count_q.group_by(Lead.category).all():
+        counts_by_category[str(cat)] = int(n)
+
     return LeadsPage(
         total=int(total),
         unread=int(unread),
+        counts_by_category=counts_by_category,
         items=[
             LeadRow(
                 id=str(r.id),
                 name=r.name,
                 email=r.email,
+                phone=r.phone,
                 message=r.message,
                 source=r.source,
                 page_url=r.page_url,
                 user_id=str(r.user_id) if r.user_id else None,
                 status=r.status,
+                category=r.category,
                 created_at=r.created_at.isoformat(),
             )
             for r in rows
@@ -1133,11 +1163,13 @@ def patch_lead(
         id=str(lead.id),
         name=lead.name,
         email=lead.email,
+        phone=lead.phone,
         message=lead.message,
         source=lead.source,
         page_url=lead.page_url,
         user_id=str(lead.user_id) if lead.user_id else None,
         status=lead.status,
+        category=lead.category,
         created_at=lead.created_at.isoformat(),
     )
 

@@ -15,12 +15,13 @@ primary_region = "lhr"
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
+  max_machines_running = 5
 
   [http_service.concurrency]
     type = "requests"
-    soft_limit = 80
-    hard_limit = 100
+    soft_limit = 25
+    hard_limit = 50
 
 [[http_service.checks]]
   grace_period = "10s"
@@ -30,5 +31,5 @@ primary_region = "lhr"
   path = "/api/health"
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = "shared-cpu-2x"
+  memory = "2gb"

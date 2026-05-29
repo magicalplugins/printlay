@@ -9,7 +9,7 @@ Rate-limited by IP to keep a single bored visitor from filling the
 inbox with junk.
 """
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
@@ -25,11 +25,16 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 
+LeadCategory = Literal["support", "presales", "bug_feature", "general"]
+
+
 class LeadIn(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     email: EmailStr
     message: str = Field(..., min_length=1, max_length=5000)
     page_url: Optional[str] = Field(default=None, max_length=512)
+    category: LeadCategory = Field(default="general")
+    phone: Optional[str] = Field(default=None, max_length=40)
 
 
 class LeadOut(BaseModel):
@@ -67,6 +72,8 @@ def submit_lead(
         if user is not None:
             user_id = user.id
 
+    phone = (payload.phone or "").strip()[:40] or None
+
     lead = Lead(
         name=name,
         email=email,
@@ -75,6 +82,8 @@ def submit_lead(
         user_id=user_id,
         source="widget",
         status="new",
+        category=payload.category,
+        phone=phone,
     )
     db.add(lead)
     db.commit()

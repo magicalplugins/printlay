@@ -141,6 +141,8 @@ export default function LeadChatWidget() {
     // /app/jobs) and the dashboard stay visible.
     if (pathname === "/app/templates/new") return true;
     if (/^\/app\/templates\/[^/]+$/.test(pathname)) return true; // designer
+    if (pathname.startsWith("/app/templates/new/sticker")) return true; // sticker builder
+    if (pathname.startsWith("/app/sheets")) return true; // sheet builder
     if (pathname === "/app/jobs/new") return true;
     if (/^\/app\/jobs\/[^/]+\/(program|fill)$/.test(pathname)) return true;
     return false;

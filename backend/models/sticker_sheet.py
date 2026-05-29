@@ -41,6 +41,12 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     sub_sheet_size: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     """For sheet mode: 'a4' | 'a5' | 'a3' | 'custom' | null."""
 
+    sub_sheet_custom_w_mm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    """Custom sub-sheet width in mm (used when sub_sheet_size == 'custom')."""
+
+    sub_sheet_custom_h_mm: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    """Custom sub-sheet height in mm (used when sub_sheet_size == 'custom')."""
+
     gap_mm: Mapped[float] = mapped_column(
         Float, nullable=False, default=3.0, server_default="3.0"
     )

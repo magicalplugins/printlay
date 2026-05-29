@@ -47,6 +47,8 @@ class SheetConfig:
     max_zone_length_mm: float | None = None
     mark_offset_mm: float = 5.0
     sub_sheet_size: str | None = None
+    sub_sheet_custom_w_mm: float | None = None
+    sub_sheet_custom_h_mm: float | None = None
     sticker_align_h: str = "center"
     sticker_align_v: str = "top"
     sub_sheet_bleed_mm: float = 0.0
@@ -59,6 +61,16 @@ SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
     "a4": (210.0, 297.0),
     "a3": (297.0, 420.0),
 }
+
+
+def resolve_sub_size(config: "SheetConfig") -> tuple[float, float] | None:
+    """Return (w_mm, h_mm) for the configured sub-sheet, including custom."""
+    key = config.sub_sheet_size or ""
+    if key == "custom":
+        if config.sub_sheet_custom_w_mm and config.sub_sheet_custom_h_mm:
+            return (config.sub_sheet_custom_w_mm, config.sub_sheet_custom_h_mm)
+        return None
+    return SUB_SHEET_SIZES.get(key)
 
 
 def auto_layout(
@@ -83,8 +95,9 @@ def auto_layout(
     sw, sh = sticker_width_mm, sticker_height_mm
 
     # Sub-sheet grouping mode
-    if config.sub_sheet_size and config.sub_sheet_size in SUB_SHEET_SIZES:
-        sub_w, sub_h = SUB_SHEET_SIZES[config.sub_sheet_size]
+    _sub_size = resolve_sub_size(config)
+    if _sub_size:
+        sub_w, sub_h = _sub_size
         padding = config.sub_sheet_padding_mm
         sub_gap = config.sub_sheet_gap_mm
         edge = config.edge_margin_mm
@@ -368,7 +381,7 @@ def _draw_crop_marks(
     the printed roll to be guillotined into individual smaller sheets.
     If no sub_sheet_size is set, no crop marks are drawn.
     """
-    size = SUB_SHEET_SIZES.get(config.sub_sheet_size or "")
+    size = resolve_sub_size(config)
     if not size:
         return
 
@@ -437,12 +450,15 @@ def _draw_velloblade_marks(
     config: SheetConfig,
     total_height_mm: float,
 ) -> None:
-    """Velloblade: filled circle + L-bracket at zone corners."""
+    """Velloblade: solid-filled 6mm circles at 4 corners + top centre per zone.
+
+    The printable PDF uses a full black fill so the circle prints solid; the
+    SVG cut-line export uses a hollow 0.1mm-stroke version of the same circle.
+    """
     w_pt = config.media_width_mm * PT_PER_MM
     h_pt = total_height_mm * PT_PER_MM
     offset = config.mark_offset_mm * PT_PER_MM
-    circle_r = 0.75 * PT_PER_MM
-    bracket_len = 3.0 * PT_PER_MM
+    circle_r = (6.0 / 2.0) * PT_PER_MM  # 6mm diameter
 
     if config.max_zone_length_mm:
         zone_h_pt = config.max_zone_length_mm * PT_PER_MM
@@ -455,34 +471,22 @@ def _draw_velloblade_marks(
         zone_top = z * zone_h_pt
         zone_bottom = min((z + 1) * zone_h_pt, h_pt)
 
-        corners = [
+        centres = [
             (offset, zone_top + offset),
             (w_pt - offset, zone_top + offset),
             (offset, zone_bottom - offset),
             (w_pt - offset, zone_bottom - offset),
+            # Middle mark at the top of the zone.
+            (w_pt / 2.0, zone_top + offset),
         ]
 
-        for cx, cy in corners:
+        for cx, cy in centres:
             page.draw_circle(
                 pymupdf.Point(cx, cy),
                 circle_r,
                 color=(0, 0, 0),
                 fill=(0, 0, 0),
                 width=0.25,
-            )
-            is_left = cx < w_pt / 2
-            is_top = cy < (zone_top + zone_bottom) / 2
-            bx = bracket_len if is_left else -bracket_len
-            by = bracket_len if is_top else -bracket_len
-            page.draw_line(
-                pymupdf.Point(cx + bx, cy),
-                pymupdf.Point(cx, cy),
-                color=(0, 0, 0), width=0.5,
-            )
-            page.draw_line(
-                pymupdf.Point(cx, cy + by),
-                pymupdf.Point(cx, cy),
-                color=(0, 0, 0), width=0.5,
             )
 
 

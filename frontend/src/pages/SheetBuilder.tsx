@@ -605,8 +605,56 @@ export default function SheetBuilder() {
                   <option value="a5">A5 (148 × 210mm)</option>
                   <option value="a4">A4 (210 × 297mm)</option>
                   <option value="a3">A3 (297 × 420mm)</option>
+                  <option value="custom">Custom…</option>
                 </select>
               </SettingRow>
+              {activeSheet.sub_sheet_size === "custom" && (
+                <SettingRow label="Custom size (mm)">
+                  <div className="flex gap-1.5 items-center">
+                    <input
+                      type="number"
+                      min={10}
+                      step={1}
+                      placeholder="W"
+                      value={activeSheet.sub_sheet_custom_w_mm ?? ""}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_custom_w_mm: e.target.value
+                                  ? Number(e.target.value)
+                                  : null,
+                              }
+                            : null
+                        )
+                      }
+                      className="w-16 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
+                    />
+                    <span className="text-neutral-500 text-xs">×</span>
+                    <input
+                      type="number"
+                      min={10}
+                      step={1}
+                      placeholder="H"
+                      value={activeSheet.sub_sheet_custom_h_mm ?? ""}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_custom_h_mm: e.target.value
+                                  ? Number(e.target.value)
+                                  : null,
+                              }
+                            : null
+                        )
+                      }
+                      className="w-16 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
+                    />
+                  </div>
+                </SettingRow>
+              )}
               {activeSheet.sub_sheet_size && (
                 <>
                   <SettingRow label="Sub-sheet gap (mm)">
@@ -757,6 +805,105 @@ export default function SheetBuilder() {
           {activeSheet.sub_sheet_size && (
             <Panel title="Sub-Sheet Design">
               <div className="space-y-3">
+                {/* Title (top of the sub-sheet) */}
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">Title (top)</label>
+                  <input
+                    type="text"
+                    placeholder="Sheet title..."
+                    value={activeSheet.sub_sheet_title ?? ""}
+                    onChange={(e) =>
+                      setActiveSheet((s) =>
+                        s ? { ...s, sub_sheet_title: e.target.value || null } : null
+                      )
+                    }
+                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                  />
+                </div>
+                {activeSheet.sub_sheet_title && (
+                  <>
+                    <div className="flex gap-2">
+                      <div className="flex-1">
+                        <label className="block text-xs text-neutral-400 mb-1">Font</label>
+                        <select
+                          value={activeSheet.sub_sheet_title_font ?? "Inter"}
+                          onChange={(e) =>
+                            setActiveSheet((s) =>
+                              s ? { ...s, sub_sheet_title_font: e.target.value } : null
+                            )
+                          }
+                          className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                        >
+                          <option value="Inter">Inter</option>
+                          <option value="Arial">Arial</option>
+                          <option value="Helvetica">Helvetica</option>
+                          <option value="Georgia">Georgia</option>
+                          <option value="Times New Roman">Times New Roman</option>
+                          <option value="Courier New">Courier New</option>
+                        </select>
+                      </div>
+                      <div className="w-16">
+                        <label className="block text-xs text-neutral-400 mb-1">Size</label>
+                        <input
+                          type="number"
+                          min={2}
+                          max={20}
+                          step={0.5}
+                          value={activeSheet.sub_sheet_title_size_mm ?? 5}
+                          onChange={(e) =>
+                            setActiveSheet((s) =>
+                              s ? { ...s, sub_sheet_title_size_mm: Number(e.target.value) } : null
+                            )
+                          }
+                          className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <div className="flex-1">
+                        <label className="block text-xs text-neutral-400 mb-1">Title colour</label>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="color"
+                            value={activeSheet.sub_sheet_title_color || "#000000"}
+                            onChange={(e) =>
+                              setActiveSheet((s) =>
+                                s ? { ...s, sub_sheet_title_color: e.target.value } : null
+                              )
+                            }
+                            className="w-7 h-7 shrink-0 rounded border border-neutral-700 bg-neutral-800 cursor-pointer p-0"
+                          />
+                          <input
+                            type="text"
+                            value={activeSheet.sub_sheet_title_color ?? "#000000"}
+                            onChange={(e) =>
+                              setActiveSheet((s) =>
+                                s ? { ...s, sub_sheet_title_color: e.target.value || null } : null
+                              )
+                            }
+                            className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                          />
+                        </div>
+                      </div>
+                      <div className="pt-4">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activeSheet.sub_sheet_title_bold ?? false}
+                            onChange={(e) =>
+                              setActiveSheet((s) =>
+                                s ? { ...s, sub_sheet_title_bold: e.target.checked } : null
+                              )
+                            }
+                            className="rounded"
+                          />
+                          <span className="text-xs text-neutral-300 font-bold">B</span>
+                        </label>
+                      </div>
+                    </div>
+                  </>
+                )}
+
                 {/* Sticker alignment */}
                 <div>
                   <label className="block text-xs text-neutral-400 mb-1">
@@ -863,7 +1010,7 @@ export default function SheetBuilder() {
                               s ? { ...s, sub_sheet_fill_color: e.target.value } : null
                             )
                           }
-                          className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
+                          className="w-8 h-8 shrink-0 rounded border border-neutral-700 bg-neutral-800 cursor-pointer p-0"
                         />
                         <input
                           type="text"
@@ -901,7 +1048,7 @@ export default function SheetBuilder() {
                               s ? { ...s, sub_sheet_fill_color2: e.target.value } : null
                             )
                           }
-                          className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
+                          className="w-8 h-8 shrink-0 rounded border border-neutral-700 bg-neutral-800 cursor-pointer p-0"
                         />
                         <input
                           type="text"
@@ -975,104 +1122,6 @@ export default function SheetBuilder() {
                   />
                 </SettingRow>
 
-                {/* Title */}
-                <div>
-                  <label className="block text-xs text-neutral-400 mb-1">Title</label>
-                  <input
-                    type="text"
-                    placeholder="Sheet title..."
-                    value={activeSheet.sub_sheet_title ?? ""}
-                    onChange={(e) =>
-                      setActiveSheet((s) =>
-                        s ? { ...s, sub_sheet_title: e.target.value || null } : null
-                      )
-                    }
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                  />
-                </div>
-                {activeSheet.sub_sheet_title && (
-                  <>
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <label className="block text-xs text-neutral-400 mb-1">Font</label>
-                        <select
-                          value={activeSheet.sub_sheet_title_font ?? "Inter"}
-                          onChange={(e) =>
-                            setActiveSheet((s) =>
-                              s ? { ...s, sub_sheet_title_font: e.target.value } : null
-                            )
-                          }
-                          className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                        >
-                          <option value="Inter">Inter</option>
-                          <option value="Arial">Arial</option>
-                          <option value="Helvetica">Helvetica</option>
-                          <option value="Georgia">Georgia</option>
-                          <option value="Times New Roman">Times New Roman</option>
-                          <option value="Courier New">Courier New</option>
-                        </select>
-                      </div>
-                      <div className="w-16">
-                        <label className="block text-xs text-neutral-400 mb-1">Size</label>
-                        <input
-                          type="number"
-                          min={2}
-                          max={20}
-                          step={0.5}
-                          value={activeSheet.sub_sheet_title_size_mm ?? 5}
-                          onChange={(e) =>
-                            setActiveSheet((s) =>
-                              s ? { ...s, sub_sheet_title_size_mm: Number(e.target.value) } : null
-                            )
-                          }
-                          className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex gap-2 items-center">
-                      <div className="flex-1">
-                        <label className="block text-xs text-neutral-400 mb-1">Title colour</label>
-                        <div className="flex gap-2 items-center">
-                          <input
-                            type="color"
-                            value={activeSheet.sub_sheet_title_color || "#000000"}
-                            onChange={(e) =>
-                              setActiveSheet((s) =>
-                                s ? { ...s, sub_sheet_title_color: e.target.value } : null
-                              )
-                            }
-                            className="w-7 h-7 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
-                          />
-                          <input
-                            type="text"
-                            value={activeSheet.sub_sheet_title_color ?? "#000000"}
-                            onChange={(e) =>
-                              setActiveSheet((s) =>
-                                s ? { ...s, sub_sheet_title_color: e.target.value || null } : null
-                              )
-                            }
-                            className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
-                          />
-                        </div>
-                      </div>
-                      <div className="pt-4">
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={activeSheet.sub_sheet_title_bold ?? false}
-                            onChange={(e) =>
-                              setActiveSheet((s) =>
-                                s ? { ...s, sub_sheet_title_bold: e.target.checked } : null
-                              )
-                            }
-                            className="rounded"
-                          />
-                          <span className="text-xs text-neutral-300 font-bold">B</span>
-                        </label>
-                      </div>
-                    </div>
-                  </>
-                )}
               </div>
             </Panel>
           )}
@@ -1234,7 +1283,7 @@ function SpotColourRow({
           type="color"
           value={displayColor}
           onChange={(e) => onChange(e.target.value)}
-          className="w-7 h-7 rounded border border-neutral-600 bg-neutral-700 cursor-pointer"
+          className="w-7 h-7 shrink-0 rounded border border-neutral-600 bg-neutral-700 cursor-pointer p-0"
           title="Pick any colour (becomes custom)"
         />
         <select
@@ -1335,6 +1384,17 @@ const SUB_SHEET_SIZES: Record<string, { w: number; h: number }> = {
   a3: { w: 297, h: 420 },
 };
 
+function subSize(sheet: StickerSheet): { w: number; h: number } | null {
+  const key = sheet.sub_sheet_size ?? "";
+  if (key === "custom") {
+    if (sheet.sub_sheet_custom_w_mm && sheet.sub_sheet_custom_h_mm) {
+      return { w: sheet.sub_sheet_custom_w_mm, h: sheet.sub_sheet_custom_h_mm };
+    }
+    return null;
+  }
+  return SUB_SHEET_SIZES[key] ?? null;
+}
+
 function _drawSubSheets(
   ctx: CanvasRenderingContext2D,
   ox: number,
@@ -1344,7 +1404,7 @@ function _drawSubSheets(
   bgImage: HTMLImageElement | null,
   spots: SpotColour[]
 ) {
-  const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
+  const size = subSize(sheet);
   if (!size) return;
 
   const subW = size.w * scale;
@@ -1483,7 +1543,7 @@ function _drawSubSheetOverlay(
   sheet: StickerSheet,
   spots: SpotColour[]
 ) {
-  const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
+  const size = subSize(sheet);
   if (!size) return;
 
   const subW = size.w * scale;
@@ -1627,16 +1687,28 @@ function _drawRegMarksPreview(
     }
   } else if (sheet.registration_type === "velloblade") {
     ctx.fillStyle = marksColor;
-    const corners = [
-      [markOffset, markOffset],
-      [w - markOffset, markOffset],
-      [markOffset, h - markOffset],
-      [w - markOffset, h - markOffset],
-    ];
-    for (const [x, y] of corners) {
-      ctx.beginPath();
-      ctx.arc(ox + x, oy + y, 4, 0, Math.PI * 2);
-      ctx.fill();
+    const scalePerMm = scale; // canvas px per mm
+    const r = 3 * scalePerMm; // 6mm diameter circles
+    const zoneH =
+      sheet.max_zone_length_mm && sheet.max_zone_length_mm > 0
+        ? sheet.max_zone_length_mm * scalePerMm
+        : h;
+    const numZones = Math.max(1, Math.ceil(h / zoneH));
+    for (let z = 0; z < numZones; z++) {
+      const top = z * zoneH;
+      const bottom = Math.min((z + 1) * zoneH, h);
+      const centres: [number, number][] = [
+        [markOffset, top + markOffset],
+        [w - markOffset, top + markOffset],
+        [markOffset, bottom - markOffset],
+        [w - markOffset, bottom - markOffset],
+        [w / 2, top + markOffset], // middle mark at the top
+      ];
+      for (const [x, y] of centres) {
+        ctx.beginPath();
+        ctx.arc(ox + x, oy + y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   }
 }

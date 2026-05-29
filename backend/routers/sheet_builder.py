@@ -70,6 +70,8 @@ class SheetIn(BaseModel):
     media_height_mm: float = Field(default=0.0, ge=0)
     mode: str = "roll"
     sub_sheet_size: str | None = None
+    sub_sheet_custom_w_mm: float | None = Field(default=None, gt=0)
+    sub_sheet_custom_h_mm: float | None = Field(default=None, gt=0)
     gap_mm: float = Field(default=3.0, ge=0)
     sub_sheet_gap_mm: float = Field(default=5.0, ge=0)
     sub_sheet_padding_mm: float = Field(default=5.0, ge=0)
@@ -103,6 +105,8 @@ class SheetOut(BaseModel):
     media_height_mm: float
     mode: str
     sub_sheet_size: str | None
+    sub_sheet_custom_w_mm: float | None = None
+    sub_sheet_custom_h_mm: float | None = None
     gap_mm: float
     sub_sheet_gap_mm: float
     sub_sheet_padding_mm: float
@@ -260,6 +264,8 @@ def create_sheet(
         media_height_mm=payload.media_height_mm,
         mode=payload.mode,
         sub_sheet_size=payload.sub_sheet_size,
+        sub_sheet_custom_w_mm=payload.sub_sheet_custom_w_mm,
+        sub_sheet_custom_h_mm=payload.sub_sheet_custom_h_mm,
         gap_mm=payload.gap_mm,
         sub_sheet_gap_mm=payload.sub_sheet_gap_mm,
         sub_sheet_padding_mm=payload.sub_sheet_padding_mm,
@@ -307,6 +313,8 @@ def update_sheet(
     sheet.media_height_mm = payload.media_height_mm
     sheet.mode = payload.mode
     sheet.sub_sheet_size = payload.sub_sheet_size
+    sheet.sub_sheet_custom_w_mm = payload.sub_sheet_custom_w_mm
+    sheet.sub_sheet_custom_h_mm = payload.sub_sheet_custom_h_mm
     sheet.gap_mm = payload.gap_mm
     sheet.sub_sheet_gap_mm = payload.sub_sheet_gap_mm
     sheet.sub_sheet_padding_mm = payload.sub_sheet_padding_mm
@@ -394,6 +402,8 @@ def run_auto_layout(
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
         sub_sheet_size=sheet.sub_sheet_size,
+        sub_sheet_custom_w_mm=getattr(sheet, "sub_sheet_custom_w_mm", None),
+        sub_sheet_custom_h_mm=getattr(sheet, "sub_sheet_custom_h_mm", None),
         sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
         sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
@@ -477,6 +487,8 @@ def export_sheet_pdf(
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
         sub_sheet_size=sheet.sub_sheet_size,
+        sub_sheet_custom_w_mm=getattr(sheet, "sub_sheet_custom_w_mm", None),
+        sub_sheet_custom_h_mm=getattr(sheet, "sub_sheet_custom_h_mm", None),
         sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
         sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
         sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
@@ -546,7 +558,7 @@ def export_sheet_svg(
     elements: list[str] = []
 
     # --- Sub-sheet outlines ---
-    sub_size = SUB_SHEET_SIZES.get(sheet.sub_sheet_size or "")
+    sub_size = _svg_sub_size(sheet)
     if sub_size:
         sub_w, sub_h = sub_size
         sub_gap = getattr(sheet, "sub_sheet_gap_mm", 5.0) or 5.0
@@ -563,7 +575,7 @@ def export_sheet_svg(
                 elements.append(
                     f'  <rect x="{sx:.2f}" y="{sy:.2f}" '
                     f'width="{sub_w:.2f}" height="{sub_h:.2f}" '
-                    f'fill="none" stroke="{subsheet_stroke}" stroke-width="0.25"/>'
+                    f'fill="none" stroke="{subsheet_stroke}" stroke-width="0.1"/>'
                 )
 
     # --- Cut lines (one rect per placement) ---
@@ -581,10 +593,15 @@ def export_sheet_svg(
         else:
             pw, ph = sw_mm * scale, sh_mm * scale
 
+        # Single continuous closed path per sticker (optimised for cutters).
+        x0 = p["x_mm"]
+        y0 = p["y_mm"]
         elements.append(
-            f'  <rect x="{p["x_mm"]:.2f}" y="{p["y_mm"]:.2f}" '
-            f'width="{pw:.2f}" height="{ph:.2f}" '
-            f'fill="none" stroke="{cut_stroke}" stroke-width="0.25"/>'
+            f'  <path d="M {x0:.2f} {y0:.2f} '
+            f'L {x0 + pw:.2f} {y0:.2f} '
+            f'L {x0 + pw:.2f} {y0 + ph:.2f} '
+            f'L {x0:.2f} {y0 + ph:.2f} Z" '
+            f'fill="none" stroke="{cut_stroke}" stroke-width="0.1"/>'
         )
 
     # --- Crop marks at sub-sheet corners ---
@@ -646,6 +663,47 @@ def export_sheet_svg(
     return Response(content=svg, media_type="image/svg+xml")
 
 
+def _svg_sub_size(sheet) -> tuple[float, float] | None:
+    """Resolve sub-sheet (w, h) in mm including a custom size."""
+    key = sheet.sub_sheet_size or ""
+    if key == "custom":
+        cw = getattr(sheet, "sub_sheet_custom_w_mm", None)
+        ch = getattr(sheet, "sub_sheet_custom_h_mm", None)
+        if cw and ch:
+            return (float(cw), float(ch))
+        return None
+    return SUB_SHEET_SIZES.get(key)
+
+
+# Velloblade registration circles are always 6mm diameter.
+VELLOBLADE_CIRCLE_DIAMETER_MM = 6.0
+
+
+def _velloblade_mark_centres(
+    w: float, h: float, mark_offset: float, max_zone: float | None
+) -> list[tuple[float, float]]:
+    """Centres for Velloblade reg circles: 4 corners + 1 top-centre per zone."""
+    if max_zone:
+        num_zones = max(1, math.ceil(h / max_zone))
+    else:
+        max_zone = h
+        num_zones = 1
+
+    centres: list[tuple[float, float]] = []
+    for z in range(num_zones):
+        zone_top = z * max_zone
+        zone_bottom = min((z + 1) * max_zone, h)
+        centres.extend([
+            (mark_offset, zone_top + mark_offset),
+            (w - mark_offset, zone_top + mark_offset),
+            (mark_offset, zone_bottom - mark_offset),
+            (w - mark_offset, zone_bottom - mark_offset),
+            # Middle mark at the top edge of the zone.
+            (w / 2.0, zone_top + mark_offset),
+        ])
+    return centres
+
+
 def _svg_velloblade_marks(
     elements: list[str],
     w: float,
@@ -654,45 +712,18 @@ def _svg_velloblade_marks(
     max_zone: float | None,
     stroke: str,
 ) -> None:
-    """Velloblade: filled circle + L-bracket at zone corners (mm coords)."""
-    circle_r = 0.75
-    bracket_len = 3.0
+    """Velloblade: 6mm hollow circles (0.1 stroke) at 4 corners + top centre.
 
-    if max_zone:
-        num_zones = max(1, math.ceil(h / max_zone))
-    else:
-        max_zone = h
-        num_zones = 1
-
-    for z in range(num_zones):
-        zone_top = z * max_zone
-        zone_bottom = min((z + 1) * max_zone, h)
-
-        corners = [
-            (mark_offset, zone_top + mark_offset),
-            (w - mark_offset, zone_top + mark_offset),
-            (mark_offset, zone_bottom - mark_offset),
-            (w - mark_offset, zone_bottom - mark_offset),
-        ]
-        for cx, cy in corners:
-            elements.append(
-                f'  <circle cx="{cx:.2f}" cy="{cy:.2f}" r="{circle_r:.2f}" '
-                f'fill="{stroke}" stroke="{stroke}" stroke-width="0.1"/>'
-            )
-            is_left = cx < w / 2
-            is_top = cy < (zone_top + zone_bottom) / 2
-            bx = bracket_len if is_left else -bracket_len
-            by = bracket_len if is_top else -bracket_len
-            elements.append(
-                f'  <line x1="{cx + bx:.2f}" y1="{cy:.2f}" '
-                f'x2="{cx:.2f}" y2="{cy:.2f}" '
-                f'stroke="{stroke}" stroke-width="0.2"/>'
-            )
-            elements.append(
-                f'  <line x1="{cx:.2f}" y1="{cy + by:.2f}" '
-                f'x2="{cx:.2f}" y2="{cy:.2f}" '
-                f'stroke="{stroke}" stroke-width="0.2"/>'
-            )
+    In the SVG (for cutting) the circle is hollow with a thin 0.1mm stroke so
+    the machine cuts/registers on the outline. The full-fill version is only
+    used in the printable PDF.
+    """
+    circle_r = VELLOBLADE_CIRCLE_DIAMETER_MM / 2.0
+    for cx, cy in _velloblade_mark_centres(w, h, mark_offset, max_zone):
+        elements.append(
+            f'  <circle cx="{cx:.2f}" cy="{cy:.2f}" r="{circle_r:.2f}" '
+            f'fill="none" stroke="{stroke}" stroke-width="0.1"/>'
+        )
 
 
 def _svg_summa_marks(
@@ -799,6 +830,8 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         media_height_mm=s.media_height_mm,
         mode=s.mode,
         sub_sheet_size=s.sub_sheet_size,
+        sub_sheet_custom_w_mm=getattr(s, "sub_sheet_custom_w_mm", None),
+        sub_sheet_custom_h_mm=getattr(s, "sub_sheet_custom_h_mm", None),
         gap_mm=s.gap_mm,
         sub_sheet_gap_mm=getattr(s, "sub_sheet_gap_mm", 5.0) or 5.0,
         sub_sheet_padding_mm=getattr(s, "sub_sheet_padding_mm", 5.0) or 5.0,

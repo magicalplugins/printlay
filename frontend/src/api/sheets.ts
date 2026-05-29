@@ -29,6 +29,8 @@ export interface StickerSheet {
   media_height_mm: number;
   mode: "roll" | "sheet";
   sub_sheet_size: string | null;
+  sub_sheet_custom_w_mm?: number | null;
+  sub_sheet_custom_h_mm?: number | null;
   gap_mm: number;
   sub_sheet_gap_mm: number;
   sub_sheet_padding_mm: number;

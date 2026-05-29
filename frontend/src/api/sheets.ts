@@ -51,6 +51,9 @@ export interface StickerSheet {
   sticker_align_h: string | null;
   sticker_align_v: string | null;
   sub_sheet_bleed_mm: number | null;
+  spot_color_cutlines: string | null;
+  spot_color_subsheets: string | null;
+  spot_color_marks: string | null;
   output_url: string | null;
 }
 
@@ -119,5 +122,12 @@ export function exportSheetPdf(sheetId: string): Promise<Blob> {
   return api<Blob>(`/api/sheets/${sheetId}/export`, {
     method: "POST",
     headers: { Accept: "application/pdf" },
+  });
+}
+
+export function exportSheetSvg(sheetId: string): Promise<Blob> {
+  return api<Blob>(`/api/sheets/${sheetId}/export-svg`, {
+    method: "POST",
+    headers: { Accept: "image/svg+xml" },
   });
 }

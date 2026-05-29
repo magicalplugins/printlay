@@ -4,6 +4,7 @@ CRUD for sticker sheets and cutter presets, plus auto-layout and PDF export.
 """
 from __future__ import annotations
 
+import math
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
@@ -22,6 +23,7 @@ from backend.services.sheet_compositor import (
     LayoutResult,
     Placement,
     SheetConfig,
+    SUB_SHEET_SIZES,
     auto_layout,
     compose_pdf,
 )
@@ -89,6 +91,9 @@ class SheetIn(BaseModel):
     sticker_align_h: str | None = "center"
     sticker_align_v: str | None = "top"
     sub_sheet_bleed_mm: float | None = 0.0
+    spot_color_cutlines: str | None = "CutContour"
+    spot_color_subsheets: str | None = "#00FF00"
+    spot_color_marks: str | None = "#000000"
 
 
 class SheetOut(BaseModel):
@@ -120,6 +125,9 @@ class SheetOut(BaseModel):
     sticker_align_h: str | None = None
     sticker_align_v: str | None = None
     sub_sheet_bleed_mm: float | None = None
+    spot_color_cutlines: str | None = None
+    spot_color_subsheets: str | None = None
+    spot_color_marks: str | None = None
     output_url: str | None = None
 
 
@@ -275,6 +283,9 @@ def create_sheet(
         sticker_align_h=payload.sticker_align_h,
         sticker_align_v=payload.sticker_align_v,
         sub_sheet_bleed_mm=payload.sub_sheet_bleed_mm,
+        spot_color_cutlines=payload.spot_color_cutlines,
+        spot_color_subsheets=payload.spot_color_subsheets,
+        spot_color_marks=payload.spot_color_marks,
     )
     db.add(sheet)
     db.commit()
@@ -321,6 +332,9 @@ def update_sheet(
     sheet.sticker_align_h = payload.sticker_align_h
     sheet.sticker_align_v = payload.sticker_align_v
     sheet.sub_sheet_bleed_mm = payload.sub_sheet_bleed_mm
+    sheet.spot_color_cutlines = payload.spot_color_cutlines
+    sheet.spot_color_subsheets = payload.spot_color_subsheets
+    sheet.spot_color_marks = payload.spot_color_marks
     db.commit()
     db.refresh(sheet)
     return _sheet_to_out(sheet)
@@ -497,6 +511,260 @@ def export_sheet_pdf(
     )
 
 
+# ---------- Export SVG (cut lines only) ----------
+
+
+@router.post("/{sheet_id}/export-svg")
+def export_sheet_svg(
+    sheet_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export an SVG containing only cut lines, sub-sheet outlines, crop marks,
+    and registration marks — no artwork."""
+    user = _resolve_user(db, auth)
+    sheet = _own_sheet(db, user, sheet_id)
+
+    if not sheet.placements:
+        raise HTTPException(400, "Sheet has no sticker placements")
+
+    asset_ids = list({p["asset_id"] for p in sheet.placements})
+    assets = (
+        db.query(Asset)
+        .filter(Asset.id.in_(asset_ids), Asset.user_id == user.id)
+        .all()
+    )
+    asset_map = {str(a.id): a for a in assets}
+
+    w = sheet.media_width_mm
+    h = sheet.media_height_mm
+
+    cut_stroke = getattr(sheet, "spot_color_cutlines", None) or "#FF00FF"
+    subsheet_stroke = getattr(sheet, "spot_color_subsheets", None) or "#00FF00"
+    mark_stroke = getattr(sheet, "spot_color_marks", None) or "#000000"
+
+    elements: list[str] = []
+
+    # --- Sub-sheet outlines ---
+    sub_size = SUB_SHEET_SIZES.get(sheet.sub_sheet_size or "")
+    if sub_size:
+        sub_w, sub_h = sub_size
+        sub_gap = getattr(sheet, "sub_sheet_gap_mm", 5.0) or 5.0
+        edge = sheet.edge_margin_mm
+        avail = w - 2 * edge
+        sub_cols = max(1, int((avail + sub_gap) / (sub_w + sub_gap)))
+        avail_h = h - 2 * edge
+        sub_rows = max(1, int((avail_h + sub_gap) / (sub_h + sub_gap)))
+
+        for sr in range(sub_rows):
+            for sc in range(sub_cols):
+                sx = edge + sc * (sub_w + sub_gap)
+                sy = edge + sr * (sub_h + sub_gap)
+                elements.append(
+                    f'  <rect x="{sx:.2f}" y="{sy:.2f}" '
+                    f'width="{sub_w:.2f}" height="{sub_h:.2f}" '
+                    f'fill="none" stroke="{subsheet_stroke}" stroke-width="0.25"/>'
+                )
+
+    # --- Cut lines (one rect per placement) ---
+    for p in sheet.placements:
+        asset = asset_map.get(p["asset_id"])
+        if not asset:
+            continue
+        sw_mm = asset.width_pt / (72.0 / 25.4)
+        sh_mm = asset.height_pt / (72.0 / 25.4)
+        scale = float(p.get("scale", 1.0))
+        rotation = int(p.get("rotation_deg", 0))
+
+        if rotation in (90, 270):
+            pw, ph = sh_mm * scale, sw_mm * scale
+        else:
+            pw, ph = sw_mm * scale, sh_mm * scale
+
+        elements.append(
+            f'  <rect x="{p["x_mm"]:.2f}" y="{p["y_mm"]:.2f}" '
+            f'width="{pw:.2f}" height="{ph:.2f}" '
+            f'fill="none" stroke="{cut_stroke}" stroke-width="0.25"/>'
+        )
+
+    # --- Crop marks at sub-sheet corners ---
+    if sheet.show_crop_marks and sub_size:
+        sub_w, sub_h = sub_size
+        sub_gap = getattr(sheet, "sub_sheet_gap_mm", 5.0) or 5.0
+        edge = sheet.edge_margin_mm
+        avail = w - 2 * edge
+        sub_cols = max(1, int((avail + sub_gap) / (sub_w + sub_gap)))
+        avail_h = h - 2 * edge
+        sub_rows = max(1, int((avail_h + sub_gap) / (sub_h + sub_gap)))
+
+        mark_len = 3.0
+        offset = 1.5
+
+        for sr in range(sub_rows):
+            for sc in range(sub_cols):
+                sx = edge + sc * (sub_w + sub_gap)
+                sy = edge + sr * (sub_h + sub_gap)
+                corners = [
+                    (sx, sy),
+                    (sx + sub_w, sy),
+                    (sx, sy + sub_h),
+                    (sx + sub_w, sy + sub_h),
+                ]
+                for cx, cy in corners:
+                    h_dir = -1 if cx == sx else 1
+                    v_dir = -1 if cy == sy else 1
+                    elements.append(
+                        f'  <line x1="{cx + h_dir * offset:.2f}" y1="{cy:.2f}" '
+                        f'x2="{cx + h_dir * (offset + mark_len):.2f}" y2="{cy:.2f}" '
+                        f'stroke="{mark_stroke}" stroke-width="0.1"/>'
+                    )
+                    elements.append(
+                        f'  <line x1="{cx:.2f}" y1="{cy + v_dir * offset:.2f}" '
+                        f'x2="{cx:.2f}" y2="{cy + v_dir * (offset + mark_len):.2f}" '
+                        f'stroke="{mark_stroke}" stroke-width="0.1"/>'
+                    )
+
+    # --- Registration marks ---
+    reg_type = sheet.registration_type
+    mark_offset = sheet.mark_offset_mm
+
+    if reg_type == "velloblade":
+        _svg_velloblade_marks(elements, w, h, mark_offset, sheet.max_zone_length_mm, mark_stroke)
+    elif reg_type == "summa_opos":
+        _svg_summa_marks(elements, w, h, mark_offset, sheet.max_zone_length_mm, mark_stroke)
+    elif reg_type == "generic":
+        _svg_generic_marks(elements, w, h, mark_offset, mark_stroke)
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{w:.2f}mm" height="{h:.2f}mm" '
+        f'viewBox="0 0 {w:.2f} {h:.2f}">\n'
+        + "\n".join(elements)
+        + "\n</svg>\n"
+    )
+
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+def _svg_velloblade_marks(
+    elements: list[str],
+    w: float,
+    h: float,
+    mark_offset: float,
+    max_zone: float | None,
+    stroke: str,
+) -> None:
+    """Velloblade: filled circle + L-bracket at zone corners (mm coords)."""
+    circle_r = 0.75
+    bracket_len = 3.0
+
+    if max_zone:
+        num_zones = max(1, math.ceil(h / max_zone))
+    else:
+        max_zone = h
+        num_zones = 1
+
+    for z in range(num_zones):
+        zone_top = z * max_zone
+        zone_bottom = min((z + 1) * max_zone, h)
+
+        corners = [
+            (mark_offset, zone_top + mark_offset),
+            (w - mark_offset, zone_top + mark_offset),
+            (mark_offset, zone_bottom - mark_offset),
+            (w - mark_offset, zone_bottom - mark_offset),
+        ]
+        for cx, cy in corners:
+            elements.append(
+                f'  <circle cx="{cx:.2f}" cy="{cy:.2f}" r="{circle_r:.2f}" '
+                f'fill="{stroke}" stroke="{stroke}" stroke-width="0.1"/>'
+            )
+            is_left = cx < w / 2
+            is_top = cy < (zone_top + zone_bottom) / 2
+            bx = bracket_len if is_left else -bracket_len
+            by = bracket_len if is_top else -bracket_len
+            elements.append(
+                f'  <line x1="{cx + bx:.2f}" y1="{cy:.2f}" '
+                f'x2="{cx:.2f}" y2="{cy:.2f}" '
+                f'stroke="{stroke}" stroke-width="0.2"/>'
+            )
+            elements.append(
+                f'  <line x1="{cx:.2f}" y1="{cy + by:.2f}" '
+                f'x2="{cx:.2f}" y2="{cy:.2f}" '
+                f'stroke="{stroke}" stroke-width="0.2"/>'
+            )
+
+
+def _svg_summa_marks(
+    elements: list[str],
+    w: float,
+    h: float,
+    mark_offset: float,
+    max_zone: float | None,
+    stroke: str,
+) -> None:
+    """Summa OPOS: crosshair targets along both edges at zone boundaries."""
+    arm_len = 1.5
+
+    if max_zone:
+        num_marks = max(2, math.ceil(h / max_zone) + 1)
+    else:
+        max_zone = h
+        num_marks = 2
+
+    for i in range(num_marks):
+        if i == 0:
+            y = mark_offset
+        elif i == num_marks - 1:
+            y = h - mark_offset
+        else:
+            y = i * max_zone
+
+        for x in (mark_offset, w - mark_offset):
+            elements.append(
+                f'  <line x1="{x - arm_len:.2f}" y1="{y:.2f}" '
+                f'x2="{x + arm_len:.2f}" y2="{y:.2f}" '
+                f'stroke="{stroke}" stroke-width="0.1"/>'
+            )
+            elements.append(
+                f'  <line x1="{x:.2f}" y1="{y - arm_len:.2f}" '
+                f'x2="{x:.2f}" y2="{y + arm_len:.2f}" '
+                f'stroke="{stroke}" stroke-width="0.1"/>'
+            )
+
+
+def _svg_generic_marks(
+    elements: list[str],
+    w: float,
+    h: float,
+    mark_offset: float,
+    stroke: str,
+) -> None:
+    """Generic ISO-style registration crosshairs at four corners."""
+    arm_len = 2.0
+    corners = [
+        (mark_offset, mark_offset),
+        (w - mark_offset, mark_offset),
+        (mark_offset, h - mark_offset),
+        (w - mark_offset, h - mark_offset),
+    ]
+    for cx, cy in corners:
+        elements.append(
+            f'  <line x1="{cx - arm_len:.2f}" y1="{cy:.2f}" '
+            f'x2="{cx + arm_len:.2f}" y2="{cy:.2f}" '
+            f'stroke="{stroke}" stroke-width="0.1"/>'
+        )
+        elements.append(
+            f'  <line x1="{cx:.2f}" y1="{cy - arm_len:.2f}" '
+            f'x2="{cx:.2f}" y2="{cy + arm_len:.2f}" '
+            f'stroke="{stroke}" stroke-width="0.1"/>'
+        )
+        elements.append(
+            f'  <circle cx="{cx:.2f}" cy="{cy:.2f}" r="{arm_len * 0.6:.2f}" '
+            f'fill="none" stroke="{stroke}" stroke-width="0.08"/>'
+        )
+
+
 # ---------- Helpers ----------
 
 
@@ -553,6 +821,9 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         sticker_align_h=getattr(s, "sticker_align_h", "center"),
         sticker_align_v=getattr(s, "sticker_align_v", "top"),
         sub_sheet_bleed_mm=getattr(s, "sub_sheet_bleed_mm", 0.0),
+        spot_color_cutlines=getattr(s, "spot_color_cutlines", "CutContour"),
+        spot_color_subsheets=getattr(s, "spot_color_subsheets", "#00FF00"),
+        spot_color_marks=getattr(s, "spot_color_marks", "#000000"),
         output_url=output_url,
     )
 

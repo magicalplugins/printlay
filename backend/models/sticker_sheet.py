@@ -148,3 +148,18 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Float, nullable=True, default=135.0
     )
     """Gradient direction in degrees (e.g. 135 = top-left to bottom-right)."""
+
+    spot_color_cutlines: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, default="CutContour"
+    )
+    """Spot colour name or hex for sticker cut lines."""
+
+    spot_color_subsheets: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, default="#00FF00"
+    )
+    """Colour for sub-sheet outlines."""
+
+    spot_color_marks: Mapped[Optional[str]] = mapped_column(
+        String(40), nullable=True, default="#000000"
+    )
+    """Colour for registration marks and crop marks."""

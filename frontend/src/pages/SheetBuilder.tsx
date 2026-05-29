@@ -7,6 +7,7 @@ import {
   createPreset,
   createSheet,
   exportSheetPdf,
+  exportSheetSvg,
   listPresets,
   listSheets,
   updateSheet,
@@ -289,6 +290,27 @@ export default function SheetBuilder() {
     }
   }
 
+  const [exportingSvg, setExportingSvg] = useState(false);
+
+  async function handleExportSvg() {
+    if (!activeSheet) return;
+    setExportingSvg(true);
+    try {
+      await updateSheet(activeSheet.id, activeSheet);
+      const blob = await exportSheetSvg(activeSheet.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${activeSheet.name}-cutlines.svg`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setExportingSvg(false);
+    }
+  }
+
   // Stats
   const stats = useMemo(() => {
     if (!activeSheet) return null;
@@ -413,6 +435,15 @@ export default function SheetBuilder() {
           >
             {exporting ? "Exporting..." : "Export PDF"}
           </button>
+          <button
+            onClick={handleExportSvg}
+            disabled={
+              exportingSvg || !activeSheet.placements?.length
+            }
+            className="rounded-md bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-medium"
+          >
+            {exportingSvg ? "Exporting..." : "Export Cut Lines"}
+          </button>
         </div>
       </div>
 
@@ -427,36 +458,83 @@ export default function SheetBuilder() {
         </div>
 
         {/* Right panel */}
-        <div className="w-80 border-l border-neutral-800 bg-neutral-900 overflow-y-auto p-4 space-y-6">
-          {/* Cutter preset */}
-          {presets.length > 0 && (
-            <section>
-              <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-                Cutter Preset
-              </h3>
-              <select
-                value={activeSheet.cutter_preset_id ?? ""}
-                onChange={(e) => {
-                  const p = presets.find((pr) => pr.id === e.target.value);
-                  if (p) applyPreset(p);
-                }}
-                className="w-full rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+        <div className="w-80 border-l border-neutral-800 bg-neutral-900 overflow-y-auto p-4 space-y-2">
+          {/* Auto-layout */}
+          <Panel title="Auto-Layout" defaultOpen>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-neutral-400 mb-1">
+                  Sticker asset
+                </label>
+                <select
+                  value={layoutAssetId}
+                  onChange={(e) => setLayoutAssetId(e.target.value)}
+                  className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                >
+                  <option value="">Select...</option>
+                  {assets.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Quantity
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={layoutQty}
+                    onChange={(e) => setLayoutQty(Number(e.target.value))}
+                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Orient
+                  </label>
+                  <select
+                    value={layoutOrientation}
+                    onChange={(e) =>
+                      setLayoutOrientation(
+                        e.target.value as "auto" | "horizontal" | "vertical"
+                      )
+                    }
+                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                  >
+                    <option value="auto">Auto</option>
+                    <option value="horizontal">Horizontal</option>
+                    <option value="vertical">Vertical</option>
+                  </select>
+                </div>
+              </div>
+              <button
+                onClick={handleAutoLayout}
+                disabled={!layoutAssetId}
+                className="w-full rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-3 py-2 text-sm font-medium"
               >
-                <option value="">None</option>
-                {presets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </section>
-          )}
+                Fill Sheet
+              </button>
+              {layoutResult && (
+                <div className="text-xs text-neutral-400 space-y-0.5">
+                  <div>
+                    {layoutResult.cols} cols &times; {layoutResult.rows} rows
+                  </div>
+                  <div>{layoutResult.zones} zone(s)</div>
+                  <div>
+                    Total: {(layoutResult.total_height_mm / 1000).toFixed(2)}m
+                  </div>
+                </div>
+              )}
+            </div>
+          </Panel>
 
-          {/* Settings */}
-          <section>
-            <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-              Sheet Settings
-            </h3>
+          {/* Sheet Settings */}
+          <Panel title="Sheet Settings" defaultOpen>
             <div className="space-y-3">
               <SettingRow label="Sticker gap (mm)">
                 <input
@@ -609,14 +687,47 @@ export default function SheetBuilder() {
                 </SettingRow>
               )}
             </div>
-          </section>
+          </Panel>
 
-          {/* Sub-sheet customisation */}
+          {/* Spot Colours */}
+          <Panel title="Spot Colours">
+            <div className="space-y-3">
+              <SpotColourRow
+                label="Cut lines"
+                value={activeSheet.spot_color_cutlines ?? "CutContour"}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_cutlines: v } : null
+                  )
+                }
+              />
+              <SpotColourRow
+                label="Sub-sheet outlines"
+                value={activeSheet.spot_color_subsheets ?? "#00FF00"}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_subsheets: v } : null
+                  )
+                }
+              />
+              <SpotColourRow
+                label="Marks (reg + crop)"
+                value={activeSheet.spot_color_marks ?? "#000000"}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_marks: v } : null
+                  )
+                }
+              />
+              <p className="text-[10px] text-neutral-500">
+                Use a spot name like &quot;CutContour&quot; for VersaWorks, or a hex colour.
+              </p>
+            </div>
+          </Panel>
+
+          {/* Sub-sheet Design (only when sub-sheet selected) */}
           {activeSheet.sub_sheet_size && (
-            <section>
-              <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-                Sub-Sheet Design
-              </h3>
+            <Panel title="Sub-Sheet Design">
               <div className="space-y-3">
                 {/* Sticker alignment */}
                 <div>
@@ -675,9 +786,7 @@ export default function SheetBuilder() {
                       <button
                         onClick={() =>
                           setActiveSheet((s) =>
-                            s
-                              ? { ...s, sub_sheet_bg_url: null }
-                              : null
+                            s ? { ...s, sub_sheet_bg_url: null } : null
                           )
                         }
                         className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
@@ -700,15 +809,10 @@ export default function SheetBuilder() {
                           try {
                             const resp = await api<{ url: string }>(
                               `/api/sheets/${activeSheet.id}/bg-upload`,
-                              {
-                                method: "POST",
-                                body: formData,
-                              }
+                              { method: "POST", body: formData }
                             );
                             setActiveSheet((s) =>
-                              s
-                                ? { ...s, sub_sheet_bg_url: resp.url }
-                                : null
+                              s ? { ...s, sub_sheet_bg_url: resp.url } : null
                             );
                           } catch {}
                         }}
@@ -717,22 +821,18 @@ export default function SheetBuilder() {
                   )}
                 </div>
 
-                {/* Background colour — hidden if image uploaded */}
+                {/* Background colour (hidden if image set) */}
                 {!activeSheet.sub_sheet_bg_url && (
                   <>
                     <div>
-                      <label className="block text-xs text-neutral-400 mb-1">
-                        Background colour
-                      </label>
+                      <label className="block text-xs text-neutral-400 mb-1">Background colour</label>
                       <div className="flex gap-2 items-center">
                         <input
                           type="color"
                           value={activeSheet.sub_sheet_fill_color || "#ffffff"}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? { ...s, sub_sheet_fill_color: e.target.value }
-                                : null
+                              s ? { ...s, sub_sheet_fill_color: e.target.value } : null
                             )
                           }
                           className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
@@ -743,12 +843,7 @@ export default function SheetBuilder() {
                           value={activeSheet.sub_sheet_fill_color ?? ""}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? {
-                                    ...s,
-                                    sub_sheet_fill_color: e.target.value || null,
-                                  }
-                                : null
+                              s ? { ...s, sub_sheet_fill_color: e.target.value || null } : null
                             )
                           }
                           className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
@@ -757,34 +852,25 @@ export default function SheetBuilder() {
                           <button
                             onClick={() =>
                               setActiveSheet((s) =>
-                                s
-                                  ? { ...s, sub_sheet_fill_color: null, sub_sheet_fill_color2: null }
-                                  : null
+                                s ? { ...s, sub_sheet_fill_color: null, sub_sheet_fill_color2: null } : null
                               )
                             }
-                            title="Clear (transparent)"
-                            className="text-xs text-neutral-500 hover:text-white px-1"
+                            className="text-xs text-neutral-500 hover:text-white"
                           >
                             Clear
                           </button>
                         )}
                       </div>
                     </div>
-
-                    {/* Second colour for gradient */}
                     <div>
-                      <label className="block text-xs text-neutral-400 mb-1">
-                        2nd colour (gradient)
-                      </label>
+                      <label className="block text-xs text-neutral-400 mb-1">2nd colour (gradient)</label>
                       <div className="flex gap-2 items-center">
                         <input
                           type="color"
                           value={activeSheet.sub_sheet_fill_color2 || "#000000"}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? { ...s, sub_sheet_fill_color2: e.target.value }
-                                : null
+                              s ? { ...s, sub_sheet_fill_color2: e.target.value } : null
                             )
                           }
                           className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
@@ -795,12 +881,7 @@ export default function SheetBuilder() {
                           value={activeSheet.sub_sheet_fill_color2 ?? ""}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? {
-                                    ...s,
-                                    sub_sheet_fill_color2: e.target.value || null,
-                                  }
-                                : null
+                              s ? { ...s, sub_sheet_fill_color2: e.target.value || null } : null
                             )
                           }
                           className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
@@ -809,21 +890,16 @@ export default function SheetBuilder() {
                           <button
                             onClick={() =>
                               setActiveSheet((s) =>
-                                s
-                                  ? { ...s, sub_sheet_fill_color2: null }
-                                  : null
+                                s ? { ...s, sub_sheet_fill_color2: null } : null
                               )
                             }
-                            title="Remove gradient"
-                            className="text-xs text-neutral-500 hover:text-white px-1"
+                            className="text-xs text-neutral-500 hover:text-white"
                           >
                             Clear
                           </button>
                         )}
                       </div>
                     </div>
-
-                    {/* Gradient angle (only if 2 colours set) */}
                     {activeSheet.sub_sheet_fill_color2 && (
                       <SettingRow label="Gradient angle (°)">
                         <input
@@ -834,22 +910,14 @@ export default function SheetBuilder() {
                           value={activeSheet.sub_sheet_gradient_angle ?? 135}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? {
-                                    ...s,
-                                    sub_sheet_gradient_angle: Number(e.target.value),
-                                  }
-                                : null
+                              s ? { ...s, sub_sheet_gradient_angle: Number(e.target.value) } : null
                             )
                           }
                           className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                         />
                       </SettingRow>
                     )}
-
-                    {/* Preview swatch */}
-                    {(activeSheet.sub_sheet_fill_color ||
-                      activeSheet.sub_sheet_fill_color2) && (
+                    {(activeSheet.sub_sheet_fill_color || activeSheet.sub_sheet_fill_color2) && (
                       <div
                         className="h-5 rounded border border-neutral-700"
                         style={{
@@ -872,12 +940,7 @@ export default function SheetBuilder() {
                     value={activeSheet.sub_sheet_bleed_mm ?? 0}
                     onChange={(e) =>
                       setActiveSheet((s) =>
-                        s
-                          ? {
-                              ...s,
-                              sub_sheet_bleed_mm: Number(e.target.value),
-                            }
-                          : null
+                        s ? { ...s, sub_sheet_bleed_mm: Number(e.target.value) } : null
                       )
                     }
                     className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
@@ -886,18 +949,14 @@ export default function SheetBuilder() {
 
                 {/* Title */}
                 <div>
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Title
-                  </label>
+                  <label className="block text-xs text-neutral-400 mb-1">Title</label>
                   <input
                     type="text"
                     placeholder="Sheet title..."
                     value={activeSheet.sub_sheet_title ?? ""}
                     onChange={(e) =>
                       setActiveSheet((s) =>
-                        s
-                          ? { ...s, sub_sheet_title: e.target.value || null }
-                          : null
+                        s ? { ...s, sub_sheet_title: e.target.value || null } : null
                       )
                     }
                     className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
@@ -907,19 +966,12 @@ export default function SheetBuilder() {
                   <>
                     <div className="flex gap-2">
                       <div className="flex-1">
-                        <label className="block text-xs text-neutral-400 mb-1">
-                          Font
-                        </label>
+                        <label className="block text-xs text-neutral-400 mb-1">Font</label>
                         <select
                           value={activeSheet.sub_sheet_title_font ?? "Inter"}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? {
-                                    ...s,
-                                    sub_sheet_title_font: e.target.value,
-                                  }
-                                : null
+                              s ? { ...s, sub_sheet_title_font: e.target.value } : null
                             )
                           }
                           className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
@@ -930,13 +982,10 @@ export default function SheetBuilder() {
                           <option value="Georgia">Georgia</option>
                           <option value="Times New Roman">Times New Roman</option>
                           <option value="Courier New">Courier New</option>
-                          <option value="Comic Sans MS">Comic Sans MS</option>
                         </select>
                       </div>
                       <div className="w-16">
-                        <label className="block text-xs text-neutral-400 mb-1">
-                          Size
-                        </label>
+                        <label className="block text-xs text-neutral-400 mb-1">Size</label>
                         <input
                           type="number"
                           min={2}
@@ -945,14 +994,7 @@ export default function SheetBuilder() {
                           value={activeSheet.sub_sheet_title_size_mm ?? 5}
                           onChange={(e) =>
                             setActiveSheet((s) =>
-                              s
-                                ? {
-                                    ...s,
-                                    sub_sheet_title_size_mm: Number(
-                                      e.target.value
-                                    ),
-                                  }
-                                : null
+                              s ? { ...s, sub_sheet_title_size_mm: Number(e.target.value) } : null
                             )
                           }
                           className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
@@ -961,18 +1003,14 @@ export default function SheetBuilder() {
                     </div>
                     <div className="flex gap-2 items-center">
                       <div className="flex-1">
-                        <label className="block text-xs text-neutral-400 mb-1">
-                          Title colour
-                        </label>
+                        <label className="block text-xs text-neutral-400 mb-1">Title colour</label>
                         <div className="flex gap-2 items-center">
                           <input
                             type="color"
                             value={activeSheet.sub_sheet_title_color || "#000000"}
                             onChange={(e) =>
                               setActiveSheet((s) =>
-                                s
-                                  ? { ...s, sub_sheet_title_color: e.target.value }
-                                  : null
+                                s ? { ...s, sub_sheet_title_color: e.target.value } : null
                               )
                             }
                             className="w-7 h-7 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
@@ -982,9 +1020,7 @@ export default function SheetBuilder() {
                             value={activeSheet.sub_sheet_title_color ?? "#000000"}
                             onChange={(e) =>
                               setActiveSheet((s) =>
-                                s
-                                  ? { ...s, sub_sheet_title_color: e.target.value || null }
-                                  : null
+                                s ? { ...s, sub_sheet_title_color: e.target.value || null } : null
                               )
                             }
                             className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
@@ -998,9 +1034,7 @@ export default function SheetBuilder() {
                             checked={activeSheet.sub_sheet_title_bold ?? false}
                             onChange={(e) =>
                               setActiveSheet((s) =>
-                                s
-                                  ? { ...s, sub_sheet_title_bold: e.target.checked }
-                                  : null
+                                s ? { ...s, sub_sheet_title_bold: e.target.checked } : null
                               )
                             }
                             className="rounded"
@@ -1012,91 +1046,32 @@ export default function SheetBuilder() {
                   </>
                 )}
               </div>
-            </section>
+            </Panel>
           )}
 
-          {/* Auto-layout */}
-          <section>
-            <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-              Auto-Layout
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-neutral-400 mb-1">
-                  Sticker asset
-                </label>
-                <select
-                  value={layoutAssetId}
-                  onChange={(e) => setLayoutAssetId(e.target.value)}
-                  className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                >
-                  <option value="">Select...</option>
-                  {assets.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Quantity
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10000}
-                    value={layoutQty}
-                    onChange={(e) => setLayoutQty(Number(e.target.value))}
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Orient
-                  </label>
-                  <select
-                    value={layoutOrientation}
-                    onChange={(e) =>
-                      setLayoutOrientation(
-                        e.target.value as "auto" | "horizontal" | "vertical"
-                      )
-                    }
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                  >
-                    <option value="auto">Auto</option>
-                    <option value="horizontal">Horizontal</option>
-                    <option value="vertical">Vertical</option>
-                  </select>
-                </div>
-              </div>
-              <button
-                onClick={handleAutoLayout}
-                disabled={!layoutAssetId}
-                className="w-full rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-3 py-2 text-sm font-medium"
+          {/* Cutter preset */}
+          {presets.length > 0 && (
+            <Panel title="Cutter Preset">
+              <select
+                value={activeSheet.cutter_preset_id ?? ""}
+                onChange={(e) => {
+                  const p = presets.find((pr) => pr.id === e.target.value);
+                  if (p) applyPreset(p);
+                }}
+                className="w-full rounded-md bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
               >
-                Fill Sheet
-              </button>
-              {layoutResult && (
-                <div className="text-xs text-neutral-400 space-y-0.5">
-                  <div>
-                    {layoutResult.cols} cols &times; {layoutResult.rows} rows
-                  </div>
-                  <div>{layoutResult.zones} zone(s)</div>
-                  <div>
-                    Total: {(layoutResult.total_height_mm / 1000).toFixed(2)}m
-                  </div>
-                </div>
-              )}
-            </div>
-          </section>
+                <option value="">None</option>
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </Panel>
+          )}
 
           {/* Zoom */}
-          <section>
-            <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-              Zoom
-            </h3>
+          <Panel title="Zoom">
             <input
               type="range"
               min={0.2}
@@ -1109,18 +1084,15 @@ export default function SheetBuilder() {
             <div className="text-xs text-neutral-500 text-center">
               {Math.round(zoom * 100)}%
             </div>
-          </section>
+          </Panel>
 
           {/* Save preset */}
-          <section>
-            <h3 className="text-xs uppercase tracking-widest text-neutral-500 mb-2">
-              Save as Preset
-            </h3>
+          <Panel title="Save as Preset">
             <SavePresetForm
               sheet={activeSheet}
               onSave={(p) => setPresets((prev) => [p, ...prev])}
             />
-          </section>
+          </Panel>
         </div>
       </div>
 
@@ -1152,6 +1124,101 @@ function SettingRow({
     <div className="flex items-center justify-between">
       <span className="text-sm text-neutral-300">{label}</span>
       {children}
+    </div>
+  );
+}
+
+function Panel({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="bg-neutral-800/50 border border-neutral-700/50 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-neutral-700/30 transition-colors"
+      >
+        <span className="text-xs uppercase tracking-widest text-neutral-400 font-medium">
+          {title}
+        </span>
+        <svg
+          className={`w-3.5 h-3.5 text-neutral-500 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      {open && <div className="px-3 pb-3 pt-1">{children}</div>}
+    </div>
+  );
+}
+
+const SPOT_PRESETS = [
+  { label: "CutContour", value: "CutContour" },
+  { label: "Score", value: "Score" },
+  { label: "Through-cut", value: "Through-cut" },
+  { label: "Black", value: "#000000" },
+  { label: "Magenta", value: "#FF00FF" },
+  { label: "Green", value: "#00FF00" },
+  { label: "Red", value: "#FF0000" },
+  { label: "Blue", value: "#0000FF" },
+];
+
+function SpotColourRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const isHex = value.startsWith("#");
+  return (
+    <div>
+      <label className="block text-xs text-neutral-400 mb-1">{label}</label>
+      <div className="flex gap-2 items-center">
+        {isHex && (
+          <div
+            className="w-5 h-5 rounded border border-neutral-600"
+            style={{ background: value }}
+          />
+        )}
+        {!isHex && (
+          <div className="w-5 h-5 rounded border border-neutral-600 bg-neutral-700 flex items-center justify-center">
+            <span className="text-[8px] text-neutral-300">SP</span>
+          </div>
+        )}
+        <select
+          value={SPOT_PRESETS.find((p) => p.value === value) ? value : "__custom"}
+          onChange={(e) => {
+            if (e.target.value !== "__custom") onChange(e.target.value);
+          }}
+          className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+        >
+          {SPOT_PRESETS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+          <option value="__custom">Custom...</option>
+        </select>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-24 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-xs text-white font-mono"
+        />
+      </div>
     </div>
   );
 }

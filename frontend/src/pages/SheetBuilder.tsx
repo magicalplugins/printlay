@@ -99,7 +99,7 @@ export default function SheetBuilder() {
       _drawSubSheets(ctx, ox, oy, scale, activeSheet);
     }
 
-    // Draw placements
+    // Draw placements (stickers)
     if (activeSheet.placements) {
       for (const p of activeSheet.placements) {
         const asset = assets.find((a) => a.id === p.asset_id);
@@ -129,6 +129,11 @@ export default function SheetBuilder() {
         ctx.strokeRect(px - 1, py - 1, rw + 2, rh + 2);
         ctx.setLineDash([]);
       }
+    }
+
+    // Re-draw sub-sheet borders and crop marks ON TOP of stickers
+    if (activeSheet.sub_sheet_size) {
+      _drawSubSheetOverlay(ctx, ox, oy, scale, activeSheet);
     }
 
     // Draw rulers
@@ -179,6 +184,9 @@ export default function SheetBuilder() {
   async function handleAutoLayout() {
     if (!activeSheet || !layoutAssetId) return;
     try {
+      // Save current settings to backend first so auto-layout uses them
+      await updateSheet(activeSheet.id, activeSheet);
+
       const result = await autoLayout(
         activeSheet.id,
         layoutAssetId,
@@ -794,6 +802,68 @@ function _drawSubSheets(
       if (sheet.show_crop_marks) {
         ctx.strokeStyle = "#000000";
         ctx.lineWidth = 0.75;
+        const corners = [
+          [sx, sy],
+          [sx + subW, sy],
+          [sx, sy + subH],
+          [sx + subW, sy + subH],
+        ];
+        for (const [cx, cy] of corners) {
+          const hDir = cx === sx ? -1 : 1;
+          ctx.beginPath();
+          ctx.moveTo(ox + cx + hDir * markOffset, oy + cy);
+          ctx.lineTo(ox + cx + hDir * (markOffset + markLen), oy + cy);
+          ctx.stroke();
+          const vDir = cy === sy ? -1 : 1;
+          ctx.beginPath();
+          ctx.moveTo(ox + cx, oy + cy + vDir * markOffset);
+          ctx.lineTo(ox + cx, oy + cy + vDir * (markOffset + markLen));
+          ctx.stroke();
+        }
+      }
+    }
+  }
+}
+
+function _drawSubSheetOverlay(
+  ctx: CanvasRenderingContext2D,
+  ox: number,
+  oy: number,
+  scale: number,
+  sheet: StickerSheet
+) {
+  const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
+  if (!size) return;
+
+  const subW = size.w * scale;
+  const subH = size.h * scale;
+  const subGap = (sheet.sub_sheet_gap_mm ?? 5) * scale;
+  const edge = (sheet.edge_margin_mm ?? 5) * scale;
+  const sheetW = sheet.media_width_mm * scale;
+  const sheetH = sheet.media_height_mm * scale;
+
+  const availableW = sheetW - 2 * edge;
+  const cols = Math.max(1, Math.floor((availableW + subGap) / (subW + subGap)));
+  const availableH = sheetH - 2 * edge;
+  const rows = Math.max(1, Math.floor((availableH + subGap) / (subH + subGap)));
+
+  const markLen = 4 * scale;
+  const markOffset = 1.5 * scale;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const sx = edge + col * (subW + subGap);
+      const sy = edge + row * (subH + subGap);
+
+      // Solid border on top of stickers
+      ctx.strokeStyle = "#6366f1";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(ox + sx, oy + sy, subW, subH);
+
+      // Crop marks at corners (drawn on top)
+      if (sheet.show_crop_marks) {
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1;
         const corners = [
           [sx, sy],
           [sx + subW, sy],

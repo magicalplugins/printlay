@@ -28,6 +28,7 @@ export default function StickerEditor() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [stickerName, setStickerName] = useState<string>("");
+  const [savedAssetId, setSavedAssetId] = useState<string | null>(null);
 
   useEffect(() => {
     listCategories()
@@ -103,7 +104,8 @@ export default function StickerEditor() {
     setStep("saving");
     try {
       const name = stickerName.trim() || "Sticker";
-      await saveSticker(result.session_id, name, categoryId);
+      const saved = await saveSticker(result.session_id, name, categoryId);
+      setSavedAssetId(saved.asset_id);
       setStep("done");
     } catch (e: any) {
       setError(
@@ -199,7 +201,15 @@ export default function StickerEditor() {
       {step === "saving" && <SavingState />}
 
       {step === "done" && (
-        <DoneState onAnother={reset} onGoToCatalogue={() => navigate("/app/catalogue")} />
+        <DoneState
+          onAnother={reset}
+          onGoToCatalogue={() => navigate("/app/catalogue")}
+          onLayOnSheet={() =>
+            navigate(
+              savedAssetId ? `/app/sheets?asset=${savedAssetId}` : "/app/sheets"
+            )
+          }
+        />
       )}
     </div>
   );
@@ -713,9 +723,11 @@ function SavingState() {
 function DoneState({
   onAnother,
   onGoToCatalogue,
+  onLayOnSheet,
 }: {
   onAnother: () => void;
   onGoToCatalogue: () => void;
+  onLayOnSheet: () => void;
 }) {
   return (
     <div className="text-center py-12">
@@ -729,6 +741,12 @@ function DoneState({
         Your sticker is now in your catalogue, ready to use in any job.
       </p>
       <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+        <button
+          onClick={onLayOnSheet}
+          className="rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white hover:bg-violet-500 transition"
+        >
+          Lay on sheet
+        </button>
         <button
           onClick={onAnother}
           className="rounded-xl bg-white px-6 py-3 font-semibold text-neutral-950 hover:bg-neutral-200 transition"

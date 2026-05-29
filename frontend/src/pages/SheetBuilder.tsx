@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   AutoLayoutResult,
   CutterPreset,
@@ -28,6 +29,8 @@ export default function SheetBuilder() {
   const [err, setErr] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [userSpots, setUserSpots] = useState<SpotColour[]>([]);
+  const [searchParams] = useSearchParams();
+  const presetAssetId = searchParams.get("asset");
 
   // Sheet creation form
   const [showNewSheet, setShowNewSheet] = useState(false);
@@ -68,6 +71,14 @@ export default function SheetBuilder() {
       setAssets(allAssets);
     } catch {}
   }
+
+  // Pre-select a sticker passed via ?asset=<id> (e.g. straight from the
+  // sticker builder's "Lay on sheet" action).
+  useEffect(() => {
+    if (presetAssetId && assets.some((a) => a.id === presetAssetId)) {
+      setLayoutAssetId(presetAssetId);
+    }
+  }, [presetAssetId, assets]);
 
   // Load thumbnail images for canvas rendering
   const [assetImages, setAssetImages] = useState<Record<string, HTMLImageElement>>({});

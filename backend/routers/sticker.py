@@ -320,16 +320,22 @@ def save_sticker(
         id=asset_id,
         user_id=user.id,
         name=body.name,
-        original_filename=f"{body.name}.pdf",
-        file_type="pdf",
+        kind="pdf",
         width_pt=saved.width_pt,
         height_pt=saved.height_pt,
         r2_key=r2_key,
         thumbnail_r2_key=thumb_key,
-        size_bytes=len(saved.pdf_bytes),
+        file_size=len(saved.pdf_bytes),
     )
     db.add(asset)
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Failed to save sticker asset: {exc}",
+        )
 
     return SaveResponse(
         asset_id=str(asset_id),

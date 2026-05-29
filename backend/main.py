@@ -22,6 +22,7 @@ from backend.routers import leads as leads_router
 from backend.routers import outputs as outputs_router
 from backend.routers import sheet_builder as sheet_builder_router
 from backend.routers import spot_colors as spot_colors_router
+from backend.routers import spot_colours as spot_colours_router
 from backend.routers import sticker as sticker_router
 from backend.routers import support_access as support_access_router
 from backend.routers import templates as templates_router
@@ -55,6 +56,7 @@ app.include_router(jobs_router.router)
 app.include_router(catalogue_router.router)
 app.include_router(color_profiles_router.router)
 app.include_router(spot_colors_router.router)
+app.include_router(spot_colours_router.router)
 app.include_router(outputs_router.router)
 app.include_router(leads_router.router)
 app.include_router(invites_router.router)

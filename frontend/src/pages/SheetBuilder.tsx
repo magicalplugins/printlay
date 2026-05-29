@@ -15,6 +15,7 @@ import {
 import { Asset, listAssets } from "../api/catalogue";
 import { listCategories } from "../api/catalogue";
 import { api } from "../api/client";
+import { SpotColour, listSpotColours } from "../api/spotColours";
 
 const MM_TO_PX = 2; // scale factor for canvas rendering at default zoom
 
@@ -26,6 +27,7 @@ export default function SheetBuilder() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [userSpots, setUserSpots] = useState<SpotColour[]>([]);
 
   // Sheet creation form
   const [showNewSheet, setShowNewSheet] = useState(false);
@@ -51,6 +53,7 @@ export default function SheetBuilder() {
   useEffect(() => {
     listSheets().then(setSheets).catch((e) => setErr(String(e)));
     listPresets().then(setPresets).catch(() => {});
+    listSpotColours().then(setUserSpots).catch(() => {});
     loadAssets();
   }, []);
 
@@ -145,7 +148,7 @@ export default function SheetBuilder() {
 
     // Draw sub-sheet groups (always visible when configured)
     if (activeSheet.sub_sheet_size) {
-      _drawSubSheets(ctx, ox, oy, scale, activeSheet, bgImage);
+      _drawSubSheets(ctx, ox, oy, scale, activeSheet, bgImage, userSpots);
     }
 
     // Draw placements (stickers)
@@ -181,14 +184,18 @@ export default function SheetBuilder() {
           ctx.fillRect(px, py, rw, rh);
         }
 
-        // Sticker border
-        ctx.strokeStyle = "#7c3aed";
+        // Sticker border (uses cut line spot colour)
+        const cutColor = spotDisplayColor(
+          activeSheet.spot_color_cutlines ?? "CutContour",
+          userSpots
+        );
+        ctx.strokeStyle = cutColor;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(px, py, rw, rh);
 
         // Dashed cut line
         ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = "#3b82f6";
+        ctx.strokeStyle = cutColor;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(px - 1, py - 1, rw + 2, rh + 2);
         ctx.setLineDash([]);
@@ -197,7 +204,7 @@ export default function SheetBuilder() {
 
     // Re-draw sub-sheet borders and crop marks ON TOP of stickers
     if (activeSheet.sub_sheet_size) {
-      _drawSubSheetOverlay(ctx, ox, oy, scale, activeSheet);
+      _drawSubSheetOverlay(ctx, ox, oy, scale, activeSheet, userSpots);
     }
 
     // Draw rulers
@@ -205,9 +212,9 @@ export default function SheetBuilder() {
 
     // Draw registration marks preview
     if (activeSheet.registration_type) {
-      _drawRegMarksPreview(ctx, ox, oy, w, h, scale, activeSheet);
+      _drawRegMarksPreview(ctx, ox, oy, w, h, scale, activeSheet, userSpots);
     }
-  }, [activeSheet, zoom, _panOffset, assets, assetImages, bgImage]);
+  }, [activeSheet, zoom, _panOffset, assets, assetImages, bgImage, userSpots]);
 
   useEffect(() => {
     draw();
@@ -695,6 +702,7 @@ export default function SheetBuilder() {
               <SpotColourRow
                 label="Cut lines"
                 value={activeSheet.spot_color_cutlines ?? "CutContour"}
+                spots={userSpots}
                 onChange={(v) =>
                   setActiveSheet((s) =>
                     s ? { ...s, spot_color_cutlines: v } : null
@@ -704,6 +712,7 @@ export default function SheetBuilder() {
               <SpotColourRow
                 label="Sub-sheet outlines"
                 value={activeSheet.spot_color_subsheets ?? "#00FF00"}
+                spots={userSpots}
                 onChange={(v) =>
                   setActiveSheet((s) =>
                     s ? { ...s, spot_color_subsheets: v } : null
@@ -713,6 +722,7 @@ export default function SheetBuilder() {
               <SpotColourRow
                 label="Marks (reg + crop)"
                 value={activeSheet.spot_color_marks ?? "#000000"}
+                spots={userSpots}
                 onChange={(v) =>
                   setActiveSheet((s) =>
                     s ? { ...s, spot_color_marks: v } : null
@@ -720,7 +730,13 @@ export default function SheetBuilder() {
                 }
               />
               <p className="text-[10px] text-neutral-500">
-                Use a spot name like &quot;CutContour&quot; for VersaWorks, or a hex colour.
+                Pick any colour (becomes custom) or select a spot name.{" "}
+                <a
+                  href="/app/settings?tab=preferences"
+                  className="text-violet-400 hover:underline"
+                >
+                  Manage spots →
+                </a>
               </p>
             </div>
           </Panel>
@@ -1163,61 +1179,86 @@ function Panel({
 }
 
 const SPOT_PRESETS = [
-  { label: "CutContour", value: "CutContour" },
-  { label: "Score", value: "Score" },
-  { label: "Through-cut", value: "Through-cut" },
-  { label: "Black", value: "#000000" },
-  { label: "Magenta", value: "#FF00FF" },
-  { label: "Green", value: "#00FF00" },
-  { label: "Red", value: "#FF0000" },
-  { label: "Blue", value: "#0000FF" },
+  { label: "CutContour", value: "CutContour", color: "#8B5CF6" },
+  { label: "Score", value: "Score", color: "#0000FF" },
+  { label: "Through-cut", value: "Through-cut", color: "#FF00FF" },
 ];
+
+function spotDisplayColor(value: string, spots: SpotColour[]): string {
+  if (value.startsWith("#")) return value;
+  const userSpot = spots.find((s) => s.name === value);
+  if (userSpot) return userSpot.display_color;
+  const preset = SPOT_PRESETS.find((p) => p.value === value);
+  if (preset) return preset.color;
+  return "#8B5CF6";
+}
 
 function SpotColourRow({
   label,
   value,
+  spots,
   onChange,
 }: {
   label: string;
   value: string;
+  spots: SpotColour[];
   onChange: (v: string) => void;
 }) {
-  const isHex = value.startsWith("#");
+  const isSpot = !value.startsWith("#");
+  const displayColor = spotDisplayColor(value, spots);
+
+  const allSpots = [
+    ...SPOT_PRESETS.map((p) => ({ name: p.label, display_color: p.color })),
+    ...spots.filter(
+      (s) => !SPOT_PRESETS.find((p) => p.value === s.name)
+    ).map((s) => ({ name: s.name, display_color: s.display_color })),
+  ];
+
   return (
     <div>
       <label className="block text-xs text-neutral-400 mb-1">{label}</label>
       <div className="flex gap-2 items-center">
-        {isHex && (
-          <div
-            className="w-5 h-5 rounded border border-neutral-600"
-            style={{ background: value }}
-          />
-        )}
-        {!isHex && (
-          <div className="w-5 h-5 rounded border border-neutral-600 bg-neutral-700 flex items-center justify-center">
-            <span className="text-[8px] text-neutral-300">SP</span>
-          </div>
-        )}
+        <input
+          type="color"
+          value={displayColor}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-7 h-7 rounded border border-neutral-600 bg-neutral-700 cursor-pointer"
+          title="Pick any colour (becomes custom)"
+        />
         <select
-          value={SPOT_PRESETS.find((p) => p.value === value) ? value : "__custom"}
+          value={isSpot ? value : "__custom"}
           onChange={(e) => {
-            if (e.target.value !== "__custom") onChange(e.target.value);
+            if (e.target.value === "__custom") return;
+            onChange(e.target.value);
           }}
           className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
         >
-          {SPOT_PRESETS.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
+          <optgroup label="Spot Colours">
+            {allSpots.map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.name}
+              </option>
+            ))}
+          </optgroup>
+          <optgroup label="Custom">
+            <option value="__custom">
+              {isSpot ? "Custom colour..." : `Custom (${value})`}
             </option>
-          ))}
-          <option value="__custom">Custom...</option>
+          </optgroup>
         </select>
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-24 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-xs text-white font-mono"
-        />
+        {isSpot && (
+          <span className="text-[10px] text-neutral-500 font-mono w-20 truncate">
+            {value}
+          </span>
+        )}
+        {!isSpot && (
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-[10px] text-white font-mono"
+          />
+        )}
       </div>
     </div>
   );
@@ -1288,7 +1329,8 @@ function _drawSubSheets(
   oy: number,
   scale: number,
   sheet: StickerSheet,
-  bgImage: HTMLImageElement | null
+  bgImage: HTMLImageElement | null,
+  spots: SpotColour[]
 ) {
   const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
   if (!size) return;
@@ -1368,9 +1410,13 @@ function _drawSubSheets(
         ctx.restore();
       }
 
-      // Sub-sheet outline (dashed)
+      // Sub-sheet outline (dashed, uses sub-sheet spot colour)
+      const ssColor = spotDisplayColor(
+        sheet.spot_color_subsheets ?? "#00FF00",
+        spots
+      );
       ctx.setLineDash([4, 3]);
-      ctx.strokeStyle = "#a3a3a3";
+      ctx.strokeStyle = ssColor;
       ctx.lineWidth = 0.75;
       ctx.strokeRect(ox + sx, oy + sy, subW, subH);
       ctx.setLineDash([]);
@@ -1422,7 +1468,8 @@ function _drawSubSheetOverlay(
   ox: number,
   oy: number,
   scale: number,
-  sheet: StickerSheet
+  sheet: StickerSheet,
+  spots: SpotColour[]
 ) {
   const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
   if (!size) return;
@@ -1447,14 +1494,22 @@ function _drawSubSheetOverlay(
       const sx = edge + col * (subW + subGap);
       const sy = edge + row * (subH + subGap);
 
-      // Solid border on top of stickers
-      ctx.strokeStyle = "#6366f1";
+      // Solid border on top of stickers (uses sub-sheet spot colour)
+      const subSheetColor = spotDisplayColor(
+        sheet.spot_color_subsheets ?? "#00FF00",
+        spots
+      );
+      ctx.strokeStyle = subSheetColor;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(ox + sx, oy + sy, subW, subH);
 
-      // Crop marks at corners (drawn on top)
+      // Crop marks at corners (drawn on top) - uses marks spot colour
       if (sheet.show_crop_marks) {
-        ctx.strokeStyle = "#000000";
+        const marksColor = spotDisplayColor(
+          sheet.spot_color_marks ?? "#000000",
+          spots
+        );
+        ctx.strokeStyle = marksColor;
         ctx.lineWidth = 1;
         const corners = [
           [sx, sy],
@@ -1533,17 +1588,23 @@ function _drawRegMarksPreview(
   _w: number,
   _h: number,
   scale: number,
-  sheet: StickerSheet
+  sheet: StickerSheet,
+  spots: SpotColour[]
 ) {
   const markOffset = sheet.mark_offset_mm * (scale / MM_TO_PX) * MM_TO_PX;
   const w = sheet.media_width_mm * (scale / MM_TO_PX) * MM_TO_PX;
   const h = sheet.media_height_mm * (scale / MM_TO_PX) * MM_TO_PX;
 
+  const marksColor = spotDisplayColor(
+    sheet.spot_color_marks ?? "#000000",
+    spots
+  );
+
   if (sheet.registration_type === "summa_opos" && sheet.max_zone_length_mm) {
     const zoneH =
       sheet.max_zone_length_mm * (scale / MM_TO_PX) * MM_TO_PX;
     const numMarks = Math.ceil(h / zoneH) + 1;
-    ctx.fillStyle = "#ef4444";
+    ctx.fillStyle = marksColor;
     for (let i = 0; i < numMarks; i++) {
       const y = Math.min(i * zoneH, h);
       for (const x of [markOffset, w - markOffset]) {
@@ -1553,7 +1614,7 @@ function _drawRegMarksPreview(
       }
     }
   } else if (sheet.registration_type === "velloblade") {
-    ctx.fillStyle = "#f59e0b";
+    ctx.fillStyle = marksColor;
     const corners = [
       [markOffset, markOffset],
       [w - markOffset, markOffset],

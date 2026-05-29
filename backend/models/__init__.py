@@ -9,6 +9,7 @@ from backend.models.job import Job
 from backend.models.lead import Lead
 from backend.models.output import Output
 from backend.models.spot_color import SpotColor
+from backend.models.spot_colour import SpotColour
 from backend.models.sticker_sheet import StickerSheet
 from backend.models.sticker_usage import StickerUsage
 from backend.models.stripe_event import StripeEvent
@@ -31,6 +32,7 @@ __all__ = [
     "Lead",
     "Output",
     "SpotColor",
+    "SpotColour",
     "StickerSheet",
     "StickerUsage",
     "StripeEvent",

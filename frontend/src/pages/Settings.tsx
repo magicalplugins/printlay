@@ -16,6 +16,13 @@ import {
   updateColorProfile,
 } from "../api/colorProfiles";
 import { updatePreferences, updateProfile } from "../api/me";
+import {
+  SpotColour,
+  listSpotColours,
+  createSpotColour,
+  updateSpotColour,
+  deleteSpotColour,
+} from "../api/spotColours";
 import { useAuth } from "../auth/AuthProvider";
 import { useMe } from "../auth/MeProvider";
 import {
@@ -488,6 +495,7 @@ function PreferencesTab() {
   return (
     <div className="space-y-6">
       <TimeSavedSection />
+      <SpotColoursSection />
 
       <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6">
         <div className="text-xs uppercase tracking-wider text-neutral-500 mb-2">
@@ -1062,3 +1070,120 @@ function humanLimit(key: string) {
   return key.replace(/_/g, " ");
 }
 
+function SpotColoursSection() {
+  const [spots, setSpots] = useState<SpotColour[]>([]);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState("#FF00FF");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    listSpotColours()
+      .then(setSpots)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleAdd() {
+    if (!newName.trim()) return;
+    try {
+      const s = await createSpotColour({
+        name: newName.trim(),
+        display_color: newColor,
+        sort_order: spots.length,
+      });
+      setSpots((prev) => [...prev, s]);
+      setNewName("");
+      setNewColor("#FF00FF");
+    } catch {}
+  }
+
+  async function handleDelete(id: string) {
+    try {
+      await deleteSpotColour(id);
+      setSpots((prev) => prev.filter((s) => s.id !== id));
+    } catch {}
+  }
+
+  async function handleColorChange(id: string, color: string) {
+    try {
+      const updated = await updateSpotColour(id, { display_color: color });
+      setSpots((prev) => prev.map((s) => (s.id === id ? updated : s)));
+    } catch {}
+  }
+
+  return (
+    <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5 sm:p-6">
+      <h3 className="text-sm font-semibold text-white mb-1">Spot Colours</h3>
+      <p className="text-xs text-neutral-400 mb-4">
+        Define spot colour names for your cutter/RIP software. These appear in the Sheet
+        Builder spot colour selector.
+      </p>
+
+      {loading ? (
+        <div className="text-xs text-neutral-500">Loading...</div>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {spots.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center gap-3 bg-neutral-800/50 rounded-lg px-3 py-2"
+            >
+              <input
+                type="color"
+                value={s.display_color}
+                onChange={(e) => handleColorChange(s.id, e.target.value)}
+                className="w-7 h-7 rounded border border-neutral-600 bg-neutral-700 cursor-pointer"
+              />
+              <span className="flex-1 text-sm text-white font-mono">
+                {s.name}
+              </span>
+              <span className="text-[10px] text-neutral-500 font-mono">
+                {s.display_color}
+              </span>
+              <button
+                onClick={() => handleDelete(s.id)}
+                className="text-neutral-500 hover:text-red-400 text-sm"
+              >
+                &times;
+              </button>
+            </div>
+          ))}
+          {spots.length === 0 && (
+            <p className="text-xs text-neutral-500">
+              No spot colours yet. Add your first one below.
+            </p>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2 items-end">
+        <div className="flex-1">
+          <label className="block text-xs text-neutral-400 mb-1">Name</label>
+          <input
+            type="text"
+            placeholder="e.g. CutContour"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            className="w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-1.5 text-sm text-white"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-neutral-400 mb-1">Colour</label>
+          <input
+            type="color"
+            value={newColor}
+            onChange={(e) => setNewColor(e.target.value)}
+            className="w-9 h-9 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
+          />
+        </div>
+        <button
+          onClick={handleAdd}
+          disabled={!newName.trim()}
+          className="rounded bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-medium"
+        >
+          Add
+        </button>
+      </div>
+    </section>
+  );
+}

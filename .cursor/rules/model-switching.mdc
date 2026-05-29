@@ -1,0 +1,12 @@
+---
+description: Remind to switch models for cost efficiency during deploy vs complex work
+alwaysApply: true
+---
+
+# Model Switching Reminder
+
+When deploying (running `flyctl deploy` or pushing to trigger CI):
+- Remind the user: "Switch to Sonnet for the deploy — swap back to Opus when you need me for demanding work."
+
+When starting complex architectural work, debugging, or multi-file refactors:
+- If currently on Sonnet, remind: "This is demanding work — consider switching to Opus."

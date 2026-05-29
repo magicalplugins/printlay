@@ -40,10 +40,15 @@ export interface StickerSheet {
   placements: Placement[] | null;
   cutter_preset_id: string | null;
   sub_sheet_fill_color: string | null;
+  sub_sheet_fill_color2: string | null;
+  sub_sheet_gradient_angle: number | null;
   sub_sheet_bg_url: string | null;
   sub_sheet_title: string | null;
   sub_sheet_title_font: string | null;
   sub_sheet_title_size_mm: number | null;
+  sticker_align_h: string | null;
+  sticker_align_v: string | null;
+  sub_sheet_bleed_mm: number | null;
   output_url: string | null;
 }
 

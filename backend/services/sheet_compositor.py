@@ -47,6 +47,9 @@ class SheetConfig:
     max_zone_length_mm: float | None = None
     mark_offset_mm: float = 5.0
     sub_sheet_size: str | None = None
+    sticker_align_h: str = "center"
+    sticker_align_v: str = "top"
+    sub_sheet_bleed_mm: float = 0.0
 
 
 SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
@@ -113,6 +116,10 @@ def auto_layout(
         sub_cols = max(1, int((available_for_subs + sub_gap) / (sub_w + sub_gap)))
         sub_rows = math.ceil(sub_sheets_needed / sub_cols)
 
+        # Calculate sticker block dimensions for alignment
+        block_w = stickers_per_col * sw + (stickers_per_col - 1) * sticker_gap
+        block_h = stickers_per_row * sh + (stickers_per_row - 1) * sticker_gap
+
         placements: list[Placement] = []
         sticker_idx = 0
 
@@ -120,16 +127,38 @@ def auto_layout(
             for sub_col in range(sub_cols):
                 if sticker_idx >= quantity:
                     break
-                # Sub-sheet top-left position (with edge margin and sub-sheet gap)
                 sub_x = edge + sub_col * (sub_w + sub_gap)
                 sub_y = edge + sub_row * (sub_h + sub_gap)
+
+                # Remaining stickers for this sub-sheet
+                remaining = min(per_sub, quantity - sticker_idx)
+                actual_rows = math.ceil(remaining / stickers_per_col)
+                actual_block_h = actual_rows * sh + (actual_rows - 1) * sticker_gap
+
+                # Horizontal alignment offset
+                align_h = config.sticker_align_h
+                if align_h == "center":
+                    offset_x = padding + (usable_w - block_w) / 2
+                elif align_h == "right":
+                    offset_x = padding + (usable_w - block_w)
+                else:
+                    offset_x = padding
+
+                # Vertical alignment offset
+                align_v = config.sticker_align_v
+                if align_v == "center":
+                    offset_y = padding + (usable_h - actual_block_h) / 2
+                elif align_v == "bottom":
+                    offset_y = padding + (usable_h - actual_block_h)
+                else:
+                    offset_y = padding
 
                 for r in range(stickers_per_row):
                     for c in range(stickers_per_col):
                         if sticker_idx >= quantity:
                             break
-                        x = sub_x + padding + c * (sw + sticker_gap)
-                        y = sub_y + padding + r * (sh + sticker_gap)
+                        x = sub_x + offset_x + c * (sw + sticker_gap)
+                        y = sub_y + offset_y + r * (sh + sticker_gap)
                         placements.append(Placement(
                             asset_id=asset_id,
                             x_mm=round(x, 2),

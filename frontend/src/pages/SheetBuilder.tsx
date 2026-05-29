@@ -94,6 +94,21 @@ export default function SheetBuilder() {
     }
   }, [assets]);
 
+  // Background image for sub-sheets
+  const [bgImage, setBgImage] = useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!activeSheet?.sub_sheet_bg_url) {
+      setBgImage(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => setBgImage(img);
+    img.onerror = () => setBgImage(null);
+    img.src = activeSheet.sub_sheet_bg_url;
+  }, [activeSheet?.sub_sheet_bg_url]);
+
   // Canvas draw
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -128,7 +143,7 @@ export default function SheetBuilder() {
 
     // Draw sub-sheet groups (always visible when configured)
     if (activeSheet.sub_sheet_size) {
-      _drawSubSheets(ctx, ox, oy, scale, activeSheet);
+      _drawSubSheets(ctx, ox, oy, scale, activeSheet, bgImage);
     }
 
     // Draw placements (stickers)
@@ -190,7 +205,7 @@ export default function SheetBuilder() {
     if (activeSheet.registration_type) {
       _drawRegMarksPreview(ctx, ox, oy, w, h, scale, activeSheet);
     }
-  }, [activeSheet, zoom, _panOffset, assets, assetImages]);
+  }, [activeSheet, zoom, _panOffset, assets, assetImages, bgImage]);
 
   useEffect(() => {
     draw();
@@ -602,35 +617,240 @@ export default function SheetBuilder() {
                 Sub-Sheet Design
               </h3>
               <div className="space-y-3">
+                {/* Sticker alignment */}
                 <div>
                   <label className="block text-xs text-neutral-400 mb-1">
-                    Fill colour / gradient
+                    Sticker alignment
                   </label>
+                  <div className="flex gap-2">
+                    <select
+                      value={activeSheet.sticker_align_h ?? "center"}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, sticker_align_h: e.target.value }
+                            : null
+                        )
+                      }
+                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                    >
+                      <option value="left">Left</option>
+                      <option value="center">Centre</option>
+                      <option value="right">Right</option>
+                    </select>
+                    <select
+                      value={activeSheet.sticker_align_v ?? "top"}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, sticker_align_v: e.target.value }
+                            : null
+                        )
+                      }
+                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                    >
+                      <option value="top">Top</option>
+                      <option value="center">Middle</option>
+                      <option value="bottom">Bottom</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Background fill */}
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Background colour
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="color"
+                      value={activeSheet.sub_sheet_fill_color || "#ffffff"}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, sub_sheet_fill_color: e.target.value }
+                            : null
+                        )
+                      }
+                      className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      placeholder="#ffffff"
+                      value={activeSheet.sub_sheet_fill_color ?? ""}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_fill_color: e.target.value || null,
+                              }
+                            : null
+                        )
+                      }
+                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Second colour for gradient */}
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    2nd colour (gradient)
+                  </label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="color"
+                      value={activeSheet.sub_sheet_fill_color2 || "#000000"}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? { ...s, sub_sheet_fill_color2: e.target.value }
+                            : null
+                        )
+                      }
+                      className="w-8 h-8 rounded border border-neutral-700 bg-neutral-800 cursor-pointer"
+                    />
+                    <input
+                      type="text"
+                      placeholder="None (solid)"
+                      value={activeSheet.sub_sheet_fill_color2 ?? ""}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_fill_color2: e.target.value || null,
+                              }
+                            : null
+                        )
+                      }
+                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Gradient angle (only if 2 colours set) */}
+                {activeSheet.sub_sheet_fill_color2 && (
+                  <SettingRow label="Gradient angle (°)">
+                    <input
+                      type="number"
+                      min={0}
+                      max={360}
+                      step={15}
+                      value={activeSheet.sub_sheet_gradient_angle ?? 135}
+                      onChange={(e) =>
+                        setActiveSheet((s) =>
+                          s
+                            ? {
+                                ...s,
+                                sub_sheet_gradient_angle: Number(e.target.value),
+                              }
+                            : null
+                        )
+                      }
+                      className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
+                    />
+                  </SettingRow>
+                )}
+
+                {/* Preview swatch */}
+                {(activeSheet.sub_sheet_fill_color ||
+                  activeSheet.sub_sheet_fill_color2) && (
+                  <div
+                    className="h-5 rounded border border-neutral-700"
+                    style={{
+                      background: activeSheet.sub_sheet_fill_color2
+                        ? `linear-gradient(${activeSheet.sub_sheet_gradient_angle ?? 135}deg, ${activeSheet.sub_sheet_fill_color || "#ffffff"}, ${activeSheet.sub_sheet_fill_color2})`
+                        : activeSheet.sub_sheet_fill_color || undefined,
+                    }}
+                  />
+                )}
+
+                {/* Background image upload */}
+                <div>
+                  <label className="block text-xs text-neutral-400 mb-1">
+                    Background image
+                  </label>
+                  {activeSheet.sub_sheet_bg_url ? (
+                    <div className="relative">
+                      <img
+                        src={activeSheet.sub_sheet_bg_url}
+                        alt="bg"
+                        className="w-full h-16 object-cover rounded border border-neutral-700"
+                      />
+                      <button
+                        onClick={() =>
+                          setActiveSheet((s) =>
+                            s
+                              ? { ...s, sub_sheet_bg_url: null }
+                              : null
+                          )
+                        }
+                        className="absolute top-1 right-1 bg-black/60 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                      >
+                        &times;
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center justify-center w-full h-10 rounded bg-neutral-800 border border-dashed border-neutral-600 hover:border-violet-500 cursor-pointer text-xs text-neutral-400 hover:text-white transition-colors">
+                      <span>Upload image...</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file || !activeSheet) return;
+                          const formData = new FormData();
+                          formData.append("file", file);
+                          try {
+                            const resp = await fetch(
+                              `/api/sheets/${activeSheet.id}/bg-upload`,
+                              {
+                                method: "POST",
+                                body: formData,
+                                credentials: "include",
+                              }
+                            );
+                            if (resp.ok) {
+                              const data = await resp.json();
+                              setActiveSheet((s) =>
+                                s
+                                  ? { ...s, sub_sheet_bg_url: data.url }
+                                  : null
+                              );
+                            }
+                          } catch {}
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Bleed */}
+                <SettingRow label="Background bleed (mm)">
                   <input
-                    type="text"
-                    placeholder="#ffffff or linear-gradient(...)"
-                    value={activeSheet.sub_sheet_fill_color ?? ""}
+                    type="number"
+                    min={0}
+                    max={20}
+                    step={0.5}
+                    value={activeSheet.sub_sheet_bleed_mm ?? 0}
                     onChange={(e) =>
                       setActiveSheet((s) =>
                         s
                           ? {
                               ...s,
-                              sub_sheet_fill_color: e.target.value || null,
+                              sub_sheet_bleed_mm: Number(e.target.value),
                             }
                           : null
                       )
                     }
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
+                    className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                   />
-                  {activeSheet.sub_sheet_fill_color && (
-                    <div
-                      className="mt-1 h-4 rounded border border-neutral-700"
-                      style={{
-                        background: activeSheet.sub_sheet_fill_color,
-                      }}
-                    />
-                  )}
-                </div>
+                </SettingRow>
+
+                {/* Title */}
                 <div>
                   <label className="block text-xs text-neutral-400 mb-1">
                     Title
@@ -914,7 +1134,8 @@ function _drawSubSheets(
   ox: number,
   oy: number,
   scale: number,
-  sheet: StickerSheet
+  sheet: StickerSheet,
+  bgImage: HTMLImageElement | null
 ) {
   const size = SUB_SHEET_SIZES[sheet.sub_sheet_size ?? ""];
   if (!size) return;
@@ -924,6 +1145,7 @@ function _drawSubSheets(
   const subGap = (sheet.sub_sheet_gap_mm ?? 5) * scale;
   const edge = (sheet.edge_margin_mm ?? 5) * scale;
   const padding = (sheet.sub_sheet_padding_mm ?? 5) * scale;
+  const bleed = (sheet.sub_sheet_bleed_mm ?? 0) * scale;
   const sheetW = sheet.media_width_mm * scale;
   const sheetH = sheet.media_height_mm * scale;
 
@@ -940,11 +1162,38 @@ function _drawSubSheets(
       const sx = edge + col * (subW + subGap);
       const sy = edge + row * (subH + subGap);
 
-      // Fill colour/gradient background (behind stickers)
-      if (sheet.sub_sheet_fill_color) {
+      const bx = ox + sx - bleed;
+      const by = oy + sy - bleed;
+      const bw = subW + 2 * bleed;
+      const bh = subH + 2 * bleed;
+
+      // Background image (fills with bleed, drawn first)
+      if (bgImage) {
         ctx.save();
-        ctx.fillStyle = sheet.sub_sheet_fill_color;
-        ctx.fillRect(ox + sx, oy + sy, subW, subH);
+        ctx.drawImage(bgImage, bx, by, bw, bh);
+        ctx.restore();
+      }
+
+      // Fill colour/gradient background with bleed
+      if (sheet.sub_sheet_fill_color || sheet.sub_sheet_fill_color2) {
+        ctx.save();
+
+        if (sheet.sub_sheet_fill_color2 && sheet.sub_sheet_fill_color) {
+          const angle = ((sheet.sub_sheet_gradient_angle ?? 135) * Math.PI) / 180;
+          const cx = bx + bw / 2;
+          const cy = by + bh / 2;
+          const len = Math.max(bw, bh);
+          const dx = Math.cos(angle) * len / 2;
+          const dy = Math.sin(angle) * len / 2;
+          const grad = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy);
+          grad.addColorStop(0, sheet.sub_sheet_fill_color);
+          grad.addColorStop(1, sheet.sub_sheet_fill_color2);
+          ctx.fillStyle = grad;
+        } else {
+          ctx.fillStyle = sheet.sub_sheet_fill_color || "#ffffff";
+        }
+
+        ctx.fillRect(bx, by, bw, bh);
         ctx.restore();
       }
 

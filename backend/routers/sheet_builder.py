@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -79,9 +79,14 @@ class SheetIn(BaseModel):
     placements: list[PlacementIn] | None = None
     cutter_preset_id: uuid.UUID | None = None
     sub_sheet_fill_color: str | None = None
+    sub_sheet_fill_color2: str | None = None
+    sub_sheet_gradient_angle: float | None = 135.0
     sub_sheet_title: str | None = None
     sub_sheet_title_font: str | None = "Inter"
     sub_sheet_title_size_mm: float | None = 5.0
+    sticker_align_h: str | None = "center"
+    sticker_align_v: str | None = "top"
+    sub_sheet_bleed_mm: float | None = 0.0
 
 
 class SheetOut(BaseModel):
@@ -102,10 +107,15 @@ class SheetOut(BaseModel):
     placements: list[dict] | None
     cutter_preset_id: uuid.UUID | None
     sub_sheet_fill_color: str | None = None
+    sub_sheet_fill_color2: str | None = None
+    sub_sheet_gradient_angle: float | None = None
     sub_sheet_bg_url: str | None = None
     sub_sheet_title: str | None = None
     sub_sheet_title_font: str | None = None
     sub_sheet_title_size_mm: float | None = None
+    sticker_align_h: str | None = None
+    sticker_align_v: str | None = None
+    sub_sheet_bleed_mm: float | None = None
     output_url: str | None = None
 
 
@@ -251,9 +261,14 @@ def create_sheet(
         else [],
         cutter_preset_id=payload.cutter_preset_id,
         sub_sheet_fill_color=payload.sub_sheet_fill_color,
+        sub_sheet_fill_color2=payload.sub_sheet_fill_color2,
+        sub_sheet_gradient_angle=payload.sub_sheet_gradient_angle,
         sub_sheet_title=payload.sub_sheet_title,
         sub_sheet_title_font=payload.sub_sheet_title_font,
         sub_sheet_title_size_mm=payload.sub_sheet_title_size_mm,
+        sticker_align_h=payload.sticker_align_h,
+        sticker_align_v=payload.sticker_align_v,
+        sub_sheet_bleed_mm=payload.sub_sheet_bleed_mm,
     )
     db.add(sheet)
     db.commit()
@@ -290,9 +305,14 @@ def update_sheet(
     )
     sheet.cutter_preset_id = payload.cutter_preset_id
     sheet.sub_sheet_fill_color = payload.sub_sheet_fill_color
+    sheet.sub_sheet_fill_color2 = payload.sub_sheet_fill_color2
+    sheet.sub_sheet_gradient_angle = payload.sub_sheet_gradient_angle
     sheet.sub_sheet_title = payload.sub_sheet_title
     sheet.sub_sheet_title_font = payload.sub_sheet_title_font
     sheet.sub_sheet_title_size_mm = payload.sub_sheet_title_size_mm
+    sheet.sticker_align_h = payload.sticker_align_h
+    sheet.sticker_align_v = payload.sticker_align_v
+    sheet.sub_sheet_bleed_mm = payload.sub_sheet_bleed_mm
     db.commit()
     db.refresh(sheet)
     return _sheet_to_out(sheet)
@@ -352,6 +372,9 @@ def run_auto_layout(
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
         sub_sheet_size=sheet.sub_sheet_size,
+        sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
+        sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
+        sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
     )
 
     result = auto_layout(
@@ -430,6 +453,9 @@ def export_sheet_pdf(
         max_zone_length_mm=sheet.max_zone_length_mm,
         mark_offset_mm=sheet.mark_offset_mm,
         sub_sheet_size=sheet.sub_sheet_size,
+        sticker_align_h=getattr(sheet, "sticker_align_h", "center") or "center",
+        sticker_align_v=getattr(sheet, "sticker_align_v", "top") or "top",
+        sub_sheet_bleed_mm=getattr(sheet, "sub_sheet_bleed_mm", 0.0) or 0.0,
     )
 
     placements_typed = [
@@ -504,9 +530,46 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         placements=s.placements,
         cutter_preset_id=s.cutter_preset_id,
         sub_sheet_fill_color=getattr(s, "sub_sheet_fill_color", None),
+        sub_sheet_fill_color2=getattr(s, "sub_sheet_fill_color2", None),
+        sub_sheet_gradient_angle=getattr(s, "sub_sheet_gradient_angle", 135.0),
         sub_sheet_bg_url=bg_url,
         sub_sheet_title=getattr(s, "sub_sheet_title", None),
         sub_sheet_title_font=getattr(s, "sub_sheet_title_font", None),
         sub_sheet_title_size_mm=getattr(s, "sub_sheet_title_size_mm", None),
+        sticker_align_h=getattr(s, "sticker_align_h", "center"),
+        sticker_align_v=getattr(s, "sticker_align_v", "top"),
+        sub_sheet_bleed_mm=getattr(s, "sub_sheet_bleed_mm", 0.0),
         output_url=output_url,
     )
+
+
+# ---------- Background image upload ----------
+
+@router.post("/{sheet_id}/bg-upload")
+async def upload_bg_image(
+    sheet_id: uuid.UUID,
+    file: UploadFile = File(...),
+    user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    real_user = _resolve_user(user, db)
+    sheet = (
+        db.query(StickerSheet)
+        .filter(StickerSheet.id == sheet_id, StickerSheet.user_id == real_user.id)
+        .first()
+    )
+    if not sheet:
+        raise HTTPException(status_code=404, detail="Sheet not found")
+
+    content = await file.read()
+    ext = (file.filename or "bg.png").rsplit(".", 1)[-1].lower()
+    r2_key = f"sheets/{sheet.id}/bg.{ext}"
+
+    storage.upload(r2_key, content, content_type=file.content_type or "image/png")
+
+    sheet.sub_sheet_bg_r2_key = r2_key
+    url = storage.presigned_get(r2_key, expires_in=3600)
+    sheet.sub_sheet_bg_url = url
+    db.commit()
+
+    return {"url": url}

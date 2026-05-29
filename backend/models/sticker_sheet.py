@@ -115,3 +115,26 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Float, nullable=True, default=5.0
     )
     """Title font size in mm."""
+
+    sticker_align_h: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True, default="center"
+    )
+    """Horizontal alignment of stickers within sub-sheet: 'left' | 'center' | 'right'."""
+
+    sticker_align_v: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True, default="top"
+    )
+    """Vertical alignment of stickers within sub-sheet: 'top' | 'center' | 'bottom'."""
+
+    sub_sheet_bleed_mm: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=0.0
+    )
+    """Bleed in mm — background extends beyond the sub-sheet edges by this amount."""
+
+    sub_sheet_fill_color2: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    """Second colour for gradient (if set, a 2-colour gradient is used)."""
+
+    sub_sheet_gradient_angle: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, default=135.0
+    )
+    """Gradient direction in degrees (e.g. 135 = top-left to bottom-right)."""

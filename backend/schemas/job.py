@@ -99,18 +99,18 @@ class GenerateOptions(BaseModel):
     paths to the cutter instead of inking them. Off by default so a
     plain artwork-only generate still works exactly as before."""
 
+    cut_line_spot_color: str | None = None
+    """The cut-path spot colour, expressed exactly like the Sheet Builder
+    picker: either a spot **name** (e.g. ``CutContour`` - becomes the PDF
+    Separation name the RIP routes to the cutter) or a ``#RRGGBB`` hex
+    (custom colour; falls back to a 'CutContour' Separation with that RGB
+    alternate). None falls back to a standard 'CutContour' magenta."""
+
+    mark_spot_color: str | None = None
+    """Spot colour for cutter registration marks, in the same name-or-hex
+    form as ``cut_line_spot_color``. None = black. The registration mark
+    *type* itself lives on the template (baked in at creation)."""
+
+    # Back-compat: older callers may still send a preset id. Accepted but
+    # ignored in favour of `cut_line_spot_color`.
     cut_line_spot_color_id: uuid.UUID | None = None
-    """Which preset from the user's `spot_colours` library to use for the
-    cut path (the same library managed in Settings / used on Sheets). Its
-    name becomes the PDF Separation name; its colour the RGB alternate.
-    None falls back to a standard 'CutContour' magenta."""
-
-    registration_type: str | None = None
-    """Cutter registration marks to draw on the output, matching the Sheet
-    Builder: 'velloblade' | 'summa_opos' | 'generic'. None = no marks."""
-
-    mark_offset_mm: float = 5.0
-    """Inset of registration marks from the page edges, in mm."""
-
-    max_zone_length_mm: float | None = None
-    """Optional vertical zoning — repeat marks every N mm down long pages."""

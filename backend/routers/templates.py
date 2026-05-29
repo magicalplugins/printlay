@@ -279,6 +279,9 @@ def generate_template(
         positions_layer="POSITIONS",
         has_ocg=True,
         shapes=gen.shapes,
+        registration_type=payload.registration_type,
+        mark_offset_mm=payload.mark_offset_mm,
+        max_zone_length_mm=payload.max_zone_length_mm,
         generation_params=payload.model_dump(),
     )
     db.add(tpl)

@@ -377,12 +377,11 @@ export default function JobFiller() {
   // visible cutter path and we want that to be a deliberate per-job
   // choice, not a persistent surprise.
   const [includeCutLines, setIncludeCutLines] = useState(false);
-  const [cutLineSpotColorId, setCutLineSpotColorId] = useState<string | null>(
-    null
-  );
-  // Per-generation cutter registration marks (same options as the Sheet
-  // Builder). Empty string = none. Resets per page load like cut lines.
-  const [registrationType, setRegistrationType] = useState<string>("");
+  // Cut-line + registration-mark spot colours, in the Sheet-Builder picker
+  // form (a spot name like "CutContour" or a #hex). The registration mark
+  // TYPE is baked into the template; here we only choose colours.
+  const [cutLineSpot, setCutLineSpot] = useState<string>("CutContour");
+  const [markSpot, setMarkSpot] = useState<string>("#000000");
 
   const totalSlots = job?.slot_order.length ?? 0;
   const queuedQty = rows.reduce((s, r) => s + r.qty, 0);
@@ -767,8 +766,8 @@ export default function JobFiller() {
       await saveQueue();
       const out = await generateOutput(job.id, {
         include_cut_lines: includeCutLines,
-        cut_line_spot_color_id: cutLineSpotColorId,
-        registration_type: registrationType || null,
+        cut_line_spot_color: includeCutLines ? cutLineSpot : null,
+        mark_spot_color: markSpot,
       });
 
       // Surface colour-swap results so the user knows whether their
@@ -1203,33 +1202,38 @@ export default function JobFiller() {
           <SpotColorsPanel
             enabled={includeCutLines}
             onEnabledChange={setIncludeCutLines}
-            selectedSpotColorId={cutLineSpotColorId}
-            onSelectedSpotColorIdChange={setCutLineSpotColorId}
+            cutLineSpot={cutLineSpot}
+            onCutLineSpotChange={setCutLineSpot}
+            markSpot={markSpot}
+            onMarkSpotChange={setMarkSpot}
           />
 
-          {/* Cutter registration marks — same options as the Sheet
-              Builder. Added to the output PDF at generate time. */}
-          <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 backdrop-blur p-4 space-y-3">
-            <div>
-              <div className="text-xs uppercase tracking-widest text-neutral-500">
-                Registration marks
-              </div>
-              <div className="text-[11px] text-neutral-400 mt-0.5">
-                Adds optical alignment marks for your cutter to the output
-                PDF (corner marks read by the machine before cutting).
-              </div>
-            </div>
-            <select
-              value={registrationType}
-              onChange={(e) => setRegistrationType(e.target.value)}
-              className="w-full rounded-md border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-sm focus:border-violet-500 focus:outline-none"
-            >
-              <option value="">None</option>
-              <option value="velloblade">Velloblade (6mm circles)</option>
-              <option value="summa_opos">Summa OPOS</option>
-              <option value="generic">Generic crosshairs</option>
-            </select>
-          </section>
+          {/* Registration mark TYPE is set on the template (so every job
+              from it is produced with the marks). The colour lives in the
+              Spot Colours panel above. */}
+          {tpl?.registration_type ? (
+            <p className="text-[11px] text-neutral-500 px-1">
+              This template adds{" "}
+              <span className="text-neutral-300">
+                {tpl.registration_type === "velloblade"
+                  ? "Velloblade"
+                  : tpl.registration_type === "summa_opos"
+                  ? "Summa OPOS"
+                  : "Generic"}
+              </span>{" "}
+              registration marks to every generated PDF.
+            </p>
+          ) : (
+            <p className="text-[11px] text-neutral-500 px-1">
+              Want cutter registration marks?{" "}
+              <Link
+                to={`/app/templates/${job.template_id}`}
+                className="text-violet-300 hover:text-violet-200"
+              >
+                Set them on the template →
+              </Link>
+            </p>
+          )}
         </aside>
       </div>
 

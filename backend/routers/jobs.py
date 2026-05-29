@@ -598,39 +598,58 @@ def _hex_to_rgb_tuple(hex_str: str | None, fallback=(255, 0, 255)) -> tuple[int,
         return fallback
 
 
+# Built-in spot presets, mirrored from the Sheet Builder picker so a job
+# resolves the same names even when the user has no saved library yet.
+_BUILTIN_SPOTS: dict[str, tuple[int, int, int]] = {
+    "CutContour": (139, 92, 246),
+    "Score": (0, 0, 255),
+    "Through-cut": (255, 0, 255),
+}
+
+
+def _resolve_spot(
+    db: Session, user: User, value: str | None
+) -> tuple[str | None, tuple[int, int, int]]:
+    """Resolve a Sheet-Builder-style spot value into ``(name, rgb)``.
+
+    ``value`` is either a spot **name** (matched against the user's
+    `spot_colours` library, then the built-in presets) or a ``#RRGGBB``
+    hex (a custom colour, no named Separation). Returns ``name=None`` for a
+    pure custom colour."""
+    if not value:
+        return None, (0, 0, 0)
+    if value.startswith("#"):
+        return None, _hex_to_rgb_tuple(value)
+
+    from backend.models import SpotColour
+
+    row = (
+        db.query(SpotColour)
+        .filter(SpotColour.name == value, SpotColour.user_id == user.id)
+        .one_or_none()
+    )
+    if row is not None:
+        return row.name, _hex_to_rgb_tuple(row.display_color)
+    if value in _BUILTIN_SPOTS:
+        return value, _BUILTIN_SPOTS[value]
+    # Unknown name — still honour it as a Separation so the RIP can match.
+    return value, (255, 0, 255)
+
+
 def _resolve_cut_line_spec(
     db: Session, user: User, opts: GenerateOptions
 ) -> cut_lines.CutLineSpec:
-    """Pick which spot colour drives the cut layer, from the user's
-    `spot_colours` library (the same presets used in Settings / Sheets).
+    """Pick which spot colour drives the cut layer, from the Sheet-Builder
+    style picker value (``cut_line_spot_color``).
 
-    If ``opts.cut_line_spot_color_id`` is given we use that preset; the
-    spot **name** becomes the PDF Separation name (so VersaWorks/Summa
-    pick it up as a cut plate) and its ``display_color`` is the RGB
-    alternate. With no selection we fall back to a standard 'CutContour'
-    magenta so generation never fails.
+    A spot **name** becomes the PDF Separation name (so VersaWorks/Summa
+    pick it up as a cut plate) with its colour as the RGB alternate. A
+    custom ``#RRGGBB`` hex still cuts under a 'CutContour' Separation so
+    every RIP keeps a named cut plate. With no selection we fall back to a
+    standard 'CutContour' magenta so generation never fails.
     """
-    from backend.models import SpotColour
-
-    row = None
-    if opts.cut_line_spot_color_id is not None:
-        row = (
-            db.query(SpotColour)
-            .filter(
-                SpotColour.id == opts.cut_line_spot_color_id,
-                SpotColour.user_id == user.id,
-            )
-            .one_or_none()
-        )
-        if row is None:
-            raise HTTPException(404, "Spot colour not found")
-
-    if row is not None:
-        return cut_lines.CutLineSpec(
-            spot_name=row.name,
-            rgb=_hex_to_rgb_tuple(row.display_color),
-        )
-    return cut_lines.CutLineSpec(spot_name="CutContour", rgb=(255, 0, 255))
+    name, rgb = _resolve_spot(db, user, opts.cut_line_spot_color)
+    return cut_lines.CutLineSpec(spot_name=name or "CutContour", rgb=rgb)
 
 
 def _resolve_active_swaps(db: Session, job: Job) -> list[dict]:
@@ -882,16 +901,22 @@ def generate_output(
         raise HTTPException(500, str(exc))
 
     output_bytes = sheet.pdf_bytes
-    # Optional cutter registration marks (same shapes as the Sheet Builder).
-    if opts.registration_type:
+    # Cutter registration marks are baked into the TEMPLATE (set on the
+    # template page), so every job generated from it reads identically on
+    # the cutter. The marks colour comes from the job's Spot Colours panel
+    # (defaults to black) so it can match the chosen cut/mark separation.
+    if tpl.registration_type:
         from backend.services import job_registration
 
+        _, mark_rgb255 = _resolve_spot(db, user, opts.mark_spot_color)
+        mark_rgb = tuple(c / 255.0 for c in mark_rgb255)
         try:
             output_bytes = job_registration.add_registration_marks(
                 output_bytes,
-                opts.registration_type,
-                mark_offset_mm=opts.mark_offset_mm,
-                max_zone_length_mm=opts.max_zone_length_mm,
+                tpl.registration_type,
+                mark_offset_mm=float(tpl.mark_offset_mm or 5.0),
+                max_zone_length_mm=tpl.max_zone_length_mm,
+                mark_rgb=mark_rgb,
             )
         except Exception as exc:  # pragma: no cover - defensive
             raise HTTPException(500, f"Failed to add registration marks: {exc}")

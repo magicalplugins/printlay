@@ -40,6 +40,18 @@ class Template(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     shapes: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
     """List of `{shape_index, page_index, bbox: [x,y,w,h], layer, is_position_slot}`."""
 
+    # Cutter registration marks baked into every output generated from this
+    # template. Mirrors the Sheet Builder options so a template-driven job
+    # reads identically on the same cutter.
+    registration_type: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    """`velloblade` | `summa_opos` | `generic` | None (no marks)."""
+    mark_offset_mm: Mapped[float] = mapped_column(Float, nullable=False, default=5.0)
+    """Inset of registration marks from the artboard edges, in mm."""
+    max_zone_length_mm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Optional vertical zoning — repeat marks every N mm down long pages."""
+
     generation_params: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     def __repr__(self) -> str:

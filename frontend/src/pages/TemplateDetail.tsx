@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   downloadTemplateUrl,
   getTemplate,
+  RegistrationType,
   reparseTemplate,
   Template,
   updateTemplate,
@@ -21,6 +22,10 @@ export default function TemplateDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [bleed, setBleed] = useState<string>("0");
   const [safe, setSafe] = useState<string>("0");
+  const [registrationType, setRegistrationType] = useState<RegistrationType | "">("");
+  const [maxZone, setMaxZone] = useState<string>("");
+  const [savingReg, setSavingReg] = useState(false);
+  const [savedRegHint, setSavedRegHint] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedHint, setSavedHint] = useState(false);
   const [reparsing, setReparsing] = useState(false);
@@ -44,6 +49,8 @@ export default function TemplateDetail() {
         setPdfUrl(d.url);
         setBleed(String(t.bleed_mm ?? 0));
         setSafe(String(t.safe_mm ?? 0));
+        setRegistrationType(t.registration_type ?? "");
+        setMaxZone(t.max_zone_length_mm ? String(t.max_zone_length_mm) : "");
       } catch (e) {
         if (!cancelled) setErr(String(e));
       }
@@ -91,6 +98,33 @@ export default function TemplateDetail() {
       setSaving(false);
     }
   }
+
+  async function onSaveRegistration() {
+    if (!tpl) return;
+    setSavingReg(true);
+    try {
+      const updated = await updateTemplate(tpl.id, {
+        registration_type: registrationType || null,
+        max_zone_length_mm: maxZone ? Math.max(50, Number(maxZone)) : null,
+      });
+      setTpl(updated);
+      setRegistrationType(updated.registration_type ?? "");
+      setMaxZone(
+        updated.max_zone_length_mm ? String(updated.max_zone_length_mm) : ""
+      );
+      setSavedRegHint(true);
+      setTimeout(() => setSavedRegHint(false), 1600);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setSavingReg(false);
+    }
+  }
+
+  const regDirty =
+    !!tpl &&
+    ((registrationType || null) !== (tpl.registration_type ?? null) ||
+      (maxZone ? Number(maxZone) : null) !== (tpl.max_zone_length_mm ?? null));
 
   if (err) return <div className="p-8 text-rose-400">{err}</div>;
   if (!tpl || !pdfUrl) return <div className="p-8 text-neutral-500">Loading…</div>;
@@ -240,6 +274,66 @@ export default function TemplateDetail() {
                 className="w-full mt-2 rounded-lg border border-neutral-800 hover:border-violet-500 px-3 py-2 text-sm font-medium disabled:opacity-40"
               >
                 {savedHint ? "Saved ✓" : saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-4">
+            <div className="text-xs uppercase tracking-widest text-neutral-500 mb-1">
+              Cutter registration
+            </div>
+            <p className="text-[11px] text-neutral-500 leading-snug mb-3">
+              Marks are baked into every PDF you generate from this template so
+              your cutter can align the sheet before cutting.
+            </p>
+            <div className="space-y-3 text-sm">
+              <label className="block">
+                <span className="text-neutral-300 text-xs">Marks</span>
+                <select
+                  value={registrationType}
+                  onChange={(e) =>
+                    setRegistrationType(e.target.value as RegistrationType | "")
+                  }
+                  className="mt-1 w-full rounded-md border border-neutral-800 bg-neutral-950 px-2 py-2 text-sm outline-none focus:border-violet-500"
+                >
+                  <option value="">None</option>
+                  <option value="velloblade">Velloblade (6mm circles)</option>
+                  <option value="summa_opos">Summa OPOS</option>
+                  <option value="generic">Generic crosshairs</option>
+                </select>
+              </label>
+
+              {registrationType && (
+                <label className="block">
+                  <span className="text-neutral-300 text-xs">
+                    Max zone length (mm)
+                  </span>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      step={50}
+                      min={50}
+                      placeholder="No zoning"
+                      value={maxZone}
+                      onChange={(e) => setMaxZone(e.target.value)}
+                      className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-950 px-2 text-center font-mono outline-none focus:border-violet-500"
+                    />
+                    <span className="text-neutral-500 text-xs">mm</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-500 leading-snug mt-1">
+                    Repeats marks every N mm down long sheets. Leave blank for
+                    one set per page.
+                  </p>
+                </label>
+              )}
+
+              <button
+                onClick={onSaveRegistration}
+                disabled={savingReg || !regDirty}
+                className="w-full mt-1 rounded-lg border border-neutral-800 hover:border-violet-500 px-3 py-2 text-sm font-medium disabled:opacity-40"
+              >
+                {savedRegHint ? "Saved ✓" : savingReg ? "Saving…" : "Save"}
               </button>
             </div>
           </section>

@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   GenerateRequest,
+  RegistrationType,
   SpacingMode,
   generateTemplate,
   uploadTemplate,
@@ -209,6 +210,8 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
   const [gy, setGy] = useState(5);
   const [edgeMargin, setEdgeMargin] = useState(0);
   const [spacingMode, setSpacingMode] = useState<SpacingMode>("fixed");
+  const [registrationType, setRegistrationType] = useState<RegistrationType | "">("");
+  const [maxZone, setMaxZone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<FormattedApiError | null>(null);
 
@@ -235,6 +238,9 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
         corner_radius: kind === "rect" ? cornerRadius : 0,
         spacing_mode: spacingMode,
       },
+      registration_type: registrationType || null,
+      mark_offset_mm: 5.0,
+      max_zone_length_mm: maxZone ? Number(maxZone) : null,
     };
     try {
       const tpl = await generateTemplate(req);
@@ -443,6 +449,34 @@ function GenerateStep({ onBack }: { onBack: () => void }) {
                 of the artboard edge.
               </>
             )}
+          </p>
+        </Section>
+
+        <Section title="Cutter registration">
+          <Select
+            label="Registration marks"
+            value={registrationType}
+            onChange={(v) => setRegistrationType(v as RegistrationType | "")}
+            options={[
+              { v: "", l: "None" },
+              { v: "velloblade", l: "Velloblade (6mm circles)" },
+              { v: "summa_opos", l: "Summa OPOS" },
+              { v: "generic", l: "Generic crosshairs" },
+            ]}
+          />
+          {registrationType && (
+            <div className="mt-3">
+              <NumberField
+                label="Max zone length (mm) — blank = no zoning"
+                value={maxZone ? Number(maxZone) : 0}
+                onChange={(n) => setMaxZone(n > 0 ? String(n) : "")}
+              />
+            </div>
+          )}
+          <p className="text-xs text-neutral-500 mt-3 leading-relaxed">
+            Marks are baked into this template, so every PDF you generate from
+            it carries the alignment marks your cutter reads. You can change
+            them later on the template page.
           </p>
         </Section>
 

@@ -26,6 +26,9 @@ class TemplateOut(BaseModel):
     has_ocg: bool
     bleed_mm: float = 0.0
     safe_mm: float = 0.0
+    registration_type: str | None = None
+    mark_offset_mm: float = 5.0
+    max_zone_length_mm: float | None = None
     shapes: list[dict[str, Any]]
     generation_params: dict[str, Any] | None = None
     created_at: datetime
@@ -36,6 +39,11 @@ class TemplateUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     bleed_mm: float | None = Field(default=None, ge=0, le=20)
     safe_mm: float | None = Field(default=None, ge=0, le=20)
+    registration_type: Literal["velloblade", "summa_opos", "generic"] | None = Field(
+        default=None
+    )
+    mark_offset_mm: float | None = Field(default=None, ge=0, le=50)
+    max_zone_length_mm: float | None = Field(default=None, ge=50, le=5000)
 
 
 class GenerateArtboard(BaseModel):
@@ -78,3 +86,6 @@ class GenerateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     artboard: GenerateArtboard
     shape: GenerateShape
+    registration_type: Literal["velloblade", "summa_opos", "generic"] | None = None
+    mark_offset_mm: float = Field(default=5.0, ge=0, le=50)
+    max_zone_length_mm: float | None = Field(default=None, ge=50, le=5000)

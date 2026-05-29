@@ -19,6 +19,8 @@ export type Shape = {
 
 export type SpacingMode = "fixed" | "even";
 
+export type RegistrationType = "velloblade" | "summa_opos" | "generic";
+
 export type Template = {
   id: string;
   name: string;
@@ -30,6 +32,11 @@ export type Template = {
   has_ocg: boolean;
   bleed_mm: number;
   safe_mm: number;
+  /** Cutter registration marks baked into every output generated from
+   *  this template. `null` = no marks. */
+  registration_type: RegistrationType | null;
+  mark_offset_mm: number;
+  max_zone_length_mm: number | null;
   shapes: Shape[];
   generation_params: Record<string, unknown> | null;
   created_at: string;
@@ -39,6 +46,9 @@ export type TemplateUpdate = {
   name?: string;
   bleed_mm?: number;
   safe_mm?: number;
+  registration_type?: RegistrationType | null;
+  mark_offset_mm?: number;
+  max_zone_length_mm?: number | null;
 };
 
 export function updateTemplate(id: string, patch: TemplateUpdate) {
@@ -83,6 +93,9 @@ export type GenerateRequest = {
     corner_radius?: number;
     spacing_mode: SpacingMode;
   };
+  registration_type?: RegistrationType | null;
+  mark_offset_mm?: number;
+  max_zone_length_mm?: number | null;
 };
 
 export function generateTemplate(req: GenerateRequest) {

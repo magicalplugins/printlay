@@ -56,9 +56,14 @@ def _smooth_skin(bgr: "np.ndarray", strength: float) -> "np.ndarray":
 
     if strength <= 0:
         return bgr
-    sigma = 45 + 55 * strength
-    smoothed = cv2.bilateralFilter(bgr, 7, sigma, sigma)
-    mask = _skin_mask(bgr).astype(np.float32) / 255.0 * (0.85 * strength)
+    # Diameter scales a little with image size so the effect is visible on
+    # higher-res working images, and a second lighter pass deepens the smooth.
+    sigma = 60 + 90 * strength
+    diam = 9 if min(bgr.shape[:2]) < 900 else 13
+    smoothed = cv2.bilateralFilter(bgr, diam, sigma, sigma)
+    if strength > 0.5:
+        smoothed = cv2.bilateralFilter(smoothed, diam, sigma, sigma)
+    mask = _skin_mask(bgr).astype(np.float32) / 255.0 * min(0.95, 0.95 * strength)
     mask3 = cv2.merge([mask, mask, mask])
     out = bgr.astype(np.float32) * (1.0 - mask3) + smoothed.astype(np.float32) * mask3
     return np.clip(out, 0, 255).astype(np.uint8)
@@ -99,7 +104,7 @@ def _enhance_eyes(
         return bgr
 
     out = bgr.copy()
-    amount = 0.7 * strength
+    amount = 1.1 * strength
     for (fx, fy, fw, fh) in faces:
         # Eyes live in the upper ~60% of the face box.
         ry0, ry1 = fy, fy + int(fh * 0.6)
@@ -118,7 +123,7 @@ def _enhance_eyes(
             roi = out[y0:y1, x0:x1].astype(np.float32)
             blur = cv2.GaussianBlur(roi, (0, 0), 3)
             sharp = cv2.addWeighted(roi, 1.0 + amount, blur, -amount, 0)
-            sharp = sharp * (1.0 + 0.08 * strength)
+            sharp = sharp * (1.0 + 0.14 * strength)
             out[y0:y1, x0:x1] = np.clip(sharp, 0, 255).astype(np.uint8)
     return out
 

@@ -23,11 +23,15 @@ primary_region = "lhr"
     soft_limit = 25
     hard_limit = 50
 
+# Tolerant health check: heavy sticker/image jobs can briefly peg the CPU.
+# A short timeout used to flap the check and make the Fly proxy drop ALL
+# traffic ("no healthy instances" → Cloudflare 524). Longer timeout + grace
+# keeps the machine in rotation through CPU spikes instead of going dark.
 [[http_service.checks]]
-  grace_period = "10s"
-  interval = "30s"
+  grace_period = "30s"
+  interval = "15s"
   method = "GET"
-  timeout = "5s"
+  timeout = "15s"
   path = "/api/health"
 
 [[vm]]

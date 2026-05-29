@@ -22,6 +22,32 @@ from backend.services.cutline_generator import (
 )
 
 
+# Cap the resolution we do CPU-heavy work at. Background removal (the AI call)
+# runs on the full upload, but bilateral skin smoothing, contour tracing,
+# morphology and preview rendering scale with pixel count — a 12 MP iPhone photo
+# is ~10x slower than a 1.5 MP working image with no visible loss on a sticker
+# (a few cm printed). We downscale and scale the DPI by the same factor so the
+# physical sticker size (mm/pt) is byte-for-byte identical to full-res.
+WORK_MAX_PX = 1400
+
+
+def _cap_working_image(
+    rgba_bytes: bytes, base_dpi: float = 300.0, max_px: int = WORK_MAX_PX
+) -> tuple[bytes, float]:
+    """Downscale an image so its longest edge is <= max_px, returning the
+    (possibly unchanged) PNG bytes and the DPI that preserves physical size."""
+    img = Image.open(io.BytesIO(rgba_bytes))
+    long_edge = max(img.size)
+    if long_edge <= max_px:
+        return rgba_bytes, base_dpi
+    scale = max_px / float(long_edge)
+    new_size = (max(1, round(img.size[0] * scale)), max(1, round(img.size[1] * scale)))
+    img = img.convert("RGBA").resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue(), base_dpi * scale
+
+
 @dataclass
 class StickerProcessResult:
     """Result of processing an image into a sticker."""
@@ -35,6 +61,10 @@ class StickerProcessResult:
     cutout_png: bytes | None = None
     """Background-removed RGBA (pre-cutline). Cached so the cut line can be
     regenerated (precision/mode/face) without re-running AI removal."""
+    work_dpi: float = 300.0
+    """Effective DPI the cached cutout was processed at (after the working
+    resolution cap). Must be reused on regenerate so the sticker keeps the
+    same physical size."""
 
 
 @dataclass
@@ -85,14 +115,15 @@ def process_sticker(
             rgba_bytes = remove_background(image_bytes, method="ai_basic")
             used_method = "ai_basic"
 
-    # The bg-removed (or original, for rectangle) RGBA — cached UNFILTERED for
-    # cheap cut-line + look regeneration without re-spending AI credits.
-    cutout_bytes = rgba_bytes
+    # Cap the working resolution (scaling DPI to keep physical size identical)
+    # so every downstream CPU-heavy step is fast. The capped image is cached
+    # UNFILTERED so the cut-line + look can be regenerated cheaply later.
+    cutout_bytes, work_dpi = _cap_working_image(rgba_bytes, base_dpi=dpi)
 
     from backend.services.beautify import apply_sticker_look
 
     look_bytes = apply_sticker_look(
-        rgba_bytes,
+        cutout_bytes,
         filter_id=filter_id,
         smooth=beautify_smooth,
         eyes=beautify_eyes,
@@ -103,7 +134,7 @@ def process_sticker(
         look_bytes,
         border_width_mm=border_width_mm,
         border_color=border_color,
-        dpi=dpi,
+        dpi=work_dpi,
         mode=cutline_mode,
         precision=cutline_precision,
         bleed_mm=bleed_mm,
@@ -123,6 +154,7 @@ def process_sticker(
         bg_type=bg_type,
         removal_method=used_method,
         cutout_png=cutout_bytes,
+        work_dpi=work_dpi,
     )
 
 
@@ -130,7 +162,7 @@ def regenerate_cutline(
     cutout_bytes: bytes,
     border_width_mm: float = 5.0,
     border_color: tuple[int, int, int] = (255, 255, 255),
-    dpi: int = 300,
+    dpi: float = 300.0,
     cutline_mode: CutlineMode = "contour",
     cutline_precision: CutlinePrecision = "medium",
     bleed_mm: float = 3.0,
@@ -144,6 +176,9 @@ def regenerate_cutline(
 
     Used by the preview screen to change precision/mode/tighten/photo filters
     without re-running (and re-charging for) background removal.
+
+    `dpi` MUST be the same work_dpi the cached cutout was first processed at
+    (the cutout is already resolution-capped) so the sticker keeps its size.
     """
     from backend.services.beautify import apply_sticker_look
 
@@ -176,6 +211,7 @@ def regenerate_cutline(
         bg_type="transparent",
         removal_method=None,
         cutout_png=cutout_bytes,
+        work_dpi=dpi,
     )
 
 

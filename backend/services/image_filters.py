@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 # 12 popular looks. Names line up with the frontend filter button IDs.
 FilterId = str
@@ -96,6 +96,68 @@ def _tint(im: Image.Image, colour: tuple[int, int, int], strength: float) -> Ima
     return Image.blend(im, overlay, strength)
 
 
+def _cartoon(im: Image.Image) -> Image.Image:
+    """Cartoon / comic look: flatten colours + bold dark outlines.
+
+    Uses OpenCV when available (bilateral colour flattening + adaptive-threshold
+    edges). Falls back to a high-saturation/contrast PIL approximation."""
+    try:
+        import cv2  # type: ignore[import-untyped]
+        import numpy as np
+
+        rgb = np.array(im.convert("RGB"))
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+        # Flatten colour regions while keeping edges crisp.
+        color = bgr
+        for _ in range(2):
+            color = cv2.bilateralFilter(color, 9, 75, 75)
+        # Posterise to a handful of tones per channel for the "cel" look.
+        color = (color // 32) * 32 + 16
+
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        gray = cv2.medianBlur(gray, 5)
+        edges = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9
+        )
+        edges_bgr = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+        out = cv2.bitwise_and(color, edges_bgr)
+        out_rgb = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_BGR2RGB)
+        return Image.fromarray(out_rgb)
+    except Exception:
+        out = ImageEnhance.Color(im.convert("RGB")).enhance(1.6)
+        return ImageEnhance.Contrast(out).enhance(1.5)
+
+
+def _pencil(im: Image.Image) -> Image.Image:
+    """Pencil / line-drawing sketch (grayscale dodge technique).
+
+    Sketch = gray dodged by a blurred inverse of itself — the classic
+    "colour dodge" pencil effect. PIL-only so it always works."""
+    try:
+        gray = ImageOps.grayscale(im)
+        inv = ImageOps.invert(gray)
+        blur = inv.filter(ImageFilter.GaussianBlur(radius=max(2, gray.size[0] // 120)))
+
+        from PIL import ImageChops
+
+        # Colour-dodge: result = base / (255 - blur)
+        import numpy as np
+
+        g = np.asarray(gray, dtype=np.float32)
+        b = np.asarray(blur, dtype=np.float32)
+        denom = 255.0 - b
+        denom[denom <= 0] = 1.0
+        dodge = np.clip(g * 255.0 / denom, 0, 255).astype("uint8")
+        sketch = Image.fromarray(dodge, mode="L")
+        # Slight contrast lift so the lines read clearly.
+        sketch = ImageEnhance.Contrast(sketch).enhance(1.15)
+        _ = ImageChops  # imported for parity / future blends
+        return sketch.convert("RGB")
+    except Exception:
+        return ImageOps.grayscale(im).convert("RGB")
+
+
 _FILTERS: dict[FilterId, Callable[[Image.Image], Image.Image]] = {
     "none": lambda im: im,
     "bw": _bw,
@@ -110,6 +172,8 @@ _FILTERS: dict[FilterId, Callable[[Image.Image], Image.Image]] = {
     "aden": _aden,
     "moon": _moon,
     "invert": _invert,
+    "cartoon": _cartoon,
+    "pencil": _pencil,
 }
 
 

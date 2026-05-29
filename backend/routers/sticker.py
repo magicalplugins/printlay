@@ -27,12 +27,14 @@ router = APIRouter(prefix="/api/sticker", tags=["sticker"])
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
-# Cap heavy image-processing work per machine so we don't OOM under burst load.
-# Sticker processing peaks at ~300-400MB of transient memory per request; with
-# 2GB total RAM we can comfortably run 3 in parallel and leave headroom for
-# FastAPI baseline + DB connections. Fly auto-scales additional machines once
-# the configured request concurrency limit is reached.
-_MAX_CONCURRENT_HEAVY_JOBS = 3
+# Cap heavy image-processing work per machine. Each job is CPU-bound (OpenCV /
+# Pillow / NumPy), so running several at once on a shared-cpu-2x machine pegs
+# the CPU and starves the /api/health handler — the health check then fails and
+# the Fly proxy drops ALL traffic (Cloudflare 524). Limiting to 2 keeps a slice
+# of CPU free for health checks and other requests while still allowing some
+# parallelism. Fly auto-scales additional machines once the configured request
+# concurrency limit is reached.
+_MAX_CONCURRENT_HEAVY_JOBS = 2
 _heavy_job_semaphore = threading.BoundedSemaphore(_MAX_CONCURRENT_HEAVY_JOBS)
 
 
@@ -256,6 +258,7 @@ def process_sticker(
         "height_pt": result.cutline.height_pt,
         "width_mm": result.width_mm,
         "height_mm": result.height_mm,
+        "work_dpi": result.work_dpi,
     }
     storage.put_bytes(
         f"{prefix}/cutline.json",
@@ -321,6 +324,16 @@ def regenerate_sticker(
             "Sticker session expired. Please re-upload to change the cut line.",
         )
 
+    # Reuse the DPI the cutout was processed at (it's already resolution-capped)
+    # so changing the cut line keeps the sticker the same physical size.
+    import json
+    work_dpi = 300.0
+    try:
+        meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
+        work_dpi = float(meta.get("work_dpi", 300.0))
+    except Exception:
+        work_dpi = 300.0
+
     mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face") else "contour"
     precision = body.cutline_precision if body.cutline_precision in ("tight", "medium") else "medium"
 
@@ -333,6 +346,7 @@ def regenerate_sticker(
                 cutout_bytes=cutout,
                 border_width_mm=body.border_width_mm,
                 bleed_mm=body.bleed_mm,
+                dpi=work_dpi,
                 cutline_mode=mode,
                 cutline_precision=precision,
                 filter_id=body.filter_id,
@@ -350,7 +364,6 @@ def regenerate_sticker(
     storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")
     storage.put_bytes(f"{prefix}/border.png", result.border_png, "image/png")
 
-    import json
     cutline_payload = {
         "points_px": [list(p) for p in result.cutline.points_px],
         "points_pt": [list(p) for p in result.cutline.points_pt],
@@ -360,6 +373,7 @@ def regenerate_sticker(
         "height_pt": result.cutline.height_pt,
         "width_mm": result.width_mm,
         "height_mm": result.height_mm,
+        "work_dpi": result.work_dpi,
     }
     storage.put_bytes(
         f"{prefix}/cutline.json",

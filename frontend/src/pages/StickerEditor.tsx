@@ -401,33 +401,6 @@ function ModeCard({
   );
 }
 
-function PrecisionCard({
-  active,
-  onClick,
-  title,
-  desc,
-}: {
-  active: boolean;
-  onClick: () => void;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`text-left rounded-xl border p-4 transition ${
-        active
-          ? "border-violet-500 bg-violet-500/10"
-          : "border-neutral-800 hover:border-neutral-600"
-      }`}
-    >
-      <div className="text-sm font-semibold">{title}</div>
-      <div className="text-xs text-neutral-500 mt-0.5">{desc}</div>
-    </button>
-  );
-}
-
 function BeautifySlider({
   label,
   value,
@@ -729,24 +702,6 @@ function PreviewState({
               Keeps the same shape but pulls the cut line closer to (or into) the
               subject.
             </p>
-          </div>
-
-          <div>
-            <div className="text-xs text-neutral-400 mb-2">Cut around</div>
-            <div className="grid grid-cols-2 gap-3">
-              <PrecisionCard
-                active={mode === "contour"}
-                onClick={() => !regenerating && onApply({ mode: "contour" })}
-                title="Whole subject"
-                desc="Body and head"
-              />
-              <PrecisionCard
-                active={mode === "face"}
-                onClick={() => !regenerating && onApply({ mode: "face" })}
-                title="Face only"
-                desc="Chin up to the hair"
-              />
-            </div>
           </div>
 
           <div>

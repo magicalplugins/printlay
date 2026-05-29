@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   ProcessResponse,
@@ -6,6 +6,7 @@ import {
   regenerateSticker,
   saveSticker,
 } from "../api/sticker";
+import { Category, createCategory, listCategories } from "../api/catalogue";
 
 type Step = "upload" | "options" | "processing" | "preview" | "saving" | "done";
 type CutlineMode = "contour" | "rectangle" | "face";
@@ -24,10 +25,25 @@ export default function StickerEditor() {
   const [cutlineMode, setCutlineMode] = useState<CutlineMode>("contour");
   const [precision, setPrecision] = useState<Precision>("medium");
 
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [stickerName, setStickerName] = useState<string>("");
+
+  useEffect(() => {
+    listCategories()
+      .then((cats) => {
+        // Owned categories only (not read-only official subscriptions).
+        const owned = cats.filter((c) => !c.is_official || !c.subscribed);
+        setCategories(owned);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleFile = useCallback((f: File) => {
     setFile(f);
     setError(null);
     setPreview(URL.createObjectURL(f));
+    setStickerName(f.name?.replace(/\.[^.]+$/, "") || "Sticker");
     setStep("options");
   }, []);
 
@@ -86,14 +102,25 @@ export default function StickerEditor() {
     if (!result) return;
     setStep("saving");
     try {
-      const name = file?.name?.replace(/\.[^.]+$/, "") || "Sticker";
-      await saveSticker(result.session_id, name);
+      const name = stickerName.trim() || "Sticker";
+      await saveSticker(result.session_id, name, categoryId);
       setStep("done");
     } catch (e: any) {
-      setError(e?.body?.detail || "Save failed.");
+      setError(
+        typeof e?.body?.detail === "string"
+          ? e.body.detail
+          : e?.body?.detail?.message || "Save failed."
+      );
       setStep("preview");
     }
-  }, [result, file]);
+  }, [result, stickerName, categoryId]);
+
+  const handleCreateCategory = useCallback(async (name: string) => {
+    const cat = await createCategory(name);
+    setCategories((prev) => [...prev, cat]);
+    setCategoryId(cat.id);
+    return cat;
+  }, []);
 
   const reset = useCallback(() => {
     setStep("upload");
@@ -158,6 +185,12 @@ export default function StickerEditor() {
           precision={precision}
           regenerating={regenerating}
           onRegenerate={handleRegenerate}
+          categories={categories}
+          categoryId={categoryId}
+          setCategoryId={setCategoryId}
+          stickerName={stickerName}
+          setStickerName={setStickerName}
+          onCreateCategory={handleCreateCategory}
           onApprove={handleSave}
           onRetry={reset}
         />
@@ -427,6 +460,12 @@ function PreviewState({
   precision,
   regenerating,
   onRegenerate,
+  categories,
+  categoryId,
+  setCategoryId,
+  stickerName,
+  setStickerName,
+  onCreateCategory,
   onApprove,
   onRetry,
 }: {
@@ -435,9 +474,33 @@ function PreviewState({
   precision: Precision;
   regenerating: boolean;
   onRegenerate: (mode: CutlineMode, precision: Precision) => void;
+  categories: Category[];
+  categoryId: string | null;
+  setCategoryId: (id: string | null) => void;
+  stickerName: string;
+  setStickerName: (n: string) => void;
+  onCreateCategory: (name: string) => Promise<Category>;
   onApprove: () => void;
   onRetry: () => void;
 }) {
+  const [creatingCat, setCreatingCat] = useState(false);
+  const [newCatName, setNewCatName] = useState("");
+  const [catBusy, setCatBusy] = useState(false);
+
+  async function handleCreate() {
+    if (!newCatName.trim()) return;
+    setCatBusy(true);
+    try {
+      await onCreateCategory(newCatName.trim());
+      setNewCatName("");
+      setCreatingCat(false);
+    } catch {
+      /* surfaced by parent on save */
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 p-6 sm:p-8">
@@ -534,6 +597,84 @@ function PreviewState({
           </p>
         </fieldset>
       )}
+
+      {/* Save destination */}
+      <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
+        <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+          Save to catalogue
+        </legend>
+
+        <div>
+          <label className="block text-xs text-neutral-400 mb-1">Name</label>
+          <input
+            type="text"
+            value={stickerName}
+            onChange={(e) => setStickerName(e.target.value)}
+            placeholder="Sticker name"
+            className="w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-neutral-400 mb-1">Catalogue</label>
+          {!creatingCat ? (
+            <div className="flex gap-2">
+              <select
+                value={categoryId ?? ""}
+                onChange={(e) => setCategoryId(e.target.value || null)}
+                className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+              >
+                <option value="">Stickers (default)</option>
+                {categories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setCreatingCat(true)}
+                className="rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-300 hover:border-neutral-500 whitespace-nowrap"
+              >
+                + New
+              </button>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newCatName}
+                autoFocus
+                onChange={(e) => setNewCatName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleCreate();
+                  if (e.key === "Escape") setCreatingCat(false);
+                }}
+                placeholder="New catalogue name"
+                className="flex-1 rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+              />
+              <button
+                type="button"
+                onClick={handleCreate}
+                disabled={catBusy || !newCatName.trim()}
+                className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-neutral-950 disabled:opacity-40 whitespace-nowrap"
+              >
+                {catBusy ? "..." : "Create"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreatingCat(false)}
+                className="rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-400 hover:border-neutral-500"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+          <p className="text-[11px] text-neutral-500 mt-1.5">
+            We&apos;ll create a &quot;Stickers&quot; catalogue automatically if you don&apos;t pick one.
+          </p>
+        </div>
+      </fieldset>
 
       <div className="flex flex-col sm:flex-row gap-3">
         <button

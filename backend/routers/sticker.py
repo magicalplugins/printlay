@@ -333,6 +333,42 @@ class SaveRequest(BaseModel):
     session_id: str
     name: str = "Sticker"
     include_cut_contour: bool = True
+    category_id: str | None = None
+
+
+def _resolve_sticker_category(db: Session, user_id: uuid.UUID, category_id: str | None):
+    """Resolve the catalogue category to save a sticker into.
+
+    - If `category_id` is given, validate it belongs to the user.
+    - Otherwise find-or-create a "Stickers" category so the asset always
+      satisfies the `ck_assets_category_or_job` constraint.
+    """
+    from backend.models import AssetCategory
+
+    if category_id:
+        try:
+            cat_uuid = uuid.UUID(category_id)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Invalid category id")
+        cat = (
+            db.query(AssetCategory)
+            .filter(AssetCategory.id == cat_uuid, AssetCategory.user_id == user_id)
+            .one_or_none()
+        )
+        if cat is None:
+            raise HTTPException(404, "Category not found")
+        return cat
+
+    cat = (
+        db.query(AssetCategory)
+        .filter(AssetCategory.user_id == user_id, AssetCategory.name == "Stickers")
+        .first()
+    )
+    if cat is None:
+        cat = AssetCategory(user_id=user_id, name="Stickers")
+        db.add(cat)
+        db.flush()
+    return cat
 
 
 class SaveResponse(BaseModel):
@@ -400,6 +436,9 @@ def save_sticker(
             )
 
     from backend.models import Asset
+
+    category = _resolve_sticker_category(db, user.id, body.category_id)
+
     asset_id = uuid.uuid4()
     r2_key = f"assets/{user.id}/{asset_id}.pdf"
     thumb_key = f"assets/{user.id}/{asset_id}_thumb.jpg"
@@ -410,6 +449,7 @@ def save_sticker(
     asset = Asset(
         id=asset_id,
         user_id=user.id,
+        category_id=category.id,
         name=body.name,
         kind="pdf",
         width_pt=saved.width_pt,

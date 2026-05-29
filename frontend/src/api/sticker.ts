@@ -64,6 +64,7 @@ export async function regenerateSticker(
 export async function saveSticker(
   sessionId: string,
   name: string = "Sticker",
+  categoryId?: string | null,
   includeCutContour: boolean = true
 ): Promise<SaveResponse> {
   return api<SaveResponse>("/api/sticker/save", {
@@ -71,6 +72,7 @@ export async function saveSticker(
     body: JSON.stringify({
       session_id: sessionId,
       name,
+      category_id: categoryId ?? null,
       include_cut_contour: includeCutContour,
     }),
   });

@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,6 +71,12 @@ class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     """Mirrors `category.is_official`. Denormalised here so we can filter
     assets without joining the category row on hot paths."""
+
+    cut_contour_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    """For stickers: the custom cut line as a JSON list of normalised
+    [x, y] points (0..1, top-left origin) in the asset's own coordinate
+    space. Lets the Sheet Builder draw/export the real contour instead of
+    a bounding rectangle. Null for non-sticker assets (fall back to rect)."""
 
 
 class CatalogueSubscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):

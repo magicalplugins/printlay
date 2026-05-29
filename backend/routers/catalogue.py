@@ -30,6 +30,22 @@ router = APIRouter(prefix="/api", tags=["catalogue"])
 MAX_BUNDLE_BYTES = 200 * 1024 * 1024
 
 
+def _asset_cut_contour(a: Asset) -> list[list[float]] | None:
+    """Parse the stored sticker cut-line contour (normalised points) if any."""
+    raw = getattr(a, "cut_contour_json", None)
+    if not raw:
+        return None
+    try:
+        import json
+
+        pts = json.loads(raw)
+        if isinstance(pts, list) and len(pts) >= 3:
+            return [[float(p[0]), float(p[1])] for p in pts]
+    except Exception:
+        return None
+    return None
+
+
 def _asset_urls(a: Asset) -> tuple[str | None, str | None]:
     """Return (thumbnail_url, preview_url) for an asset.
 
@@ -266,6 +282,7 @@ def list_assets(
                 created_at=r.created_at,
                 is_official=r.is_official,
                 page_count=max(1, int(getattr(r, "page_count", 1) or 1)),
+                cut_contour=_asset_cut_contour(r),
             )
         )
     return out
@@ -398,6 +415,7 @@ async def upload_asset(
         created_at=asset.created_at,
         is_official=asset.is_official,
         page_count=max(1, int(getattr(asset, "page_count", 1) or 1)),
+        cut_contour=_asset_cut_contour(asset),
     )
 
 

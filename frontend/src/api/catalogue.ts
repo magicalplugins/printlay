@@ -23,6 +23,9 @@ export type Asset = {
   preview_url: string | null;
   created_at: string;
   is_official?: boolean;
+  /** For stickers: custom cut line as normalised [x, y] points (0..1,
+   *  top-left origin) in the asset's own space. Null = use bounding box. */
+  cut_contour?: number[][] | null;
 };
 
 export type AssetPageThumbnail = {

@@ -798,6 +798,21 @@ def save_sticker(
 
     category = _resolve_sticker_category(db, user.id, body.category_id)
 
+    # Persist the custom cut line as normalised points (0..1, top-left) so the
+    # Sheet Builder can draw/export the real contour instead of a rectangle.
+    cut_contour_json: str | None = None
+    if body.include_cut_contour:
+        try:
+            norm = _normalised_points(
+                [tuple(p) for p in cutline_payload["points_px"]],
+                int(cutline_payload["width_px"]),
+                int(cutline_payload["height_px"]),
+            )
+            if len(norm) >= 3:
+                cut_contour_json = json.dumps([list(p) for p in norm])
+        except Exception:
+            cut_contour_json = None
+
     asset_id = uuid.uuid4()
     r2_key = f"assets/{user.id}/{asset_id}.pdf"
     thumb_key = f"assets/{user.id}/{asset_id}_thumb.jpg"
@@ -816,6 +831,7 @@ def save_sticker(
         r2_key=r2_key,
         thumbnail_r2_key=thumb_key,
         file_size=len(saved.pdf_bytes),
+        cut_contour_json=cut_contour_json,
     )
     db.add(asset)
     try:

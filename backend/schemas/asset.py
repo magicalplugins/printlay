@@ -45,3 +45,7 @@ class AssetOut(BaseModel):
     `thumbnail_url` for the designer/filler displays."""
     created_at: datetime
     is_official: bool = False
+    cut_contour: list[list[float]] | None = None
+    """For stickers: the custom cut line as normalised [x, y] points
+    (0..1, top-left origin). Lets the Sheet Builder draw the real contour
+    instead of a bounding box. Null for assets without a stored contour."""

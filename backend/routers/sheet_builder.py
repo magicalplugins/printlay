@@ -525,6 +525,47 @@ def export_sheet_pdf(
     )
 
 
+def _parse_cut_contour(raw: str | None) -> list[tuple[float, float]] | None:
+    """Parse a stored sticker contour (normalised 0..1 points) → list of
+    (x, y) tuples, or None if absent/invalid."""
+    if not raw:
+        return None
+    try:
+        import json
+
+        pts = json.loads(raw)
+        if isinstance(pts, list) and len(pts) >= 3:
+            return [(float(p[0]), float(p[1])) for p in pts]
+    except Exception:
+        return None
+    return None
+
+
+def _rotate_norm_point(
+    nx: float,
+    ny: float,
+    uw: float,
+    uh: float,
+    rotation: int,
+    x0: float,
+    y0: float,
+) -> tuple[float, float]:
+    """Map a normalised (0..1) contour point in the sticker's own space to
+    absolute sheet mm, applying the placement rotation (clockwise) and the
+    top-left offset (x0, y0). `uw`/`uh` are the unrotated placed size in mm."""
+    lx = nx * uw
+    ly = ny * uh
+    if rotation == 90:
+        rx, ry = uh - ly, lx
+    elif rotation == 180:
+        rx, ry = uw - lx, uh - ly
+    elif rotation == 270:
+        rx, ry = ly, uw - lx
+    else:
+        rx, ry = lx, ly
+    return x0 + rx, y0 + ry
+
+
 # ---------- Export SVG (cut lines only) ----------
 
 
@@ -580,7 +621,9 @@ def export_sheet_svg(
                     f'fill="none" stroke="{subsheet_stroke}" stroke-width="0.1"/>'
                 )
 
-    # --- Cut lines (one rect per placement) ---
+    # --- Cut lines (one closed path per placement) ---
+    # If the sticker carries a custom contour (face/contour cut), trace that;
+    # otherwise fall back to the bounding rectangle.
     for p in sheet.placements:
         asset = asset_map.get(p["asset_id"])
         if not asset:
@@ -589,22 +632,31 @@ def export_sheet_svg(
         sh_mm = asset.height_pt / (72.0 / 25.4)
         scale = float(p.get("scale", 1.0))
         rotation = int(p.get("rotation_deg", 0))
-
-        if rotation in (90, 270):
-            pw, ph = sh_mm * scale, sw_mm * scale
-        else:
-            pw, ph = sw_mm * scale, sh_mm * scale
-
-        # Single continuous closed path per sticker (optimised for cutters).
         x0 = p["x_mm"]
         y0 = p["y_mm"]
-        elements.append(
-            f'  <path d="M {x0:.2f} {y0:.2f} '
-            f'L {x0 + pw:.2f} {y0:.2f} '
-            f'L {x0 + pw:.2f} {y0 + ph:.2f} '
-            f'L {x0:.2f} {y0 + ph:.2f} Z" '
-            f'fill="none" stroke="{cut_stroke}" stroke-width="0.1"/>'
-        )
+
+        uw, uh = sw_mm * scale, sh_mm * scale  # unrotated placed size (mm)
+        contour = _parse_cut_contour(getattr(asset, "cut_contour_json", None))
+
+        if contour:
+            pts = [
+                _rotate_norm_point(nx, ny, uw, uh, rotation, x0, y0)
+                for nx, ny in contour
+            ]
+            d = "M " + " L ".join(f"{px:.2f} {py:.2f}" for px, py in pts) + " Z"
+            elements.append(
+                f'  <path d="{d}" fill="none" '
+                f'stroke="{cut_stroke}" stroke-width="0.1"/>'
+            )
+        else:
+            pw, ph = (uh, uw) if rotation in (90, 270) else (uw, uh)
+            elements.append(
+                f'  <path d="M {x0:.2f} {y0:.2f} '
+                f'L {x0 + pw:.2f} {y0:.2f} '
+                f'L {x0 + pw:.2f} {y0 + ph:.2f} '
+                f'L {x0:.2f} {y0 + ph:.2f} Z" '
+                f'fill="none" stroke="{cut_stroke}" stroke-width="0.1"/>'
+            )
 
     # --- Crop marks at sub-sheet corners ---
     if sheet.show_crop_marks and sub_size:

@@ -195,21 +195,60 @@ export default function SheetBuilder() {
           ctx.fillRect(px, py, rw, rh);
         }
 
-        // Sticker border (uses cut line spot colour)
+        // Cut line (uses cut line spot colour). If the sticker has a custom
+        // contour (face/contour cut) we trace it; otherwise fall back to the
+        // bounding rectangle.
         const cutColor = spotDisplayColor(
           activeSheet.spot_color_cutlines ?? "CutContour",
           userSpots
         );
-        ctx.strokeStyle = cutColor;
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(px, py, rw, rh);
+        const contour = asset?.cut_contour;
+        if (contour && contour.length >= 3) {
+          // Map a normalised (0..1) point in the sticker's own space to
+          // canvas px, applying placement rotation (clockwise) + offset.
+          const toXY = (nx: number, ny: number): [number, number] => {
+            const lx = nx * pw;
+            const ly = ny * ph;
+            let rx: number, ry: number;
+            if (p.rotation_deg === 90) {
+              rx = ph - ly;
+              ry = lx;
+            } else if (p.rotation_deg === 180) {
+              rx = pw - lx;
+              ry = ph - ly;
+            } else if (p.rotation_deg === 270) {
+              rx = ly;
+              ry = pw - lx;
+            } else {
+              rx = lx;
+              ry = ly;
+            }
+            return [px + rx, py + ry];
+          };
+          ctx.beginPath();
+          const [sx, sy] = toXY(contour[0][0], contour[0][1]);
+          ctx.moveTo(sx, sy);
+          for (let i = 1; i < contour.length; i++) {
+            const [X, Y] = toXY(contour[i][0], contour[i][1]);
+            ctx.lineTo(X, Y);
+          }
+          ctx.closePath();
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = cutColor;
+          ctx.lineWidth = 0.8;
+          ctx.stroke();
+          ctx.setLineDash([]);
+        } else {
+          ctx.strokeStyle = cutColor;
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(px, py, rw, rh);
 
-        // Dashed cut line
-        ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = cutColor;
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(px - 1, py - 1, rw + 2, rh + 2);
-        ctx.setLineDash([]);
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = cutColor;
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(px - 1, py - 1, rw + 2, rh + 2);
+          ctx.setLineDash([]);
+        }
       }
     }
 

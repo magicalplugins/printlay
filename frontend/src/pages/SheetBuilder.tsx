@@ -283,6 +283,7 @@ export default function SheetBuilder() {
     if (!activeSheet) return;
     setExporting(true);
     try {
+      await updateSheet(activeSheet.id, activeSheet);
       const blob = await exportSheetPdf(activeSheet.id);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

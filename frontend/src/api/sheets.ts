@@ -118,16 +118,28 @@ export function autoLayout(
   });
 }
 
-export function exportSheetPdf(sheetId: string): Promise<Blob> {
-  return api<Blob>(`/api/sheets/${sheetId}/export`, {
-    method: "POST",
-    headers: { Accept: "application/pdf" },
-  });
+export async function exportSheetPdf(sheetId: string): Promise<Blob> {
+  const { getSupabase } = await import("../auth/supabase");
+  const supabase = await getSupabase().catch(() => null);
+  const headers: Record<string, string> = { Accept: "application/pdf" };
+  if (supabase) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
+  }
+  const res = await fetch(`/api/sheets/${sheetId}/export`, { method: "POST", headers });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  return res.blob();
 }
 
-export function exportSheetSvg(sheetId: string): Promise<Blob> {
-  return api<Blob>(`/api/sheets/${sheetId}/export-svg`, {
-    method: "POST",
-    headers: { Accept: "image/svg+xml" },
-  });
+export async function exportSheetSvg(sheetId: string): Promise<Blob> {
+  const { getSupabase } = await import("../auth/supabase");
+  const supabase = await getSupabase().catch(() => null);
+  const headers: Record<string, string> = { Accept: "image/svg+xml" };
+  if (supabase) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
+  }
+  const res = await fetch(`/api/sheets/${sheetId}/export-svg`, { method: "POST", headers });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  return res.blob();
 }

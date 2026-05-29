@@ -51,6 +51,15 @@ STYLE_PROMPTS: dict[str, str] = {
         "brush edges, light pastel palette. Keep the same pose, framing and likeness. "
         "Fully transparent background outside the painting."
     ),
+    "caricature": (
+        "Draw this person as a funny, exaggerated caricature in the style of a "
+        "professional cartoon caricature artist. Comically enlarge the head and "
+        "playfully exaggerate their most distinctive facial features — eyes, nose, "
+        "smile, ears, chin, hairstyle — while keeping them clearly recognisable and "
+        "flattering, never mean. Big expressive grin, lively eyes, bold smooth "
+        "outlines, bright cel-shaded colours, slightly small cartoon body. "
+        "Fun sticker look. Fully transparent background."
+    ),
 }
 
 STYLE_LABELS: dict[str, str] = {
@@ -59,7 +68,15 @@ STYLE_LABELS: dict[str, str] = {
     "anime": "Anime",
     "popart": "Pop art",
     "watercolor": "Watercolour",
+    "caricature": "Caricature",
 }
+
+# Wrapper applied to a user's free-text custom prompt so the result still
+# behaves like a sticker (keeps likeness, transparent background).
+_CUSTOM_WRAP = (
+    "{prompt}. Keep the same person clearly recognisable and keep the same pose "
+    "and framing. Sticker look. Fully transparent background outside the subject."
+)
 
 
 def available_styles() -> list[dict[str, str]]:
@@ -78,15 +95,29 @@ def _pick_size(width: int, height: int) -> str:
     return "1024x1024"
 
 
-def stylize_image(image_bytes: bytes, style: str, api_key: str) -> bytes:
+def stylize_image(
+    image_bytes: bytes,
+    style: str,
+    api_key: str,
+    custom_prompt: str | None = None,
+) -> bytes:
     """Stylize `image_bytes` (PNG/RGBA) into `style` via OpenAI. Returns the
     generated PNG bytes (RGBA, transparent background).
 
+    When `style == "custom"`, `custom_prompt` is used (wrapped with sticker
+    constraints) instead of a preset.
+
     Raises RuntimeError with a user-readable message on any failure.
     """
-    prompt = STYLE_PROMPTS.get(style)
-    if not prompt:
-        raise RuntimeError(f"Unknown AI style: {style}")
+    if style == "custom":
+        text = (custom_prompt or "").strip()
+        if not text:
+            raise RuntimeError("Enter a description for your custom AI style.")
+        prompt = _CUSTOM_WRAP.format(prompt=text[:500])
+    else:
+        prompt = STYLE_PROMPTS.get(style)
+        if not prompt:
+            raise RuntimeError(f"Unknown AI style: {style}")
     if not api_key:
         raise RuntimeError("No OpenAI API key configured.")
 

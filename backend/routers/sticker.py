@@ -404,6 +404,7 @@ def regenerate_sticker(
 class AIStyleRequest(BaseModel):
     session_id: str
     style: str = "cartoon"
+    custom_prompt: str | None = None
     border_width_mm: float = 2.0
     bleed_mm: float = 3.0
     cutline_mode: str = "contour"
@@ -450,7 +451,10 @@ def ai_style_sticker(
     if not ent.allows("sticker_editor"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
 
-    if body.style not in ai_stylize.STYLE_PROMPTS:
+    if body.style == "custom":
+        if not (body.custom_prompt or "").strip():
+            raise HTTPException(400, "Enter a description for your custom AI style.")
+    elif body.style not in ai_stylize.STYLE_PROMPTS:
         raise HTTPException(400, f"Unknown AI style: {body.style}")
 
     api_key = secrets_store.decrypt_value(user.openai_api_key_enc)
@@ -485,7 +489,9 @@ def ai_style_sticker(
     # The OpenAI call is network-bound (tens of seconds) — keep it OUT of the
     # CPU heavy-job slot so it doesn't block other stickers.
     try:
-        stylized = ai_stylize.stylize_image(cutout, body.style, api_key)
+        stylized = ai_stylize.stylize_image(
+            cutout, body.style, api_key, custom_prompt=body.custom_prompt
+        )
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     except Exception as exc:  # pragma: no cover - defensive

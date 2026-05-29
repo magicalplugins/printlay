@@ -81,6 +81,7 @@ export async function regenerateSticker(
  *  on the user's own OpenAI key (set in Settings → Preferences). */
 export const AI_STYLES: { id: string; label: string; blurb: string }[] = [
   { id: "cartoon", label: "Cartoon", blurb: "Clean cartoon illustration" },
+  { id: "caricature", label: "Caricature", blurb: "Funny exaggerated features" },
   { id: "pencil", label: "Pencil", blurb: "Hand-drawn pencil sketch" },
   { id: "anime", label: "Anime", blurb: "Anime / manga style" },
   { id: "popart", label: "Pop art", blurb: "Bold comic-book look" },
@@ -92,13 +93,15 @@ export async function aiStyleSticker(
   style: string,
   borderWidthMm: number = 2.0,
   bleedMm: number = 3.0,
-  cutlineMode: string = "contour"
+  cutlineMode: string = "contour",
+  customPrompt?: string
 ): Promise<ProcessResponse> {
   return api<ProcessResponse>("/api/sticker/ai-style", {
     method: "POST",
     body: JSON.stringify({
       session_id: sessionId,
       style,
+      custom_prompt: customPrompt ?? null,
       border_width_mm: borderWidthMm,
       bleed_mm: bleedMm,
       cutline_mode: cutlineMode,

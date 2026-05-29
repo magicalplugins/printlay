@@ -155,7 +155,7 @@ export default function StickerEditor() {
   const [aiStyling, setAiStyling] = useState<string | null>(null);
 
   const handleAiStyle = useCallback(
-    async (style: string) => {
+    async (style: string, customPrompt?: string) => {
       if (!result) return;
       setAiStyling(style);
       setError(null);
@@ -166,7 +166,8 @@ export default function StickerEditor() {
           style,
           border,
           3.0,
-          cutlineMode
+          cutlineMode,
+          customPrompt
         );
         setResult(res);
         setFilterId("none");
@@ -601,7 +602,7 @@ function PreviewState({
   onEditApply: (points: [number, number][]) => Promise<void>;
   aiKeySet: boolean;
   aiStyling: string | null;
-  onAiStyle: (style: string) => void;
+  onAiStyle: (style: string, customPrompt?: string) => void;
   onAddKey: () => void;
   categories: Category[];
   categoryId: string | null;
@@ -618,6 +619,7 @@ function PreviewState({
   const [editing, setEditing] = useState(false);
   const [tightenLocal, setTightenLocal] = useState(tighten);
   const [beautyLocal, setBeautyLocal] = useState<Beautify>(beautify);
+  const [customPrompt, setCustomPrompt] = useState("");
 
   useEffect(() => {
     setTightenLocal(tighten);
@@ -832,6 +834,40 @@ function PreviewState({
                   );
                 })}
               </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="block text-[11px] uppercase tracking-widest text-neutral-500">
+                  Custom style
+                </label>
+                <textarea
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  disabled={!!aiStyling || regenerating}
+                  rows={2}
+                  maxLength={500}
+                  placeholder="Describe any look, e.g. “1980s retro synthwave portrait with neon glow”"
+                  className="w-full resize-none rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder:text-neutral-600 focus:border-violet-500 focus:outline-none disabled:opacity-50"
+                />
+                <button
+                  type="button"
+                  disabled={!!aiStyling || regenerating || !customPrompt.trim()}
+                  onClick={() => onAiStyle("custom", customPrompt.trim())}
+                  className="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-500 disabled:opacity-40"
+                >
+                  {aiStyling === "custom" ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Generating…
+                    </>
+                  ) : (
+                    "Generate custom style"
+                  )}
+                </button>
+              </div>
+
               <p className="text-[11px] text-neutral-500">
                 {aiStyling
                   ? "Generating your AI style — this can take 20–40 seconds."

@@ -55,6 +55,10 @@ def process_sticker(
     cutline_mode: CutlineMode = "contour",
     cutline_precision: CutlinePrecision = "medium",
     bleed_mm: float = 3.0,
+    filter_id: str = "none",
+    beautify_smooth: float = 0.0,
+    beautify_eyes: float = 0.0,
+    beautify_tone: float = 0.0,
 ) -> StickerProcessResult:
     """Process an uploaded image into a sticker with cutline.
 
@@ -81,12 +85,22 @@ def process_sticker(
             rgba_bytes = remove_background(image_bytes, method="ai_basic")
             used_method = "ai_basic"
 
-    # The bg-removed (or original, for rectangle) RGBA — cached for cheap
-    # cut-line regeneration without re-spending AI credits.
+    # The bg-removed (or original, for rectangle) RGBA — cached UNFILTERED for
+    # cheap cut-line + look regeneration without re-spending AI credits.
     cutout_bytes = rgba_bytes
 
-    cutline = generate_cutline(
+    from backend.services.beautify import apply_sticker_look
+
+    look_bytes = apply_sticker_look(
         rgba_bytes,
+        filter_id=filter_id,
+        smooth=beautify_smooth,
+        eyes=beautify_eyes,
+        tone=beautify_tone,
+    )
+
+    cutline = generate_cutline(
+        look_bytes,
         border_width_mm=border_width_mm,
         border_color=border_color,
         dpi=dpi,
@@ -120,14 +134,29 @@ def regenerate_cutline(
     cutline_mode: CutlineMode = "contour",
     cutline_precision: CutlinePrecision = "medium",
     bleed_mm: float = 3.0,
+    filter_id: str = "none",
+    beautify_smooth: float = 0.0,
+    beautify_eyes: float = 0.0,
+    beautify_tone: float = 0.0,
 ) -> StickerProcessResult:
-    """Re-run only the cut-line step on an already background-removed image.
+    """Re-run the look (filter/beautify) + cut-line step on an already
+    background-removed image.
 
-    Used by the preview screen to switch precision/mode/face sticker without
-    re-running (and re-charging for) background removal.
+    Used by the preview screen to change precision/mode/tighten/photo filters
+    without re-running (and re-charging for) background removal.
     """
-    cutline = generate_cutline(
+    from backend.services.beautify import apply_sticker_look
+
+    look_bytes = apply_sticker_look(
         cutout_bytes,
+        filter_id=filter_id,
+        smooth=beautify_smooth,
+        eyes=beautify_eyes,
+        tone=beautify_tone,
+    )
+
+    cutline = generate_cutline(
+        look_bytes,
         border_width_mm=border_width_mm,
         border_color=border_color,
         dpi=dpi,

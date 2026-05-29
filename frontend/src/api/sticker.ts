@@ -3,6 +3,7 @@ import { api } from "./client";
 export interface ProcessResponse {
   preview_url: string;
   border_url: string;
+  cutout_url?: string;
   width_mm: number;
   height_mm: number;
   bg_type: string;
@@ -22,6 +23,13 @@ export interface UsageResponse {
   used: number;
   limit: number | null;
   plan: string;
+}
+
+export interface StickerLook {
+  filterId?: string;
+  beautifySmooth?: number; // 0..1
+  beautifyEyes?: number; // 0..1
+  beautifyTone?: number; // 0..1
 }
 
 export async function processSticker(
@@ -50,7 +58,8 @@ export async function regenerateSticker(
   cutlineMode: string,
   cutlinePrecision: string,
   borderWidthMm: number = 2.0,
-  bleedMm: number = 3.0
+  bleedMm: number = 3.0,
+  look: StickerLook = {}
 ): Promise<ProcessResponse> {
   return api<ProcessResponse>("/api/sticker/regenerate", {
     method: "POST",
@@ -60,6 +69,10 @@ export async function regenerateSticker(
       cutline_precision: cutlinePrecision,
       border_width_mm: borderWidthMm,
       bleed_mm: bleedMm,
+      filter_id: look.filterId ?? "none",
+      beautify_smooth: look.beautifySmooth ?? 0,
+      beautify_eyes: look.beautifyEyes ?? 0,
+      beautify_tone: look.beautifyTone ?? 0,
     }),
   });
 }

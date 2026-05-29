@@ -99,6 +99,9 @@ def _increment_usage(db: Session, user_id: uuid.UUID) -> int:
 class ProcessResponse(BaseModel):
     preview_url: str
     border_url: str
+    # Unfiltered background-removed cutout — used by the frontend to preview
+    # photo filters without double-applying onto the already-baked border.
+    cutout_url: str = ""
     width_mm: float
     height_mm: float
     bg_type: str
@@ -110,6 +113,13 @@ class ProcessResponse(BaseModel):
     cutline_points: list[list[float]] = []
     img_w_px: int = 0
     img_h_px: int = 0
+
+
+def _safe_presigned(key: str) -> str:
+    try:
+        return storage.presigned_get(key)
+    except Exception:
+        return ""
 
 
 def _normalised_points(
@@ -135,6 +145,10 @@ def process_sticker(
     bleed_mm: float = Form(3.0),
     cutline_mode: str = Form("contour"),
     cutline_precision: str = Form("medium"),
+    filter_id: str = Form("none"),
+    beautify_smooth: float = Form(0.0),
+    beautify_eyes: float = Form(0.0),
+    beautify_tone: float = Form(0.0),
     auth: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -206,6 +220,10 @@ def process_sticker(
                 bleed_mm=bleed_mm,
                 cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle", "face") else "contour",
                 cutline_precision=cutline_precision if cutline_precision in ("tight", "medium") else "medium",
+                filter_id=filter_id,
+                beautify_smooth=max(0.0, min(1.0, beautify_smooth)),
+                beautify_eyes=max(0.0, min(1.0, beautify_eyes)),
+                beautify_tone=max(0.0, min(1.0, beautify_tone)),
             )
         except FaceNotFoundError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
@@ -250,6 +268,7 @@ def process_sticker(
     return ProcessResponse(
         preview_url=storage.presigned_get(f"{prefix}/preview.png"),
         border_url=storage.presigned_get(f"{prefix}/border.png"),
+        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
         width_mm=result.width_mm,
         height_mm=result.height_mm,
         bg_type=result.bg_type,
@@ -271,6 +290,10 @@ class RegenerateRequest(BaseModel):
     cutline_precision: str = "medium"
     border_width_mm: float = 2.0
     bleed_mm: float = 3.0
+    filter_id: str = "none"
+    beautify_smooth: float = 0.0
+    beautify_eyes: float = 0.0
+    beautify_tone: float = 0.0
 
 
 @router.post("/regenerate", response_model=ProcessResponse)
@@ -312,6 +335,10 @@ def regenerate_sticker(
                 bleed_mm=body.bleed_mm,
                 cutline_mode=mode,
                 cutline_precision=precision,
+                filter_id=body.filter_id,
+                beautify_smooth=max(0.0, min(1.0, body.beautify_smooth)),
+                beautify_eyes=max(0.0, min(1.0, body.beautify_eyes)),
+                beautify_tone=max(0.0, min(1.0, body.beautify_tone)),
             )
         except FaceNotFoundError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
@@ -343,6 +370,7 @@ def regenerate_sticker(
     return ProcessResponse(
         preview_url=storage.presigned_get(f"{prefix}/preview.png"),
         border_url=storage.presigned_get(f"{prefix}/border.png"),
+        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
         width_mm=result.width_mm,
         height_mm=result.height_mm,
         bg_type=result.bg_type,
@@ -472,6 +500,7 @@ def edit_cutline(
     return ProcessResponse(
         preview_url=storage.presigned_get(f"{prefix}/preview.png"),
         border_url=storage.presigned_get(f"{prefix}/border.png"),
+        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
         width_mm=width_mm,
         height_mm=height_mm,
         bg_type="transparent",

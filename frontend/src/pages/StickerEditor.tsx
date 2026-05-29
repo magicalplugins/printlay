@@ -8,6 +8,7 @@ import {
   saveSticker,
 } from "../api/sticker";
 import { Category, createCategory, listCategories } from "../api/catalogue";
+import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
 
 type Step = "upload" | "options" | "processing" | "preview" | "saving" | "done";
 type CutlineMode = "contour" | "rectangle" | "face";
@@ -28,6 +29,10 @@ export default function StickerEditor() {
   // how close the cut hugs the subject via the Tighten slider instead.
   const precision: Precision = "medium";
   const [tighten, setTighten] = useState(0);
+  // Photo look: a named colour preset (same as jobs) + beautify (0..100).
+  const [filterId, setFilterId] = useState("none");
+  const [bakedFilterId, setBakedFilterId] = useState("none");
+  const [beautify, setBeautify] = useState({ smooth: 0, eyes: 0, tone: 0 });
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -62,6 +67,9 @@ export default function StickerEditor() {
       const res = await processSticker(file, method, 2.0, cutlineMode, precision);
       setResult(res);
       setTighten(0);
+      setFilterId("none");
+      setBakedFilterId("none");
+      setBeautify({ smooth: 0, eyes: 0, tone: 0 });
       setStep("preview");
     } catch (e: any) {
       const msg =
@@ -77,31 +85,54 @@ export default function StickerEditor() {
   // slider subtracts from this (positive = closer to / into the subject).
   const BASE_OFFSET_MM = 2.0;
 
-  const handleRegenerate = useCallback(
-    async (mode: CutlineMode, tightenMm: number) => {
+  const applySettings = useCallback(
+    async (next: {
+      mode?: CutlineMode;
+      tighten?: number;
+      filterId?: string;
+      smooth?: number;
+      eyes?: number;
+      tone?: number;
+    }) => {
       if (!result) return;
+      const mode = next.mode ?? cutlineMode;
+      const t = next.tighten ?? tighten;
+      const fid = next.filterId ?? filterId;
+      const sm = next.smooth ?? beautify.smooth;
+      const ey = next.eyes ?? beautify.eyes;
+      const tn = next.tone ?? beautify.tone;
       setRegenerating(true);
       setError(null);
       try {
-        const border = Math.max(-3, Math.min(6, BASE_OFFSET_MM - tightenMm));
+        const border = Math.max(-3, Math.min(6, BASE_OFFSET_MM - t));
         const res = await regenerateSticker(
           result.session_id,
           mode,
           "medium",
-          border
+          border,
+          3.0,
+          {
+            filterId: fid,
+            beautifySmooth: sm / 100,
+            beautifyEyes: ey / 100,
+            beautifyTone: tn / 100,
+          }
         );
         setResult(res);
         setCutlineMode(mode);
-        setTighten(tightenMm);
+        setTighten(t);
+        setFilterId(fid);
+        setBakedFilterId(fid);
+        setBeautify({ smooth: sm, eyes: ey, tone: tn });
       } catch (e: any) {
         const msg =
-          e?.body?.detail || e?.message || "Could not update the cut line.";
+          e?.body?.detail || e?.message || "Could not update the sticker.";
         setError(msg);
       } finally {
         setRegenerating(false);
       }
     },
-    [result]
+    [result, cutlineMode, tighten, filterId, beautify]
   );
 
   const handleEditApply = useCallback(
@@ -208,8 +239,12 @@ export default function StickerEditor() {
           result={result}
           mode={cutlineMode}
           tighten={tighten}
+          filterId={filterId}
+          setFilterId={setFilterId}
+          bakedFilterId={bakedFilterId}
+          beautify={beautify}
           regenerating={regenerating}
-          onRegenerate={handleRegenerate}
+          onApply={applySettings}
           onEditApply={handleEditApply}
           categories={categories}
           categoryId={categoryId}
@@ -393,6 +428,42 @@ function PrecisionCard({
   );
 }
 
+function BeautifySlider({
+  label,
+  value,
+  disabled,
+  onChange,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onChange: (v: number) => void;
+  onCommit: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="text-xs text-neutral-400">{label}</div>
+        <div className="text-xs text-neutral-500">{value}%</div>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(parseInt(e.target.value, 10))}
+        onMouseUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
+        onTouchEnd={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
+        onKeyUp={(e) => onCommit(parseInt((e.target as HTMLInputElement).value, 10))}
+        className="w-full accent-violet-500 disabled:opacity-50"
+      />
+    </div>
+  );
+}
+
 function UploadZone({
   dragOver,
   onDragOver,
@@ -468,12 +539,18 @@ function ProcessingState({ originalPreview }: { originalPreview: string | null }
   );
 }
 
+type Beautify = { smooth: number; eyes: number; tone: number };
+
 function PreviewState({
   result,
   mode,
   tighten,
+  filterId,
+  setFilterId,
+  bakedFilterId,
+  beautify,
   regenerating,
-  onRegenerate,
+  onApply,
   onEditApply,
   categories,
   categoryId,
@@ -487,8 +564,19 @@ function PreviewState({
   result: ProcessResponse;
   mode: CutlineMode;
   tighten: number;
+  filterId: string;
+  setFilterId: (id: string) => void;
+  bakedFilterId: string;
+  beautify: Beautify;
   regenerating: boolean;
-  onRegenerate: (mode: CutlineMode, tightenMm: number) => void;
+  onApply: (next: {
+    mode?: CutlineMode;
+    tighten?: number;
+    filterId?: string;
+    smooth?: number;
+    eyes?: number;
+    tone?: number;
+  }) => void;
   onEditApply: (points: [number, number][]) => Promise<void>;
   categories: Category[];
   categoryId: string | null;
@@ -504,10 +592,20 @@ function PreviewState({
   const [catBusy, setCatBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [tightenLocal, setTightenLocal] = useState(tighten);
+  const [beautyLocal, setBeautyLocal] = useState<Beautify>(beautify);
 
   useEffect(() => {
     setTightenLocal(tighten);
   }, [tighten]);
+
+  useEffect(() => {
+    setBeautyLocal(beautify);
+  }, [beautify]);
+
+  // Preview the colour preset instantly on the canvas (CSS) until it's baked
+  // server-side. Once baked (bakedFilterId === filterId) we stop overlaying.
+  const previewFilterCss =
+    filterId !== bakedFilterId ? filterCss(filterId) : "none";
 
   async function handleCreate() {
     if (!newCatName.trim()) return;
@@ -545,6 +643,7 @@ function PreviewState({
             offsetMm={tightenLocal - tighten}
             widthMm={result.width_mm}
             heightMm={result.height_mm}
+            filterCssOverlay={previewFilterCss}
             busy={regenerating}
           />
         ) : (
@@ -616,9 +715,9 @@ function PreviewState({
               value={tightenLocal}
               disabled={regenerating}
               onChange={(e) => setTightenLocal(parseFloat(e.target.value))}
-              onMouseUp={() => onRegenerate(mode, tightenLocal)}
-              onTouchEnd={() => onRegenerate(mode, tightenLocal)}
-              onKeyUp={() => onRegenerate(mode, tightenLocal)}
+              onMouseUp={() => onApply({ tighten: tightenLocal })}
+              onTouchEnd={() => onApply({ tighten: tightenLocal })}
+              onKeyUp={() => onApply({ tighten: tightenLocal })}
               className="w-full accent-violet-500"
             />
             <div className="flex justify-between text-[10px] text-neutral-600 mt-1">
@@ -637,13 +736,13 @@ function PreviewState({
             <div className="grid grid-cols-2 gap-3">
               <PrecisionCard
                 active={mode === "contour"}
-                onClick={() => !regenerating && onRegenerate("contour", tightenLocal)}
+                onClick={() => !regenerating && onApply({ mode: "contour" })}
                 title="Whole subject"
                 desc="Body and head"
               />
               <PrecisionCard
                 active={mode === "face"}
-                onClick={() => !regenerating && onRegenerate("face", tightenLocal)}
+                onClick={() => !regenerating && onApply({ mode: "face" })}
                 title="Face only"
                 desc="Chin up to the hair"
               />
@@ -667,6 +766,78 @@ function PreviewState({
 
           <p className="text-[11px] text-neutral-500">
             Changes re-use the removed background — no extra AI credits used.
+          </p>
+        </fieldset>
+      )}
+
+      {/* Photo filters (same presets as jobs) */}
+      {!editing && (
+        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-3">
+          <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+            Photo filter
+          </legend>
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+            {FILTER_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                disabled={regenerating}
+                onClick={() => {
+                  setFilterId(p.id);
+                  onApply({ filterId: p.id });
+                }}
+                className={`rounded-lg overflow-hidden border text-center transition disabled:opacity-50 ${
+                  filterId === p.id
+                    ? "border-violet-500 ring-1 ring-violet-500"
+                    : "border-neutral-700 hover:border-neutral-500"
+                }`}
+              >
+                <div className="aspect-square bg-neutral-800 overflow-hidden">
+                  <img
+                    src={result.cutout_url || result.border_url}
+                    alt={p.label}
+                    className="w-full h-full object-cover"
+                    style={{ filter: p.css }}
+                  />
+                </div>
+                <div className="text-[10px] py-1 text-neutral-300 truncate px-1">
+                  {p.label}
+                </div>
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      {/* Beautify */}
+      {!editing && (
+        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
+          <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+            Beautify
+          </legend>
+          <BeautifySlider
+            label="Smooth skin"
+            value={beautyLocal.smooth}
+            disabled={regenerating}
+            onChange={(v) => setBeautyLocal((b) => ({ ...b, smooth: v }))}
+            onCommit={(v) => onApply({ smooth: v })}
+          />
+          <BeautifySlider
+            label="Brighten eyes"
+            value={beautyLocal.eyes}
+            disabled={regenerating}
+            onChange={(v) => setBeautyLocal((b) => ({ ...b, eyes: v }))}
+            onCommit={(v) => onApply({ eyes: v })}
+          />
+          <BeautifySlider
+            label="Even skin tone"
+            value={beautyLocal.tone}
+            disabled={regenerating}
+            onChange={(v) => setBeautyLocal((b) => ({ ...b, tone: v }))}
+            onCommit={(v) => onApply({ tone: v })}
+          />
+          <p className="text-[11px] text-neutral-500">
+            Beautify works best on clear, front-facing portraits.
           </p>
         </fieldset>
       )}
@@ -857,6 +1028,7 @@ function LivePreview({
   offsetMm,
   widthMm,
   heightMm,
+  filterCssOverlay,
   busy,
 }: {
   borderUrl: string;
@@ -864,6 +1036,7 @@ function LivePreview({
   offsetMm: number;
   widthMm: number;
   heightMm: number;
+  filterCssOverlay?: string;
   busy: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -888,7 +1061,14 @@ function LivePreview({
     c.width = Math.max(1, Math.round(img.naturalWidth * scale));
     c.height = Math.max(1, Math.round(img.naturalHeight * scale));
     ctx.clearRect(0, 0, c.width, c.height);
+    // Apply the colour preset as a live CSS-style canvas filter on the
+    // artwork only (reset before drawing the cut line so it stays blue).
+    ctx.filter =
+      filterCssOverlay && filterCssOverlay !== "none"
+        ? filterCssOverlay
+        : "none";
     ctx.drawImage(img, 0, 0, c.width, c.height);
+    ctx.filter = "none";
 
     let pts = points;
     // offsetMm > 0 means "tighter" → pull the cut line inward (negative offset)
@@ -908,7 +1088,7 @@ function LivePreview({
       ctx.stroke();
       ctx.setLineDash([]);
     }
-  }, [img, points, offsetMm, widthMm, heightMm]);
+  }, [img, points, offsetMm, widthMm, heightMm, filterCssOverlay]);
 
   return (
     <div

@@ -4,6 +4,7 @@ import {
   ProcessResponse,
   processSticker,
   regenerateSticker,
+  editCutline,
   saveSticker,
 } from "../api/sticker";
 import { Category, createCategory, listCategories } from "../api/catalogue";
@@ -23,7 +24,10 @@ export default function StickerEditor() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [cutlineMode, setCutlineMode] = useState<CutlineMode>("contour");
-  const [precision, setPrecision] = useState<Precision>("medium");
+  // Cut quality is fixed at the good "medium" smoothing now; the user tunes
+  // how close the cut hugs the subject via the Tighten slider instead.
+  const precision: Precision = "medium";
+  const [tighten, setTighten] = useState(0);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [categoryId, setCategoryId] = useState<string | null>(null);
@@ -57,6 +61,7 @@ export default function StickerEditor() {
       const method = cutlineMode === "rectangle" ? "none" : "auto";
       const res = await processSticker(file, method, 2.0, cutlineMode, precision);
       setResult(res);
+      setTighten(0);
       setStep("preview");
     } catch (e: any) {
       const msg =
@@ -68,16 +73,26 @@ export default function StickerEditor() {
 
   const [regenerating, setRegenerating] = useState(false);
 
+  // Base white-border offset (mm) used at first generation; the Tighten
+  // slider subtracts from this (positive = closer to / into the subject).
+  const BASE_OFFSET_MM = 2.0;
+
   const handleRegenerate = useCallback(
-    async (mode: CutlineMode, prec: Precision) => {
+    async (mode: CutlineMode, tightenMm: number) => {
       if (!result) return;
       setRegenerating(true);
       setError(null);
       try {
-        const res = await regenerateSticker(result.session_id, mode, prec);
+        const border = Math.max(-3, Math.min(6, BASE_OFFSET_MM - tightenMm));
+        const res = await regenerateSticker(
+          result.session_id,
+          mode,
+          "medium",
+          border
+        );
         setResult(res);
         setCutlineMode(mode);
-        setPrecision(prec);
+        setTighten(tightenMm);
       } catch (e: any) {
         const msg =
           e?.body?.detail || e?.message || "Could not update the cut line.";
@@ -85,6 +100,16 @@ export default function StickerEditor() {
       } finally {
         setRegenerating(false);
       }
+    },
+    [result]
+  );
+
+  const handleEditApply = useCallback(
+    async (points: [number, number][]) => {
+      if (!result) return;
+      setError(null);
+      const res = await editCutline(result.session_id, points);
+      setResult(res);
     },
     [result]
   );
@@ -171,8 +196,6 @@ export default function StickerEditor() {
           preview={preview}
           cutlineMode={cutlineMode}
           setCutlineMode={setCutlineMode}
-          precision={precision}
-          setPrecision={setPrecision}
           onProcess={handleProcess}
           onBack={reset}
         />
@@ -184,9 +207,10 @@ export default function StickerEditor() {
         <PreviewState
           result={result}
           mode={cutlineMode}
-          precision={precision}
+          tighten={tighten}
           regenerating={regenerating}
           onRegenerate={handleRegenerate}
+          onEditApply={handleEditApply}
           categories={categories}
           categoryId={categoryId}
           setCategoryId={setCategoryId}
@@ -219,16 +243,12 @@ function OptionsStep({
   preview,
   cutlineMode,
   setCutlineMode,
-  precision,
-  setPrecision,
   onProcess,
   onBack,
 }: {
   preview: string;
   cutlineMode: CutlineMode;
   setCutlineMode: (m: CutlineMode) => void;
-  precision: Precision;
-  setPrecision: (p: Precision) => void;
   onProcess: () => void;
   onBack: () => void;
 }) {
@@ -296,25 +316,9 @@ function OptionsStep({
         )}
       </fieldset>
 
-      <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
-        <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
-          Cutline precision
-        </legend>
-        <div className="grid grid-cols-2 gap-3">
-          <PrecisionCard
-            active={precision === "tight"}
-            onClick={() => setPrecision("tight")}
-            title="Tight"
-            desc="Close to subject edge"
-          />
-          <PrecisionCard
-            active={precision === "medium"}
-            onClick={() => setPrecision("medium")}
-            title="Medium"
-            desc="More buffer around subject"
-          />
-        </div>
-      </fieldset>
+      <p className="text-xs text-neutral-500 text-center">
+        After generating you can tighten the cut line and hand-edit it.
+      </p>
 
       <button
         onClick={onProcess}
@@ -467,9 +471,10 @@ function ProcessingState({ originalPreview }: { originalPreview: string | null }
 function PreviewState({
   result,
   mode,
-  precision,
+  tighten,
   regenerating,
   onRegenerate,
+  onEditApply,
   categories,
   categoryId,
   setCategoryId,
@@ -481,9 +486,10 @@ function PreviewState({
 }: {
   result: ProcessResponse;
   mode: CutlineMode;
-  precision: Precision;
+  tighten: number;
   regenerating: boolean;
-  onRegenerate: (mode: CutlineMode, precision: Precision) => void;
+  onRegenerate: (mode: CutlineMode, tightenMm: number) => void;
+  onEditApply: (points: [number, number][]) => Promise<void>;
   categories: Category[];
   categoryId: string | null;
   setCategoryId: (id: string | null) => void;
@@ -496,6 +502,12 @@ function PreviewState({
   const [creatingCat, setCreatingCat] = useState(false);
   const [newCatName, setNewCatName] = useState("");
   const [catBusy, setCatBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [tightenLocal, setTightenLocal] = useState(tighten);
+
+  useEffect(() => {
+    setTightenLocal(tighten);
+  }, [tighten]);
 
   async function handleCreate() {
     if (!newCatName.trim()) return;
@@ -519,23 +531,32 @@ function PreviewState({
           Sticker ready
         </div>
 
-        <div
-          className="relative mx-auto rounded-xl overflow-hidden bg-repeat"
-          style={{
-            maxWidth: "400px",
-            backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='10' height='10' fill='%23222'/%3E%3Crect x='10' y='10' width='10' height='10' fill='%23222'/%3E%3Crect x='10' width='10' height='10' fill='%23333'/%3E%3Crect y='10' width='10' height='10' fill='%23333'/%3E%3C/svg%3E")`,
-          }}
-        >
-          <img src={result.preview_url} alt="Sticker preview" className="w-full h-auto" />
-          {regenerating && (
-            <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center">
-              <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-            </div>
-          )}
-        </div>
+        {editing ? (
+          <CutlineEditor
+            borderUrl={result.border_url}
+            points={result.cutline_points}
+            onApply={onEditApply}
+            onClose={() => setEditing(false)}
+          />
+        ) : (
+          <div
+            className="relative mx-auto rounded-xl overflow-hidden bg-repeat"
+            style={{
+              maxWidth: "400px",
+              backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='10' height='10' fill='%23222'/%3E%3Crect x='10' y='10' width='10' height='10' fill='%23222'/%3E%3Crect x='10' width='10' height='10' fill='%23333'/%3E%3Crect y='10' width='10' height='10' fill='%23333'/%3E%3C/svg%3E")`,
+            }}
+          >
+            <img src={result.preview_url} alt="Sticker preview" className="w-full h-auto" />
+            {regenerating && (
+              <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center">
+                <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs text-neutral-400">
           <div>
@@ -561,28 +582,45 @@ function PreviewState({
       </div>
 
       {/* Adjust the cut line without re-uploading */}
-      {mode !== "rectangle" && (
-        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
+      {mode !== "rectangle" && !editing && (
+        <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-5">
           <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
             Adjust cut line
           </legend>
 
           <div>
-            <div className="text-xs text-neutral-400 mb-2">Precision</div>
-            <div className="grid grid-cols-2 gap-3">
-              <PrecisionCard
-                active={precision === "tight"}
-                onClick={() => !regenerating && onRegenerate(mode, "tight")}
-                title="Tight"
-                desc="Close to subject edge"
-              />
-              <PrecisionCard
-                active={precision === "medium"}
-                onClick={() => !regenerating && onRegenerate(mode, "medium")}
-                title="Medium"
-                desc="More buffer around subject"
-              />
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs text-neutral-400">Tighten</div>
+              <div className="text-xs text-neutral-500">
+                {tightenLocal <= 0
+                  ? tightenLocal === 0
+                    ? "Default"
+                    : `Looser ${Math.abs(tightenLocal)}mm`
+                  : `Tighter ${tightenLocal}mm`}
+              </div>
             </div>
+            <input
+              type="range"
+              min={-2}
+              max={5}
+              step={0.5}
+              value={tightenLocal}
+              disabled={regenerating}
+              onChange={(e) => setTightenLocal(parseFloat(e.target.value))}
+              onMouseUp={() => onRegenerate(mode, tightenLocal)}
+              onTouchEnd={() => onRegenerate(mode, tightenLocal)}
+              onKeyUp={() => onRegenerate(mode, tightenLocal)}
+              className="w-full accent-violet-500"
+            />
+            <div className="flex justify-between text-[10px] text-neutral-600 mt-1">
+              <span>Looser</span>
+              <span>Hugs subject</span>
+              <span>Into subject</span>
+            </div>
+            <p className="text-[11px] text-neutral-500 mt-1">
+              Keeps the same shape but pulls the cut line closer to (or into) the
+              subject.
+            </p>
           </div>
 
           <div>
@@ -590,18 +628,34 @@ function PreviewState({
             <div className="grid grid-cols-2 gap-3">
               <PrecisionCard
                 active={mode === "contour"}
-                onClick={() => !regenerating && onRegenerate("contour", precision)}
+                onClick={() => !regenerating && onRegenerate("contour", tightenLocal)}
                 title="Whole subject"
                 desc="Body and head"
               />
               <PrecisionCard
                 active={mode === "face"}
-                onClick={() => !regenerating && onRegenerate("face", precision)}
+                onClick={() => !regenerating && onRegenerate("face", tightenLocal)}
                 title="Face only"
                 desc="Chin up to the hair"
               />
             </div>
           </div>
+
+          <div>
+            <div className="text-xs text-neutral-400 mb-2">Hand fix</div>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              disabled={regenerating}
+              className="w-full rounded-lg border border-neutral-700 px-4 py-2.5 text-sm text-neutral-200 hover:border-violet-500 hover:text-white transition disabled:opacity-40 flex items-center justify-center gap-2"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <path d="M16.5 4.5l3 3L8 19l-4 1 1-4 11.5-11.5z" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Edit cut line by hand
+            </button>
+          </div>
+
           <p className="text-[11px] text-neutral-500">
             Changes re-use the removed background — no extra AI credits used.
           </p>
@@ -609,6 +663,7 @@ function PreviewState({
       )}
 
       {/* Save destination */}
+      {!editing && (
       <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
         <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
           Save to catalogue
@@ -685,7 +740,9 @@ function PreviewState({
           </p>
         </div>
       </fieldset>
+      )}
 
+      {!editing && (
       <div className="flex flex-col sm:flex-row gap-3">
         <button
           onClick={onApprove}
@@ -699,6 +756,290 @@ function PreviewState({
           className="flex-1 rounded-xl border border-neutral-700 px-6 py-3.5 font-medium text-neutral-300 hover:border-neutral-500 transition text-center"
         >
           Start over
+        </button>
+      </div>
+      )}
+    </div>
+  );
+}
+
+function polyArea(poly: [number, number][]): number {
+  let s = 0;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = poly[i];
+    const [x2, y2] = poly[(i + 1) % n];
+    s += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(s) / 2;
+}
+
+function arcForward(
+  pts: [number, number][],
+  from: number,
+  to: number
+): [number, number][] {
+  const n = pts.length;
+  const out: [number, number][] = [];
+  let i = from;
+  let guard = 0;
+  while (guard++ <= n) {
+    out.push(pts[i]);
+    if (i === to) break;
+    i = (i + 1) % n;
+  }
+  return out;
+}
+
+// Replace the cut-line stretch between two anchor points with a freehand
+// stroke. We keep whichever of the two arcs yields the larger enclosed area
+// (i.e. trims off the smaller "excess" the user drew across).
+function replaceArc(
+  pts: [number, number][],
+  startIdx: number,
+  endIdx: number,
+  stroke: [number, number][]
+): [number, number][] {
+  const n = pts.length;
+  if (n < 3 || stroke.length < 2 || startIdx === endIdx) return pts;
+  const aArc = arcForward(pts, (endIdx + 1) % n, (startIdx - 1 + n) % n);
+  const polyA: [number, number][] = [...stroke, ...aArc];
+  const bArc = arcForward(pts, (startIdx + 1) % n, (endIdx - 1 + n) % n).reverse();
+  const polyB: [number, number][] = [...stroke, ...bArc];
+  return polyArea(polyA) >= polyArea(polyB) ? polyA : polyB;
+}
+
+function CutlineEditor({
+  borderUrl,
+  points,
+  onApply,
+  onClose,
+}: {
+  borderUrl: string;
+  points: [number, number][];
+  onApply: (points: [number, number][]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [localPoints, setLocalPoints] = useState<[number, number][]>(points);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const drawingRef = useRef(false);
+  const strokeRef = useRef<[number, number][]>([]);
+  const startIdxRef = useRef(0);
+
+  useEffect(() => {
+    setLocalPoints(points);
+    setDirty(false);
+  }, [points]);
+
+  useEffect(() => {
+    const im = new Image();
+    im.onload = () => setImg(im);
+    im.src = borderUrl;
+  }, [borderUrl]);
+
+  const redraw = useCallback(
+    (stroke?: [number, number][]) => {
+      const c = canvasRef.current;
+      if (!c || !img) return;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      const cw = c.width;
+      const ch = c.height;
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.drawImage(img, 0, 0, cw, ch);
+
+      if (localPoints.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(localPoints[0][0] * cw, localPoints[0][1] * ch);
+        for (let i = 1; i < localPoints.length; i++) {
+          ctx.lineTo(localPoints[i][0] * cw, localPoints[i][1] * ch);
+        }
+        ctx.closePath();
+        ctx.setLineDash([8, 5]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#2684ff";
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      const s = stroke ?? strokeRef.current;
+      if (s && s.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(s[0][0] * cw, s[0][1] * ch);
+        for (let i = 1; i < s.length; i++) ctx.lineTo(s[i][0] * cw, s[i][1] * ch);
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#84cc16";
+        ctx.stroke();
+      }
+    },
+    [img, localPoints]
+  );
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || !img) return;
+    const maxDim = 800;
+    const scale = Math.min(
+      1,
+      maxDim / Math.max(img.naturalWidth, img.naturalHeight)
+    );
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    redraw();
+  }, [img, redraw]);
+
+  useEffect(() => {
+    redraw();
+  }, [redraw]);
+
+  function toNorm(e: React.PointerEvent): [number, number] {
+    const c = canvasRef.current!;
+    const rect = c.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    return [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))];
+  }
+
+  function nearestIdx(n: [number, number]): number {
+    const c = canvasRef.current!;
+    const cw = c.width;
+    const ch = c.height;
+    let best = 0;
+    let bd = Infinity;
+    localPoints.forEach((p, i) => {
+      const dx = (p[0] - n[0]) * cw;
+      const dy = (p[1] - n[1]) * ch;
+      const d = dx * dx + dy * dy;
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  function onDown(e: React.PointerEvent) {
+    if (busy) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    const n = toNorm(e);
+    startIdxRef.current = nearestIdx(n);
+    strokeRef.current = [n];
+    drawingRef.current = true;
+  }
+
+  function onMove(e: React.PointerEvent) {
+    if (!drawingRef.current) return;
+    const n = toNorm(e);
+    const last = strokeRef.current[strokeRef.current.length - 1];
+    const c = canvasRef.current!;
+    const dx = (n[0] - last[0]) * c.width;
+    const dy = (n[1] - last[1]) * c.height;
+    if (dx * dx + dy * dy < 9) return;
+    strokeRef.current.push(n);
+    redraw(strokeRef.current);
+  }
+
+  function onUp(e: React.PointerEvent) {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    const n = toNorm(e);
+    const endIdx = nearestIdx(n);
+    const stroke = strokeRef.current;
+    strokeRef.current = [];
+    if (stroke.length < 2) {
+      redraw();
+      return;
+    }
+    const next = replaceArc(localPoints, startIdxRef.current, endIdx, stroke);
+    setLocalPoints(next);
+    setDirty(true);
+  }
+
+  async function apply() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await onApply(localPoints);
+      onClose();
+    } catch (e: any) {
+      setErr(e?.body?.detail || e?.message || "Could not save the edit.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div
+        className="relative mx-auto rounded-xl overflow-hidden border border-violet-500/40 bg-repeat"
+        style={{
+          maxWidth: "400px",
+          backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20'%3E%3Crect width='10' height='10' fill='%23222'/%3E%3Crect x='10' y='10' width='10' height='10' fill='%23222'/%3E%3Crect x='10' width='10' height='10' fill='%23333'/%3E%3Crect y='10' width='10' height='10' fill='%23333'/%3E%3C/svg%3E")`,
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          onPointerDown={onDown}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onPointerCancel={onUp}
+          className="w-full h-auto block touch-none cursor-crosshair"
+        />
+        {busy && (
+          <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center">
+            <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          </div>
+        )}
+      </div>
+
+      <p className="text-[11px] text-neutral-400 text-center px-2">
+        Drag from one spot on the blue cut line to another to redraw that
+        section — the excess you draw across is trimmed off.
+      </p>
+
+      {err && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300">
+          {err}
+        </div>
+      )}
+
+      <div className="flex gap-3">
+        <button
+          type="button"
+          onClick={apply}
+          disabled={busy || !dirty}
+          className="flex-1 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-violet-500 transition disabled:opacity-40"
+        >
+          Apply changes
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setLocalPoints(points);
+            setDirty(false);
+          }}
+          disabled={busy || !dirty}
+          className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
+        >
+          Reset
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={busy}
+          className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
+        >
+          Done
         </button>
       </div>
     </div>

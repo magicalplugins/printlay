@@ -104,6 +104,21 @@ class ProcessResponse(BaseModel):
     bg_type: str
     removal_method: str | None
     session_id: str
+    # Cut path as normalised [x, y] points (0–1 relative to the border image)
+    # plus the image pixel size, so the frontend can render an editable
+    # overlay for the hand-draw fix tool.
+    cutline_points: list[list[float]] = []
+    img_w_px: int = 0
+    img_h_px: int = 0
+
+
+def _normalised_points(
+    points_px: list, width_px: int, height_px: int
+) -> list[list[float]]:
+    """Convert pixel cut points to 0–1 normalised coords for the frontend."""
+    if width_px <= 0 or height_px <= 0:
+        return []
+    return [[float(x) / width_px, float(y) / height_px] for x, y in points_px]
 
 
 class UsageResponse(BaseModel):
@@ -240,6 +255,13 @@ def process_sticker(
         bg_type=result.bg_type,
         removal_method=result.removal_method,
         session_id=session_id,
+        cutline_points=_normalised_points(
+            result.cutline.points_px,
+            result.cutline.width_px,
+            result.cutline.height_px,
+        ),
+        img_w_px=result.cutline.width_px,
+        img_h_px=result.cutline.height_px,
     )
 
 
@@ -326,6 +348,128 @@ def regenerate_sticker(
         bg_type=result.bg_type,
         removal_method=result.removal_method,
         session_id=body.session_id,
+        cutline_points=_normalised_points(
+            result.cutline.points_px,
+            result.cutline.width_px,
+            result.cutline.height_px,
+        ),
+        img_w_px=result.cutline.width_px,
+        img_h_px=result.cutline.height_px,
+    )
+
+
+class EditCutlineRequest(BaseModel):
+    session_id: str
+    # Closed polygon of the hand-edited cut path, normalised 0–1 relative to
+    # the border image (same space `cutline_points` is returned in).
+    points: list[list[float]]
+
+
+@router.post("/edit-cutline", response_model=ProcessResponse)
+def edit_cutline(
+    body: EditCutlineRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Apply a hand-edited cut path to an existing session.
+
+    The frontend draw tool replaces a stretch of the cut line with a freehand
+    stroke and posts the resulting polygon. We re-key it to pixel/point space,
+    enforce a cutter-safe minimum corner radius, re-render the dashed preview
+    and persist it so Save picks up the edited path.
+    """
+    user = _resolve_user(db, auth)
+    ent = entitlements.for_user(user)
+    if not ent.allows("sticker_editor"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
+
+    if len(body.points) < 3:
+        raise HTTPException(400, "A cut path needs at least 3 points")
+
+    prefix = f"sticker-sessions/{user.id}/{body.session_id}"
+    import json
+    try:
+        border_png = storage.get_bytes(f"{prefix}/border.png")
+        meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
+    except Exception:
+        raise HTTPException(
+            404,
+            "Sticker session expired. Please re-process before editing the cut line.",
+        )
+
+    width_px = int(meta["width_px"])
+    height_px = int(meta["height_px"])
+    width_pt = float(meta["width_pt"])
+    height_pt = float(meta["height_pt"])
+    width_mm = float(meta["width_mm"])
+    height_mm = float(meta["height_mm"])
+
+    # Normalised → pixel space, clamped inside the image.
+    points_px = [
+        (
+            max(0.0, min(1.0, float(nx))) * width_px,
+            max(0.0, min(1.0, float(ny))) * height_px,
+        )
+        for nx, ny in body.points
+    ]
+
+    from backend.services.cutline_generator import (
+        CutlineResult,
+        _enforce_min_corner_radius,
+    )
+
+    dpi = width_px * 25.4 / width_mm if width_mm > 0 else 300
+    try:
+        points_px = _enforce_min_corner_radius(points_px, dpi=int(dpi), min_radius_mm=1.0)
+    except Exception:
+        pass
+
+    px_to_pt_x = width_pt / width_px if width_px else 0.0
+    px_to_pt_y = height_pt / height_px if height_px else 0.0
+    points_pt = [(x * px_to_pt_x, y * px_to_pt_y) for x, y in points_px]
+
+    cutline = CutlineResult(
+        points_px=[(float(x), float(y)) for x, y in points_px],
+        points_pt=[(float(x), float(y)) for x, y in points_pt],
+        width_px=width_px,
+        height_px=height_px,
+        width_pt=width_pt,
+        height_pt=height_pt,
+        border_image=border_png,
+    )
+
+    from backend.services.sticker_processor import _render_preview
+
+    preview_png = _render_preview(cutline)
+    storage.put_bytes(f"{prefix}/preview.png", preview_png, "image/png")
+
+    cutline_payload = {
+        "points_px": [list(p) for p in cutline.points_px],
+        "points_pt": [list(p) for p in cutline.points_pt],
+        "width_px": width_px,
+        "height_px": height_px,
+        "width_pt": width_pt,
+        "height_pt": height_pt,
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+    }
+    storage.put_bytes(
+        f"{prefix}/cutline.json",
+        json.dumps(cutline_payload).encode("utf-8"),
+        "application/json",
+    )
+
+    return ProcessResponse(
+        preview_url=storage.presigned_get(f"{prefix}/preview.png"),
+        border_url=storage.presigned_get(f"{prefix}/border.png"),
+        width_mm=width_mm,
+        height_mm=height_mm,
+        bg_type="transparent",
+        removal_method=None,
+        session_id=body.session_id,
+        cutline_points=_normalised_points(cutline.points_px, width_px, height_px),
+        img_w_px=width_px,
+        img_h_px=height_px,
     )
 
 

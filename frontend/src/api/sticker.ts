@@ -8,6 +8,9 @@ export interface ProcessResponse {
   bg_type: string;
   removal_method: string | null;
   session_id: string;
+  cutline_points: [number, number][];
+  img_w_px: number;
+  img_h_px: number;
 }
 
 export interface SaveResponse {
@@ -57,6 +60,19 @@ export async function regenerateSticker(
       cutline_precision: cutlinePrecision,
       border_width_mm: borderWidthMm,
       bleed_mm: bleedMm,
+    }),
+  });
+}
+
+export async function editCutline(
+  sessionId: string,
+  points: [number, number][]
+): Promise<ProcessResponse> {
+  return api<ProcessResponse>("/api/sticker/edit-cutline", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      points,
     }),
   });
 }

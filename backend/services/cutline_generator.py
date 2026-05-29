@@ -334,13 +334,16 @@ def _generate_contour_cutline(
         alpha = np.array(img.split()[3])
         mask = (alpha > 20).astype(np.uint8) * 255
 
-    total_pad = cut_offset_px + bleed_px
+    # cut_offset_px may be negative when the user "tightens" the cut line
+    # inside the subject edge; only positive offsets need extra canvas room.
+    pad_for_cut = max(0, cut_offset_px)
+    total_pad = pad_for_cut + bleed_px
     padded_h = h + 2 * total_pad
     padded_w = w + 2 * total_pad
     mask_padded = np.zeros((padded_h, padded_w), dtype=np.uint8)
     mask_padded[total_pad:total_pad + h, total_pad:total_pad + w] = mask
 
-    pre_blur = max(2, cut_offset_px // 6)
+    pre_blur = max(2, abs(cut_offset_px) // 6)
     mask_pil = Image.fromarray(mask_padded, mode="L")
     mask_pil = mask_pil.filter(ImageFilter.GaussianBlur(radius=pre_blur))
     mask_clean = (np.array(mask_pil) > 100).astype(np.uint8) * 255
@@ -349,9 +352,12 @@ def _generate_contour_cutline(
     hair_smooth_px = max(3, int(hair_smooth_mm * dpi / 25.4))
     mask_clean = _morphological_open(mask_clean, hair_smooth_px)
 
-    cut_mask = _dilate_mask(mask_clean, cut_offset_px)
+    if cut_offset_px >= 0:
+        cut_mask = _dilate_mask(mask_clean, cut_offset_px)
+    else:
+        cut_mask = _erode_mask(mask_clean, -cut_offset_px)
 
-    smooth_blur = max(3, cut_offset_px // 6)
+    smooth_blur = max(3, abs(cut_offset_px) // 6)
     cut_mask_pil = Image.fromarray(cut_mask, mode="L")
     cut_mask_pil = cut_mask_pil.filter(ImageFilter.GaussianBlur(radius=smooth_blur))
     cut_mask = (np.array(cut_mask_pil) > 128).astype(np.uint8) * 255

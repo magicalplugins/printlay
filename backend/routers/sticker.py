@@ -244,6 +244,10 @@ def process_sticker(
     session_id = str(uuid.uuid4())
     prefix = f"sticker-sessions/{user.id}/{session_id}"
 
+    # Persist the original source image so the sticker is re-editable later
+    # (allows re-running background removal with a different method).
+    src_ct = file.content_type or "image/png"
+    storage.put_bytes(f"{prefix}/source.png", raw, src_ct)
     storage.put_bytes(f"{prefix}/preview.png", result.preview_png, "image/png")
     storage.put_bytes(f"{prefix}/border.png", result.border_png, "image/png")
     if result.cutout_png:
@@ -688,6 +692,99 @@ def edit_cutline(
     )
 
 
+class ResumeResponse(BaseModel):
+    """Everything the frontend needs to hydrate the sticker editor at the
+    last saved state — cutout image, cut line geometry, and a fresh
+    session_id that subsequent edits will operate on (we reuse the original
+    session files so no data is duplicated)."""
+    session_id: str
+    cutout_url: str
+    border_url: str
+    preview_url: str
+    source_url: str | None = None
+    cutline_points: list[list[float]]
+    img_w_px: int
+    img_h_px: int
+    width_mm: float
+    height_mm: float
+    work_dpi: float
+
+
+@router.get("/resume/{asset_id}", response_model=ResumeResponse)
+def resume_sticker(
+    asset_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Resume editing a previously saved sticker. Returns presigned URLs for
+    the session files so the frontend can hydrate the editor without
+    re-processing."""
+    from backend.models import Asset
+
+    user = _resolve_user(db, auth)
+    asset = (
+        db.query(Asset)
+        .filter(Asset.id == asset_id, Asset.user_id == user.id)
+        .one_or_none()
+    )
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    if not asset.sticker_session_prefix:
+        raise HTTPException(
+            400, "This asset was not created with the sticker editor or is not re-editable."
+        )
+
+    prefix = asset.sticker_session_prefix
+    import json
+
+    # Load cutline metadata
+    try:
+        cutline_raw = storage.get_bytes(f"{prefix}/cutline.json")
+        cutline_payload = json.loads(cutline_raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(
+            404,
+            "Sticker session data is missing. The sticker may need to be re-created.",
+        )
+
+    # Verify the cutout still exists
+    try:
+        storage.get_bytes(f"{prefix}/cutout.png")
+    except Exception:
+        raise HTTPException(
+            404, "Cutout image is missing from storage. The sticker cannot be resumed."
+        )
+
+    # Source image may not exist for stickers created before we started
+    # persisting it — that's fine, the user just can't change bg removal method.
+    source_url = _safe_presigned(f"{prefix}/source.png")
+
+    cutline_points = _normalised_points(
+        [tuple(p) for p in cutline_payload["points_px"]],
+        int(cutline_payload["width_px"]),
+        int(cutline_payload["height_px"]),
+    )
+
+    # The session_id is embedded in the prefix path
+    # e.g. "sticker-sessions/{user_id}/{session_id}"
+    parts = prefix.rstrip("/").split("/")
+    session_id = parts[-1] if len(parts) >= 3 else str(uuid.uuid4())
+
+    return ResumeResponse(
+        session_id=session_id,
+        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
+        border_url=_safe_presigned(f"{prefix}/border.png"),
+        preview_url=_safe_presigned(f"{prefix}/preview.png"),
+        source_url=source_url,
+        cutline_points=cutline_points,
+        img_w_px=int(cutline_payload["width_px"]),
+        img_h_px=int(cutline_payload["height_px"]),
+        width_mm=float(cutline_payload["width_mm"]),
+        height_mm=float(cutline_payload["height_mm"]),
+        work_dpi=float(cutline_payload.get("work_dpi", 300.0)),
+    )
+
+
 class SaveRequest(BaseModel):
     session_id: str
     name: str = "Sticker"
@@ -832,6 +929,7 @@ def save_sticker(
         thumbnail_r2_key=thumb_key,
         file_size=len(saved.pdf_bytes),
         cut_contour_json=cut_contour_json,
+        sticker_session_prefix=prefix,
     )
     db.add(asset)
     try:

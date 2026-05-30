@@ -26,6 +26,9 @@ export type Asset = {
   /** For stickers: custom cut line as normalised [x, y] points (0..1,
    *  top-left origin) in the asset's own space. Null = use bounding box. */
   cut_contour?: number[][] | null;
+  /** Present = this asset was created with the sticker editor and can be
+   *  re-opened for further editing. */
+  is_sticker_editable?: boolean;
 };
 
 export type AssetPageThumbnail = {

@@ -1,4 +1,5 @@
 import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   adminSetOfficial,
   Asset,
@@ -66,6 +67,7 @@ function OfficialBadge() {
 export default function Catalogue() {
   const { me } = useMe();
   const isAdmin = !!me?.is_admin;
+  const navigate = useNavigate();
 
   const [cats, setCats] = useState<Category[] | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -786,6 +788,18 @@ export default function Catalogue() {
                                 >
                                   ✕
                                 </button>
+                                {a.is_sticker_editable && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigate(`/app/templates/new/sticker?asset=${a.id}`);
+                                    }}
+                                    className="absolute top-1 right-8 rounded-md bg-black/70 px-1.5 py-0.5 text-xs text-white opacity-0 group-hover:opacity-100 hover:bg-fuchsia-600"
+                                    title="Edit sticker"
+                                  >
+                                    ✎
+                                  </button>
+                                )}
                               </>
                             )}
                           </div>
@@ -800,6 +814,7 @@ export default function Catalogue() {
                       onSelectAll={selectAllVisible}
                       onDeselectAll={deselectAll}
                       onDeleteSingle={onDeleteAsset}
+                      onEditSticker={(id) => navigate(`/app/templates/new/sticker?asset=${id}`)}
                       readOnly={isReadOnly}
                     />
                   )
@@ -1009,6 +1024,7 @@ function AssetListView({
   onSelectAll,
   onDeselectAll,
   onDeleteSingle,
+  onEditSticker,
   readOnly,
 }: {
   assets: Asset[];
@@ -1017,6 +1033,7 @@ function AssetListView({
   onSelectAll: () => void;
   onDeselectAll: () => void;
   onDeleteSingle: (id: string) => Promise<void> | void;
+  onEditSticker?: (id: string) => void;
   readOnly: boolean;
 }) {
   const allSelected =
@@ -1140,14 +1157,26 @@ function AssetListView({
                   onClick={(e) => e.stopPropagation()}
                 >
                   {!readOnly && (
-                    <button
-                      type="button"
-                      onClick={() => void onDeleteSingle(a.id)}
-                      className="text-xs text-neutral-500 hover:text-rose-400"
-                      title="Delete this asset"
-                    >
-                      ✕
-                    </button>
+                    <span className="inline-flex items-center gap-2">
+                      {a.is_sticker_editable && onEditSticker && (
+                        <button
+                          type="button"
+                          onClick={() => onEditSticker(a.id)}
+                          className="text-xs text-neutral-500 hover:text-fuchsia-400"
+                          title="Edit sticker"
+                        >
+                          ✎
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => void onDeleteSingle(a.id)}
+                        className="text-xs text-neutral-500 hover:text-rose-400"
+                        title="Delete this asset"
+                      >
+                        ✕
+                      </button>
+                    </span>
                   )}
                 </td>
               </tr>

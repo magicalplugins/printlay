@@ -78,6 +78,12 @@ class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     space. Lets the Sheet Builder draw/export the real contour instead of
     a bounding rectangle. Null for non-sticker assets (fall back to rect)."""
 
+    sticker_session_prefix: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
+    """R2 prefix where the sticker's editable session files live (cutout.png,
+    border.png, cutline.json, source.png). Present = sticker is re-editable."""
+
 
 class CatalogueSubscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """A subscriber's opt-in to an official AssetCategory. Read-only access:

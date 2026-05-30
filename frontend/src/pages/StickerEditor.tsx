@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ProcessResponse,
   processSticker,
@@ -7,6 +7,7 @@ import {
   editCutline,
   saveSticker,
   aiStyleSticker,
+  resumeSticker,
   AI_STYLES,
   AI_RETOUCH,
 } from "../api/sticker";
@@ -20,8 +21,10 @@ type Precision = "tight" | "medium";
 
 export default function StickerEditor() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const resumeAssetId = searchParams.get("asset");
   const { me } = useMe();
-  const [step, setStep] = useState<Step>("upload");
+  const [step, setStep] = useState<Step>(resumeAssetId ? "processing" : "upload");
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [result, setResult] = useState<ProcessResponse | null>(null);
@@ -42,6 +45,37 @@ export default function StickerEditor() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [stickerName, setStickerName] = useState<string>("");
   const [savedAssetId, setSavedAssetId] = useState<string | null>(null);
+
+  // Resume a previously saved sticker when ?asset= is present.
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (!resumeAssetId || resumedRef.current) return;
+    resumedRef.current = true;
+    (async () => {
+      try {
+        const r = await resumeSticker(resumeAssetId);
+        const syntheticResult: ProcessResponse = {
+          preview_url: r.preview_url,
+          border_url: r.border_url,
+          cutout_url: r.cutout_url,
+          width_mm: r.width_mm,
+          height_mm: r.height_mm,
+          bg_type: "transparent",
+          removal_method: null,
+          session_id: r.session_id,
+          cutline_points: r.cutline_points,
+          img_w_px: r.img_w_px,
+          img_h_px: r.img_h_px,
+        };
+        setResult(syntheticResult);
+        setPreview(r.cutout_url);
+        setStep("preview");
+      } catch (e) {
+        setError(String(e));
+        setStep("upload");
+      }
+    })();
+  }, [resumeAssetId]);
 
   useEffect(() => {
     listCategories()

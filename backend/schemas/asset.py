@@ -49,3 +49,6 @@ class AssetOut(BaseModel):
     """For stickers: the custom cut line as normalised [x, y] points
     (0..1, top-left origin). Lets the Sheet Builder draw the real contour
     instead of a bounding box. Null for assets without a stored contour."""
+    is_sticker_editable: bool = False
+    """True when the asset was created with the sticker editor and its
+    session files are preserved in R2 so the user can resume editing."""

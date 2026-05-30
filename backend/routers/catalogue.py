@@ -283,6 +283,7 @@ def list_assets(
                 is_official=r.is_official,
                 page_count=max(1, int(getattr(r, "page_count", 1) or 1)),
                 cut_contour=_asset_cut_contour(r),
+                is_sticker_editable=bool(getattr(r, "sticker_session_prefix", None)),
             )
         )
     return out
@@ -416,6 +417,7 @@ async def upload_asset(
         is_official=asset.is_official,
         page_count=max(1, int(getattr(asset, "page_count", 1) or 1)),
         cut_contour=_asset_cut_contour(asset),
+        is_sticker_editable=bool(getattr(asset, "sticker_session_prefix", None)),
     )
 
 

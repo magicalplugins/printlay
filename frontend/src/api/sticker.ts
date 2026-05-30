@@ -150,3 +150,21 @@ export async function saveSticker(
 export async function getStickerUsage(): Promise<UsageResponse> {
   return api<UsageResponse>("/api/sticker/usage");
 }
+
+export interface ResumeResponse {
+  session_id: string;
+  cutout_url: string;
+  border_url: string;
+  preview_url: string;
+  source_url: string | null;
+  cutline_points: [number, number][];
+  img_w_px: number;
+  img_h_px: number;
+  width_mm: number;
+  height_mm: number;
+  work_dpi: number;
+}
+
+export async function resumeSticker(assetId: string): Promise<ResumeResponse> {
+  return api<ResumeResponse>(`/api/sticker/resume/${assetId}`);
+}

@@ -1406,12 +1406,14 @@ function CutlineEditor({
       if (Math.hypot(dx, dy) <= r) inCount++;
     }
     if (inCount < 2) return;
-    // Stencil spans roughly a third of the in-brush run (capped so the
-    // brush can't reach all the way around small loops).
-    const K = Math.max(2, Math.min(Math.floor(len / 3), Math.round(inCount / 3)));
+
+    // Conservative stencil: use only immediate local neighbours to avoid
+    // pulling points toward distant parts of the polygon (which caused
+    // weird loops on desktop where mouse events fire rapidly).
+    const K = Math.max(2, Math.min(Math.floor(inCount / 4), 12));
 
     let pts = src0;
-    const ITER = 8;
+    const ITER = 3;
     for (let it = 0; it < ITER; it++) {
       const src = pts;
       const out = src.slice() as [number, number][];
@@ -1422,12 +1424,17 @@ function CutlineEditor({
         const dist = Math.hypot(dx, dy);
         if (dist > r) continue;
         touched = true;
-        const w = 1 - dist / r; // 1 at centre → 0 at edge
-        const a = src[(i - K + len) % len];
-        const b = src[(i + K) % len];
-        const ax = (a[0] + b[0]) / 2;
-        const ay = (a[1] + b[1]) / 2;
-        const lambda = Math.min(0.92, 0.85 * w);
+        const w = 1 - dist / r;
+        // Average of K neighbours on each side (weighted mean of the chord)
+        let ax = 0, ay = 0;
+        for (let k = 1; k <= K; k++) {
+          ax += src[(i - k + len) % len][0] + src[(i + k) % len][0];
+          ay += src[(i - k + len) % len][1] + src[(i + k) % len][1];
+        }
+        ax /= K * 2;
+        ay /= K * 2;
+        // Gentle pull (lambda capped lower to prevent overshoot)
+        const lambda = Math.min(0.45, 0.4 * w);
         out[i] = [
           src[i][0] + (ax - src[i][0]) * lambda,
           src[i][1] + (ay - src[i][1]) * lambda,

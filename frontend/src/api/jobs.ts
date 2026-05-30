@@ -149,6 +149,31 @@ export type GenerateOptions = {
   mark_spot_color?: string | null;
 };
 
+export async function exportJobSvg(
+  id: string,
+  opts: { cut_color?: string; mark_color?: string } = {}
+): Promise<Blob> {
+  const { getSupabase } = await import("../auth/supabase");
+  const supabase = await getSupabase().catch(() => null);
+  const headers: Record<string, string> = { Accept: "image/svg+xml" };
+  if (supabase) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.access_token)
+      headers["Authorization"] = `Bearer ${session.access_token}`;
+  }
+  const params = new URLSearchParams();
+  if (opts.cut_color) params.set("cut_color", opts.cut_color);
+  if (opts.mark_color) params.set("mark_color", opts.mark_color);
+  const res = await fetch(`/api/jobs/${id}/export-svg?${params.toString()}`, {
+    method: "POST",
+    headers,
+  });
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+  return res.blob();
+}
+
 export function generateOutput(id: string, options: GenerateOptions = {}) {
   // Backwards-compatible: an empty options object means "no body", which
   // the FastAPI route treats as the default behaviour (no cut lines,

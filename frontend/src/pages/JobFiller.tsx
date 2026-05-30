@@ -28,6 +28,7 @@ import {
 import {
   applyJobQueue,
   deleteJobUpload,
+  exportJobSvg,
   generateOutput,
   getJob,
   Job,
@@ -356,6 +357,7 @@ export default function JobFiller() {
 
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [exportingSvg, setExportingSvg] = useState(false);
   const [err, setErr] = useState<FormattedApiError | null>(null);
   const reportErr = (e: unknown) => setErr(formatApiError(e));
   const [savedHint, setSavedHint] = useState(false);
@@ -806,6 +808,29 @@ export default function JobFiller() {
     }
   }
 
+  async function onExportCutLines() {
+    if (!job) return;
+    setExportingSvg(true);
+    setErr(null);
+    try {
+      await saveQueue();
+      const blob = await exportJobSvg(job.id, {
+        cut_color: cutLineSpot,
+        mark_color: markSpot,
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${job.name || "job"}-cutlines.svg`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      reportErr(e);
+    } finally {
+      setExportingSvg(false);
+    }
+  }
+
   async function onClearQueue() {
     if (rows.length === 0) return;
     if (!confirm("Clear the queue and remove all uploaded artwork for this job?")) return;
@@ -887,6 +912,14 @@ export default function JobFiller() {
             className="rounded-lg border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600 disabled:opacity-40"
           >
             {savedHint ? "Saved ✓" : "Save draft"}
+          </button>
+          <button
+            onClick={onExportCutLines}
+            disabled={exportingSvg || queuedQty === 0}
+            className="rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white px-4 py-2 text-sm font-medium"
+            title="Export an SVG of just the cut lines + registration marks (for the cutter)"
+          >
+            {exportingSvg ? "Exporting…" : "Export Cut Lines"}
           </button>
           {locked ? (
             <Link

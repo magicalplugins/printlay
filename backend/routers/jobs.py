@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -967,3 +967,94 @@ def generate_output(
     response = OutputOut.model_validate(out)
     response.color_swap_report = sheet.color_swap_report
     return response
+
+
+def _spot_hex(db: Session, user: User, value: str | None, fallback: str) -> str:
+    """Resolve a spot value (name or #hex) to a concrete #RRGGBB for SVG
+    strokes. A named spot resolves via the user's library / built-ins."""
+    if value and value.startswith("#"):
+        return value
+    _, rgb = _resolve_spot(db, user, value)
+    if value:
+        return "#%02X%02X%02X" % rgb
+    return fallback
+
+
+def _shape_to_svg_cut(shape: dict, stroke: str) -> str:
+    """Render a template slot shape as an SVG cut path in mm (top-left
+    origin, matching the stored bbox coordinate space)."""
+    PT_TO_MM = 25.4 / 72.0
+    bbox = shape.get("bbox") or [0, 0, 0, 0]
+    bx, by, bw, bh = (float(v) * PT_TO_MM for v in bbox[:4])
+    kind = shape.get("kind") or "rect"
+    if kind == "ellipse":
+        return (
+            f'  <ellipse cx="{bx + bw / 2:.2f}" cy="{by + bh / 2:.2f}" '
+            f'rx="{bw / 2:.2f}" ry="{bh / 2:.2f}" '
+            f'fill="none" stroke="{stroke}" stroke-width="0.1"/>'
+        )
+    path = shape.get("path")
+    if kind == "polygon" and isinstance(path, list) and len(path) >= 3:
+        pts = [(bx + float(u) * bw, by + float(v) * bh) for u, v in path]
+        d = "M " + " L ".join(f"{px:.2f} {py:.2f}" for px, py in pts) + " Z"
+        return f'  <path d="{d}" fill="none" stroke="{stroke}" stroke-width="0.1"/>'
+    r = max(0.0, min(float(shape.get("corner_radius_pt") or 0.0) * PT_TO_MM, min(bw, bh) / 2))
+    rxry = f' rx="{r:.2f}" ry="{r:.2f}"' if r > 0 else ""
+    return (
+        f'  <rect x="{bx:.2f}" y="{by:.2f}" width="{bw:.2f}" height="{bh:.2f}"{rxry} '
+        f'fill="none" stroke="{stroke}" stroke-width="0.1"/>'
+    )
+
+
+@router.post("/{job_id}/export-svg")
+def export_job_svg(
+    job_id: uuid.UUID,
+    cut_color: str = Query(default="CutContour"),
+    mark_color: str = Query(default="#000000"),
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export an SVG with the template's cut lines + registration marks only
+    (no artwork). Mirrors the Sheet Builder's "Export Cut Lines": cut paths at
+    0.1 stroke and HOLLOW registration marks (e.g. 6mm Velloblade circles) so
+    a cutting machine routes the outline, while the print PDF keeps solid
+    marks."""
+    from backend.routers.sheet_builder import (
+        _svg_generic_marks,
+        _svg_summa_marks,
+        _svg_velloblade_marks,
+    )
+
+    user = _resolve_user(db, auth)
+    job = _own_job(db, user, job_id)
+    tpl = db.query(Template).filter(Template.id == job.template_id).one()
+
+    PT_TO_MM = 25.4 / 72.0
+    w = tpl.page_width * PT_TO_MM
+    h = tpl.page_height * PT_TO_MM
+
+    cut_stroke = _spot_hex(db, user, cut_color, "#FF00FF")
+    mark_stroke = _spot_hex(db, user, mark_color, "#000000")
+
+    elements: list[str] = []
+    for shape in tpl.shapes or []:
+        elements.append(_shape_to_svg_cut(shape, cut_stroke))
+
+    reg_type = tpl.registration_type
+    mark_offset = float(tpl.mark_offset_mm or 5.0)
+    max_zone = tpl.max_zone_length_mm
+    if reg_type == "velloblade":
+        _svg_velloblade_marks(elements, w, h, mark_offset, max_zone, mark_stroke)
+    elif reg_type == "summa_opos":
+        _svg_summa_marks(elements, w, h, mark_offset, max_zone, mark_stroke)
+    elif reg_type == "generic":
+        _svg_generic_marks(elements, w, h, mark_offset, mark_stroke)
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{w:.2f}mm" height="{h:.2f}mm" '
+        f'viewBox="0 0 {w:.2f} {h:.2f}">\n'
+        + "\n".join(elements)
+        + "\n</svg>\n"
+    )
+    return Response(content=svg, media_type="image/svg+xml")

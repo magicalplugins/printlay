@@ -371,6 +371,32 @@ def delete_sheet(
     db.commit()
 
 
+class BulkDeleteIn(BaseModel):
+    ids: list[uuid.UUID]
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+def bulk_delete_sheets(
+    body: BulkDeleteIn,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    user = _resolve_user(db, auth)
+    rows = (
+        db.query(StickerSheet)
+        .filter(StickerSheet.user_id == user.id, StickerSheet.id.in_(body.ids))
+        .all()
+    )
+    for sheet in rows:
+        if sheet.output_r2_key:
+            try:
+                storage.delete(sheet.output_r2_key)
+            except Exception:
+                pass
+        db.delete(sheet)
+    db.commit()
+
+
 # ---------- Auto-Layout ----------
 
 

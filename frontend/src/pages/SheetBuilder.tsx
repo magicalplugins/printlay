@@ -5,8 +5,10 @@ import {
   CutterPreset,
   StickerSheet,
   autoLayout,
+  bulkDeleteSheets,
   createPreset,
   createSheet,
+  deleteSheet,
   exportSheetPdf,
   exportSheetSvg,
   listPresets,
@@ -425,18 +427,120 @@ export default function SheetBuilder() {
     return { count, metres };
   }, [activeSheet]);
 
+  // Sheet list view mode + selection state
+  const [sheetViewMode, setSheetViewMode] = useState<"grid" | "list">("grid");
+  const [selectedSheetIds, setSelectedSheetIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [deletingSheets, setDeletingSheets] = useState(false);
+
+  function toggleSheetSelection(id: string) {
+    setSelectedSheetIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllSheets() {
+    if (!sheets) return;
+    setSelectedSheetIds(new Set(sheets.map((s) => s.id)));
+  }
+
+  function deselectAllSheets() {
+    setSelectedSheetIds(new Set());
+  }
+
+  async function handleBulkDelete() {
+    if (selectedSheetIds.size === 0) return;
+    const count = selectedSheetIds.size;
+    if (!confirm(`Delete ${count} sheet${count > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    setDeletingSheets(true);
+    try {
+      await bulkDeleteSheets([...selectedSheetIds]);
+      setSheets((prev) => prev?.filter((s) => !selectedSheetIds.has(s.id)) ?? null);
+      setSelectedSheetIds(new Set());
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setDeletingSheets(false);
+    }
+  }
+
+  async function handleDeleteSingle(id: string) {
+    if (!confirm("Delete this sheet?")) return;
+    try {
+      await deleteSheet(id);
+      setSheets((prev) => prev?.filter((s) => s.id !== id) ?? null);
+      setSelectedSheetIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
+
   if (!activeSheet) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="max-w-5xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-white">Sheet Builder</h1>
-          <button
-            onClick={() => setShowNewSheet(true)}
-            className="rounded-lg bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 text-sm font-medium"
-          >
-            + New Sheet
-          </button>
+          <div className="flex items-center gap-3">
+            {/* View mode toggle */}
+            <div className="flex rounded-lg border border-neutral-700 overflow-hidden">
+              <button
+                onClick={() => setSheetViewMode("grid")}
+                className={`px-3 py-1.5 text-xs font-medium ${sheetViewMode === "grid" ? "bg-violet-600 text-white" : "bg-neutral-900 text-neutral-400 hover:text-white"}`}
+              >
+                Grid
+              </button>
+              <button
+                onClick={() => setSheetViewMode("list")}
+                className={`px-3 py-1.5 text-xs font-medium ${sheetViewMode === "list" ? "bg-violet-600 text-white" : "bg-neutral-900 text-neutral-400 hover:text-white"}`}
+              >
+                List
+              </button>
+            </div>
+            <button
+              onClick={() => setShowNewSheet(true)}
+              className="rounded-lg bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 text-sm font-medium"
+            >
+              + New Sheet
+            </button>
+          </div>
         </div>
+
+        {/* Selection toolbar */}
+        {selectedSheetIds.size > 0 && (
+          <div className="flex items-center gap-3 mb-4 rounded-lg bg-violet-500/10 border border-violet-500/30 px-4 py-2.5">
+            <span className="text-sm text-violet-300 font-medium">
+              {selectedSheetIds.size} selected
+            </span>
+            <button
+              onClick={selectAllSheets}
+              className="text-xs text-neutral-400 hover:text-white"
+            >
+              Select all
+            </button>
+            <button
+              onClick={deselectAllSheets}
+              className="text-xs text-neutral-400 hover:text-white"
+            >
+              Deselect
+            </button>
+            <div className="flex-1" />
+            <button
+              onClick={handleBulkDelete}
+              disabled={deletingSheets}
+              className="rounded-md bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+            >
+              {deletingSheets ? "Deleting..." : `Delete (${selectedSheetIds.size})`}
+            </button>
+          </div>
+        )}
 
         {showNewSheet && (
           <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 mb-6">
@@ -485,21 +589,114 @@ export default function SheetBuilder() {
         )}
 
         {sheets && sheets.length > 0 ? (
-          <div className="grid gap-3">
-            {sheets.map((s) => (
-              <button
-                key={s.id}
-                onClick={() => setActiveSheet(s)}
-                className="w-full text-left bg-neutral-900 border border-neutral-800 hover:border-violet-500/50 rounded-xl p-4 transition-colors"
-              >
-                <div className="font-medium text-white">{s.name}</div>
-                <div className="text-xs text-neutral-400 mt-1">
-                  {s.media_width_mm}mm wide · {s.placements?.length ?? 0}{" "}
-                  stickers · {(s.media_height_mm / 1000).toFixed(2)}m
-                </div>
-              </button>
-            ))}
-          </div>
+          sheetViewMode === "grid" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sheets.map((s) => {
+                const selected = selectedSheetIds.has(s.id);
+                return (
+                  <div
+                    key={s.id}
+                    className={`group relative bg-neutral-900 border rounded-xl p-4 transition-colors cursor-pointer ${
+                      selected
+                        ? "border-violet-400 ring-1 ring-violet-400/50"
+                        : "border-neutral-800 hover:border-violet-500/50"
+                    }`}
+                    onClick={() => setActiveSheet(s)}
+                  >
+                    {/* Checkbox */}
+                    <div
+                      className="absolute top-3 left-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleSheetSelection(s.id)}
+                        className="h-4 w-4 rounded border-neutral-600 bg-neutral-800 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                      />
+                    </div>
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDeleteSingle(s.id);
+                      }}
+                      className="absolute top-2 right-2 rounded-md bg-black/60 px-1.5 py-0.5 text-xs text-white opacity-0 group-hover:opacity-100 hover:bg-rose-600 transition"
+                    >
+                      ✕
+                    </button>
+                    {/* Card content */}
+                    <div className="ml-6">
+                      <div className="font-medium text-white truncate">{s.name}</div>
+                      <div className="text-xs text-neutral-400 mt-1">
+                        {s.media_width_mm}mm wide
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-0.5">
+                        {s.placements?.length ?? 0} stickers · {(s.media_height_mm / 1000).toFixed(2)}m
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* List view */
+            <div className="rounded-xl border border-neutral-800 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-neutral-950/80 text-neutral-500 text-xs uppercase tracking-widest">
+                  <tr>
+                    <th className="w-10 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={sheets.length > 0 && selectedSheetIds.size === sheets.length}
+                        onChange={() => selectedSheetIds.size === sheets.length ? deselectAllSheets() : selectAllSheets()}
+                        className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                      />
+                    </th>
+                    <th className="text-left font-normal px-3 py-2">Name</th>
+                    <th className="text-left font-normal px-3 py-2 hidden sm:table-cell">Width</th>
+                    <th className="text-right font-normal px-3 py-2 hidden sm:table-cell">Stickers</th>
+                    <th className="text-right font-normal px-3 py-2 hidden md:table-cell">Length</th>
+                    <th className="w-12"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-900">
+                  {sheets.map((s) => {
+                    const selected = selectedSheetIds.has(s.id);
+                    return (
+                      <tr
+                        key={s.id}
+                        onClick={() => setActiveSheet(s)}
+                        className={`transition cursor-pointer ${selected ? "bg-violet-500/[0.07]" : "hover:bg-neutral-900/40"}`}
+                      >
+                        <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSheetSelection(s.id)}
+                            className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="px-3 py-2 text-white font-medium truncate max-w-[300px]">{s.name}</td>
+                        <td className="px-3 py-2 text-neutral-400 hidden sm:table-cell">{s.media_width_mm}mm</td>
+                        <td className="px-3 py-2 text-right text-neutral-400 tabular-nums hidden sm:table-cell">{s.placements?.length ?? 0}</td>
+                        <td className="px-3 py-2 text-right text-neutral-400 tabular-nums hidden md:table-cell">{(s.media_height_mm / 1000).toFixed(2)}m</td>
+                        <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => void handleDeleteSingle(s.id)}
+                            className="text-xs text-neutral-500 hover:text-rose-400"
+                            title="Delete"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : sheets ? (
           <p className="text-neutral-500 text-sm">
             No sheets yet. Create one to get started.

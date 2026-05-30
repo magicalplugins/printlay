@@ -108,6 +108,13 @@ export function deleteSheet(id: string) {
   return api<void>(`/api/sheets/${id}`, { method: "DELETE" });
 }
 
+export function bulkDeleteSheets(ids: string[]) {
+  return api<void>("/api/sheets/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });
+}
+
 export function autoLayout(
   sheetId: string,
   assetId: string,

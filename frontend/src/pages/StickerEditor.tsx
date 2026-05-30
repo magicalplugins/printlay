@@ -216,12 +216,18 @@ export default function StickerEditor() {
     [handleFile]
   );
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (overwrite?: boolean) => {
     if (!result) return;
     setStep("saving");
     try {
       const name = stickerName.trim() || "Sticker";
-      const saved = await saveSticker(result.session_id, name, categoryId);
+      const saved = await saveSticker(
+        result.session_id,
+        name,
+        categoryId,
+        true,
+        overwrite && resumeAssetId ? resumeAssetId : null
+      );
       setSavedAssetId(saved.asset_id);
       setStep("done");
     } catch (e: any) {
@@ -232,7 +238,7 @@ export default function StickerEditor() {
       );
       setStep("preview");
     }
-  }, [result, stickerName, categoryId]);
+  }, [result, stickerName, categoryId, resumeAssetId]);
 
   const handleCreateCategory = useCallback(async (name: string) => {
     const cat = await createCategory(name);
@@ -318,6 +324,7 @@ export default function StickerEditor() {
           onCreateCategory={handleCreateCategory}
           onApprove={handleSave}
           onRetry={reset}
+          isResuming={!!resumeAssetId}
         />
       )}
 
@@ -562,6 +569,7 @@ function PreviewState({
   onCreateCategory,
   onApprove,
   onRetry,
+  isResuming,
 }: {
   result: ProcessResponse;
   mode: CutlineMode;
@@ -586,8 +594,9 @@ function PreviewState({
   stickerName: string;
   setStickerName: (n: string) => void;
   onCreateCategory: (name: string) => Promise<Category>;
-  onApprove: () => void;
+  onApprove: (overwrite?: boolean) => void;
   onRetry: () => void;
+  isResuming?: boolean;
 }) {
   const [creatingCat, setCreatingCat] = useState(false);
   const [newCatName, setNewCatName] = useState("");
@@ -926,8 +935,14 @@ function PreviewState({
       {!editing && (
       <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-4">
         <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
-          Save to catalogue
+          {isResuming ? "Save options" : "Save to catalogue"}
         </legend>
+
+        {isResuming && (
+          <p className="text-xs text-neutral-400 -mt-1">
+            You&apos;re editing a saved sticker. Update the original (sheets using it will get this version) or save a separate copy.
+          </p>
+        )}
 
         <div>
           <label className="block text-xs text-neutral-400 mb-1">Name</label>
@@ -1004,13 +1019,32 @@ function PreviewState({
 
       {!editing && (
       <div className="flex flex-col sm:flex-row gap-3">
-        <button
-          onClick={onApprove}
-          disabled={regenerating}
-          className="flex-1 rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition text-center disabled:opacity-50"
-        >
-          Save to catalogue
-        </button>
+        {isResuming ? (
+          <>
+            <button
+              onClick={() => onApprove(true)}
+              disabled={regenerating}
+              className="flex-1 rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition text-center disabled:opacity-50"
+            >
+              Update original
+            </button>
+            <button
+              onClick={() => onApprove(false)}
+              disabled={regenerating}
+              className="flex-1 rounded-xl border border-fuchsia-500 px-6 py-3.5 font-semibold text-fuchsia-300 hover:bg-fuchsia-500/10 transition text-center disabled:opacity-50"
+            >
+              Save as copy
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => onApprove()}
+            disabled={regenerating}
+            className="flex-1 rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition text-center disabled:opacity-50"
+          >
+            Save to catalogue
+          </button>
+        )}
         <button
           onClick={onRetry}
           className="flex-1 rounded-xl border border-neutral-700 px-6 py-3.5 font-medium text-neutral-300 hover:border-neutral-500 transition text-center"

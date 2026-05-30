@@ -790,6 +790,7 @@ class SaveRequest(BaseModel):
     name: str = "Sticker"
     include_cut_contour: bool = True
     category_id: str | None = None
+    overwrite_asset_id: str | None = None
 
 
 def _resolve_sticker_category(db: Session, user_id: uuid.UUID, category_id: str | None):
@@ -910,28 +911,58 @@ def save_sticker(
         except Exception:
             cut_contour_json = None
 
-    asset_id = uuid.uuid4()
-    r2_key = f"assets/{user.id}/{asset_id}.pdf"
-    thumb_key = f"assets/{user.id}/{asset_id}_thumb.jpg"
+    # --- Overwrite existing asset or create new ---
+    if body.overwrite_asset_id:
+        existing = (
+            db.query(Asset)
+            .filter(
+                Asset.id == uuid.UUID(body.overwrite_asset_id),
+                Asset.user_id == user.id,
+            )
+            .one_or_none()
+        )
+        if existing is None:
+            raise HTTPException(404, "Original asset not found")
 
-    storage.put_bytes(r2_key, saved.pdf_bytes, "application/pdf")
-    storage.put_bytes(thumb_key, saved.thumbnail_bytes, "image/jpeg")
+        asset_id = existing.id
+        r2_key = existing.r2_key
+        thumb_key = existing.thumbnail_r2_key
 
-    asset = Asset(
-        id=asset_id,
-        user_id=user.id,
-        category_id=category.id,
-        name=body.name,
-        kind="pdf",
-        width_pt=saved.width_pt,
-        height_pt=saved.height_pt,
-        r2_key=r2_key,
-        thumbnail_r2_key=thumb_key,
-        file_size=len(saved.pdf_bytes),
-        cut_contour_json=cut_contour_json,
-        sticker_session_prefix=prefix,
-    )
-    db.add(asset)
+        storage.put_bytes(r2_key, saved.pdf_bytes, "application/pdf")
+        storage.put_bytes(thumb_key, saved.thumbnail_bytes, "image/jpeg")
+
+        existing.name = body.name
+        existing.width_pt = saved.width_pt
+        existing.height_pt = saved.height_pt
+        existing.file_size = len(saved.pdf_bytes)
+        existing.cut_contour_json = cut_contour_json
+        existing.sticker_session_prefix = prefix
+        if body.category_id:
+            existing.category_id = category.id
+    else:
+        asset_id = uuid.uuid4()
+        r2_key = f"assets/{user.id}/{asset_id}.pdf"
+        thumb_key = f"assets/{user.id}/{asset_id}_thumb.jpg"
+
+        storage.put_bytes(r2_key, saved.pdf_bytes, "application/pdf")
+        storage.put_bytes(thumb_key, saved.thumbnail_bytes, "image/jpeg")
+
+        asset = Asset(
+            id=asset_id,
+            user_id=user.id,
+            category_id=category.id,
+            name=body.name,
+            kind="pdf",
+            width_pt=saved.width_pt,
+            height_pt=saved.height_pt,
+            r2_key=r2_key,
+            thumbnail_r2_key=thumb_key,
+            file_size=len(saved.pdf_bytes),
+            cut_contour_json=cut_contour_json,
+            sticker_session_prefix=prefix,
+        )
+        db.add(asset)
+
     try:
         db.commit()
     except Exception as exc:

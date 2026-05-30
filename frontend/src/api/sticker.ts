@@ -134,7 +134,8 @@ export async function saveSticker(
   sessionId: string,
   name: string = "Sticker",
   categoryId?: string | null,
-  includeCutContour: boolean = true
+  includeCutContour: boolean = true,
+  overwriteAssetId?: string | null
 ): Promise<SaveResponse> {
   return api<SaveResponse>("/api/sticker/save", {
     method: "POST",
@@ -143,6 +144,7 @@ export async function saveSticker(
       name,
       category_id: categoryId ?? null,
       include_cut_contour: includeCutContour,
+      overwrite_asset_id: overwriteAssetId ?? null,
     }),
   });
 }

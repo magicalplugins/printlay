@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Shape } from "../../api/templates";
 
 interface QuickPreviewProps {
@@ -10,7 +11,7 @@ interface QuickPreviewProps {
 
 /**
  * Eyeball icon button that shows a mini SVG layout preview on click.
- * Used in Jobs, Templates, and Sheets lists for quick visual identification.
+ * Uses a portal so the popup floats above overflow:hidden containers.
  */
 export default function QuickPreview({
   pageWidth,
@@ -21,6 +22,7 @@ export default function QuickPreview({
   const [open, setOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -36,6 +38,15 @@ export default function QuickPreview({
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setPos({
+      top: rect.bottom + 4 + window.scrollY,
+      left: rect.left + rect.width / 2 + window.scrollX,
+    });
   }, [open]);
 
   const maxDim = 240;
@@ -71,10 +82,15 @@ export default function QuickPreview({
           <circle cx="12" cy="12" r="3" />
         </svg>
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
           ref={popRef}
-          className="absolute z-50 top-full mt-1 left-1/2 -translate-x-1/2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl p-3"
+          className="fixed z-[9999] rounded-xl border border-neutral-700 bg-neutral-900 shadow-2xl p-3"
+          style={{
+            top: pos.top - window.scrollY,
+            left: pos.left,
+            transform: "translateX(-50%)",
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           <svg
@@ -126,7 +142,8 @@ export default function QuickPreview({
           <div className="text-[10px] text-neutral-500 mt-1.5 text-center">
             {Math.round((pageWidth * 25.4) / 72)} × {Math.round((pageHeight * 25.4) / 72)} mm · {shapes.length} slot{shapes.length !== 1 ? "s" : ""}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   );

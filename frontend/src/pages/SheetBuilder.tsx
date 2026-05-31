@@ -483,6 +483,22 @@ export default function SheetBuilder() {
     }
   }
 
+  // Quick lookup: asset_id -> thumbnail URL for the sheet list previews
+  const assetThumbMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of assets) {
+      if (a.thumbnail_url) m.set(a.id, a.thumbnail_url);
+      if (a.preview_url) m.set(a.id, a.preview_url);
+    }
+    return m;
+  }, [assets]);
+
+  function sheetThumb(s: StickerSheet): string | null {
+    const firstId = s.placements?.[0]?.asset_id;
+    if (!firstId) return null;
+    return assetThumbMap.get(firstId) ?? null;
+  }
+
   if (!activeSheet) {
     return (
       <div className="max-w-5xl mx-auto px-4 py-8">
@@ -626,13 +642,24 @@ export default function SheetBuilder() {
                       ✕
                     </button>
                     {/* Card content */}
-                    <div className="ml-6">
-                      <div className="font-medium text-white truncate">{s.name}</div>
-                      <div className="text-xs text-neutral-400 mt-1">
-                        {s.media_width_mm}mm wide
-                      </div>
-                      <div className="text-xs text-neutral-500 mt-0.5">
-                        {s.placements?.length ?? 0} stickers · {(s.media_height_mm / 1000).toFixed(2)}m
+                    <div className="flex items-center gap-3 ml-6">
+                      {sheetThumb(s) ? (
+                        <img
+                          src={sheetThumb(s)!}
+                          alt=""
+                          className="h-10 w-10 rounded-md border border-neutral-700 bg-white object-contain shrink-0"
+                          draggable={false}
+                        />
+                      ) : (
+                        <div className="h-10 w-10 rounded-md border border-neutral-700 bg-neutral-800 flex items-center justify-center text-[9px] text-neutral-500 shrink-0">
+                          —
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-medium text-white truncate">{s.name}</div>
+                        <div className="text-xs text-neutral-400 mt-0.5">
+                          {s.media_width_mm}mm wide · {s.placements?.length ?? 0} stickers · {(s.media_height_mm / 1000).toFixed(2)}m
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -653,6 +680,7 @@ export default function SheetBuilder() {
                         className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
                       />
                     </th>
+                    <th className="w-14"></th>
                     <th className="text-left font-normal px-3 py-2">Name</th>
                     <th className="text-left font-normal px-3 py-2 hidden sm:table-cell">Width</th>
                     <th className="text-right font-normal px-3 py-2 hidden sm:table-cell">Stickers</th>
@@ -676,6 +704,15 @@ export default function SheetBuilder() {
                             onChange={() => toggleSheetSelection(s.id)}
                             className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
                           />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <div className="h-9 w-9 rounded border border-neutral-700 bg-white overflow-hidden">
+                            {sheetThumb(s) ? (
+                              <img src={sheetThumb(s)!} alt="" className="w-full h-full object-contain p-0.5" draggable={false} />
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center text-[8px] text-neutral-400">—</div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-3 py-2 text-white font-medium truncate max-w-[300px]">{s.name}</td>
                         <td className="px-3 py-2 text-neutral-400 hidden sm:table-cell">{s.media_width_mm}mm</td>

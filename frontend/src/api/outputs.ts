@@ -17,3 +17,9 @@ export const downloadOutputUrl = (id: string) =>
 
 export const deleteOutput = (id: string) =>
   api<void>(`/api/outputs/${id}`, { method: "DELETE" });
+
+export const bulkDeleteOutputs = (ids: string[]) =>
+  api<void>("/api/outputs/bulk-delete", {
+    method: "POST",
+    body: JSON.stringify({ ids }),
+  });

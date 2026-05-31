@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { deleteJob, duplicateJob, Job, listJobs, updateJob } from "../api/jobs";
+import { listTemplates, Template } from "../api/templates";
 import { CardGridSkeleton } from "../components/Skeleton";
 import { LockedButton } from "../components/app/LockedOverlay";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
+import QuickPreview from "../components/app/QuickPreview";
 import UsageHint from "../components/app/UsageHint";
 import { formatApiError, FormattedApiError } from "../utils/apiError";
 
@@ -34,6 +36,7 @@ function ListIcon({ active }: { active: boolean }) {
 
 export default function Jobs() {
   const [items, setItems] = useState<Job[] | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
   const [err, setErr] = useState<FormattedApiError | null>(null);
   const reportErr = (e: unknown) => setErr(formatApiError(e));
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -52,6 +55,15 @@ export default function Jobs() {
     listJobs().then(setItems).catch((e) => reportErr(e));
   }
   useEffect(load, []);
+
+  useEffect(() => {
+    listTemplates().then(setTemplates).catch(() => {});
+  }, []);
+
+  const tplMap = useMemo(
+    () => new Map(templates.map((t) => [t.id, t])),
+    [templates]
+  );
 
   useEffect(() => {
     if (editingId && editInputRef.current) {
@@ -289,14 +301,25 @@ export default function Jobs() {
                     </div>
                   </div>
                   {!isEditing && (
-                    <button
-                      type="button"
-                      onClick={(e) => { stop(e); onDelete(j.id); }}
-                      className="shrink-0 text-xs text-neutral-500 hover:text-rose-400 px-2 py-1 -mr-2 -mt-1"
-                      aria-label={`Delete job ${j.name}`}
-                    >
-                      ✕
-                    </button>
+                    <div className="flex items-center gap-0.5 shrink-0 -mr-2 -mt-1">
+                      {tplMap.get(j.template_id) && (
+                        <span onClick={stop} onPointerDown={stop}>
+                          <QuickPreview
+                            pageWidth={tplMap.get(j.template_id)!.page_width}
+                            pageHeight={tplMap.get(j.template_id)!.page_height}
+                            shapes={tplMap.get(j.template_id)!.shapes}
+                          />
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => { stop(e); onDelete(j.id); }}
+                        className="shrink-0 text-xs text-neutral-500 hover:text-rose-400 px-2 py-1"
+                        aria-label={`Delete job ${j.name}`}
+                      >
+                        ✕
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs">
@@ -467,6 +490,13 @@ export default function Jobs() {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 shrink-0">
+                  {tplMap.get(j.template_id) && (
+                    <QuickPreview
+                      pageWidth={tplMap.get(j.template_id)!.page_width}
+                      pageHeight={tplMap.get(j.template_id)!.page_height}
+                      shapes={tplMap.get(j.template_id)!.shapes}
+                    />
+                  )}
                   <Link
                     to={`/app/jobs/${j.id}/program`}
                     onClick={stop}

@@ -1,18 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
+  bulkDeleteOutputs,
   deleteOutput,
   downloadOutputUrl,
   listOutputs,
   Output,
 } from "../api/outputs";
+import { listTemplates, Template } from "../api/templates";
+import { listJobs, Job } from "../api/jobs";
 import { useMe } from "../auth/MeProvider";
+import QuickPreview from "../components/app/QuickPreview";
 import UsageHint from "../components/app/UsageHint";
 import {
   humanizeMinutes,
   minutesSavedForOutput,
   TIME_SAVED_DEFAULTS,
 } from "../utils/timeSaved";
+
+type ViewMode = "grid" | "list";
+const VIEW_KEY = "printlay.outputsView";
 
 export default function Outputs() {
   const { me } = useMe();
@@ -21,34 +28,58 @@ export default function Outputs() {
   const [search] = useSearchParams();
   const highlight = search.get("highlight");
 
-  // Same prefs the dashboard uses; falls back to the documented
-  // defaults until /me lands so the row line doesn't flash a "0 min"
-  // placeholder on first paint.
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [view, setView] = useState<ViewMode>(() => {
+    try { return (localStorage.getItem(VIEW_KEY) as ViewMode) || "list"; }
+    catch { return "list"; }
+  });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+
   const showTimeSaved = me?.time_saved_show_enabled ?? true;
   const timePrefs = {
     setupMinutes: me?.time_saved_setup_minutes ?? TIME_SAVED_DEFAULTS.setupMinutes,
-    perSlotSeconds:
-      me?.time_saved_per_slot_seconds ?? TIME_SAVED_DEFAULTS.perSlotSeconds,
+    perSlotSeconds: me?.time_saved_per_slot_seconds ?? TIME_SAVED_DEFAULTS.perSlotSeconds,
   };
 
   function load() {
     listOutputs().then(setItems).catch((e) => setErr(String(e)));
   }
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    listTemplates().then(setTemplates).catch(() => {});
+    listJobs().then(setJobs).catch(() => {});
+  }, []);
+
+  const tplMap = useMemo(() => new Map(templates.map((t) => [t.id, t])), [templates]);
+  const jobMap = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs]);
+
+  function switchView(v: ViewMode) {
+    setView(v);
+    setSelected(new Set());
+    try { localStorage.setItem(VIEW_KEY, v); } catch {}
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (!items) return;
+    setSelected((prev) => prev.size === items.length ? new Set() : new Set(items.map((o) => o.id)));
+  }
 
   async function onDownload(id: string) {
-    // iPadOS / Safari blocks window.open() called after `await` because it's
-    // no longer attached to a user gesture. Open a blank tab synchronously,
-    // then redirect it once the presigned URL resolves. Falls back to a
-    // same-tab navigation if the popup was suppressed entirely.
     const win = window.open("", "_blank");
     try {
       const { url } = await downloadOutputUrl(id);
-      if (win && !win.closed) {
-        win.location.href = url;
-      } else {
-        window.location.href = url;
-      }
+      if (win && !win.closed) win.location.href = url;
+      else window.location.href = url;
     } catch (e) {
       if (win && !win.closed) win.close();
       setErr(String(e));
@@ -58,82 +89,273 @@ export default function Outputs() {
   async function onDelete(id: string) {
     if (!confirm("Delete this output PDF?")) return;
     await deleteOutput(id);
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
     load();
   }
 
+  async function onDeleteSelected() {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} output${selected.size > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      await bulkDeleteOutputs([...selected]);
+      setSelected(new Set());
+      load();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function tplForOutput(o: Output): Template | undefined {
+    const job = jobMap.get(o.job_id);
+    if (!job) return undefined;
+    return tplMap.get(job.template_id);
+  }
+
+  const allSelected = !!items && items.length > 0 && selected.size === items.length;
+  const someSelected = selected.size > 0;
+
   return (
-    <div className="max-w-5xl mx-auto px-6 py-12">
-      <div className="mb-8">
-        <div className="flex items-center gap-3 flex-wrap">
-          <h1 className="text-3xl font-bold tracking-tight">Outputs</h1>
-          <UsageHint metric="exports_this_month" />
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+      {/* Header */}
+      <div className="flex flex-wrap items-start gap-4 mb-8">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Outputs</h1>
+            <UsageHint metric="exports_this_month" />
+          </div>
+          <p className="text-neutral-400 mt-1 text-sm">
+            Print-ready PDFs you&apos;ve generated.
+          </p>
         </div>
-        <p className="text-neutral-400 mt-1">
-          Print-ready PDFs you've generated. Artboard preserved exact, slot
-          rectangles hidden.
-        </p>
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex items-center rounded-lg border border-neutral-800 p-0.5 bg-neutral-900/60">
+            <button
+              type="button"
+              onClick={() => switchView("grid")}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
+                view === "grid" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
+              }`}
+              title="Grid view"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={view === "grid" ? 2.2 : 1.8} strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                <rect x="14" y="14" width="7" height="7" rx="1.5" />
+              </svg>
+              <span className="hidden sm:inline">Grid</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => switchView("list")}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
+                view === "list" ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
+              }`}
+              title="List view"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={view === "list" ? 2.2 : 1.8} strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="6" x2="21" y2="6" />
+                <line x1="3" y1="12" x2="21" y2="12" />
+                <line x1="3" y1="18" x2="21" y2="18" />
+              </svg>
+              <span className="hidden sm:inline">List</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {err && <div className="text-rose-400 text-sm mb-4">{err}</div>}
 
+      {/* Selection toolbar */}
+      {someSelected && (
+        <div className="flex items-center gap-3 mb-4 rounded-lg bg-violet-500/10 border border-violet-500/30 px-4 py-2.5">
+          <span className="text-sm text-violet-300 font-medium">
+            {selected.size} selected
+          </span>
+          <button onClick={toggleAll} className="text-xs text-neutral-400 hover:text-white">
+            {allSelected ? "Deselect all" : "Select all"}
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={onDeleteSelected}
+            disabled={deleting}
+            className="rounded-md bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+          >
+            {deleting ? "Deleting..." : `Delete (${selected.size})`}
+          </button>
+        </div>
+      )}
+
       {items === null ? (
-        <ul className="space-y-2">
+        <div className="space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
-            <li
-              key={i}
-              className="h-16 rounded-xl border border-neutral-800 bg-neutral-900/50 animate-pulse"
-            />
+            <div key={i} className="h-16 rounded-xl border border-neutral-800 bg-neutral-900/50 animate-pulse" />
           ))}
-        </ul>
+        </div>
       ) : items.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-neutral-800 p-12 text-center text-neutral-500">
-          Nothing yet. Fill a job and click "Generate PDF →".
+          Nothing yet. Fill a job and click &quot;Generate PDF &rarr;&quot;.
         </div>
-      ) : (
-        <ul className="space-y-2">
-          {items.map((o) => (
-            <li
-              key={o.id}
-              className={`flex items-center justify-between gap-4 rounded-xl border p-4 ${
-                highlight === o.id
-                  ? "border-emerald-500/60 bg-emerald-500/5"
-                  : "border-neutral-800 bg-neutral-900/50"
-              }`}
-            >
-              <div className="min-w-0">
-                <div className="font-semibold truncate">{o.name}</div>
-                <div className="text-xs text-neutral-500">
-                  {(o.file_size / 1024).toFixed(0)} KB · {o.slots_filled}/
-                  {o.slots_total} slots filled ·{" "}
-                  {new Date(o.created_at).toLocaleString()}
+      ) : view === "grid" ? (
+        /* ── GRID VIEW ── */
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((o) => {
+            const isSelected = selected.has(o.id);
+            const tpl = tplForOutput(o);
+            return (
+              <div
+                key={o.id}
+                className={`group relative rounded-xl border p-5 space-y-2 transition ${
+                  highlight === o.id ? "border-emerald-500/60 bg-emerald-500/5" :
+                  isSelected ? "border-violet-400 ring-1 ring-violet-400/50 bg-neutral-900/50" :
+                  "border-neutral-800 bg-neutral-900/50 hover:border-neutral-700"
+                }`}
+              >
+                {/* Checkbox */}
+                <div className="absolute top-3 left-3">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelect(o.id)}
+                    className="h-4 w-4 rounded border-neutral-600 bg-neutral-800 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                  />
                 </div>
-                {showTimeSaved && (
-                  <div
-                    className="text-[11px] text-violet-300/70 mt-1"
-                    title="Estimated vs manual InDesign / Illustrator imposition. Edit the formula in Settings → Preferences."
-                  >
-                    ≈ {humanizeMinutes(minutesSavedForOutput(o.slots_filled, timePrefs))}{" "}
-                    saved vs manual imposition
+                <div className="flex items-start justify-between gap-2 ml-6">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold truncate text-sm">{o.name}</div>
+                    <div className="text-xs text-neutral-500 mt-0.5">
+                      {(o.file_size / 1024).toFixed(0)} KB · {o.slots_filled}/{o.slots_total} slots
+                    </div>
+                    <div className="text-xs text-neutral-600 mt-0.5">
+                      {new Date(o.created_at).toLocaleDateString()}
+                    </div>
+                    {showTimeSaved && (
+                      <div className="text-[11px] text-violet-300/70 mt-1">
+                        ≈ {humanizeMinutes(minutesSavedForOutput(o.slots_filled, timePrefs))} saved
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div className="flex gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    {tpl && (
+                      <QuickPreview
+                        pageWidth={tpl.page_width}
+                        pageHeight={tpl.page_height}
+                        shapes={tpl.shapes}
+                      />
+                    )}
+                    <button
+                      onClick={() => onDelete(o.id)}
+                      className="text-xs text-neutral-500 hover:text-rose-400 px-1.5 py-1 opacity-0 group-hover:opacity-100 transition"
+                      title="Delete"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
                 <button
                   onClick={() => onDownload(o.id)}
-                  className="rounded-md bg-white px-4 py-2 text-sm font-semibold text-neutral-950 hover:bg-neutral-200"
+                  className="w-full rounded-md bg-white/90 px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-white transition"
                 >
                   Download
                 </button>
-                <button
-                  onClick={() => onDelete(o.id)}
-                  className="rounded-md border border-neutral-800 px-3 py-2 text-sm text-neutral-400 hover:border-rose-600 hover:text-rose-400"
-                >
-                  ✕
-                </button>
               </div>
-            </li>
-          ))}
-        </ul>
+            );
+          })}
+        </div>
+      ) : (
+        /* ── LIST VIEW ── */
+        <div className="rounded-xl border border-neutral-800 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-950/80 text-neutral-500 text-xs uppercase tracking-widest">
+              <tr>
+                <th className="w-10 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                  />
+                </th>
+                <th className="text-left font-normal px-3 py-2">Name</th>
+                <th className="text-right font-normal px-3 py-2 hidden sm:table-cell">Slots</th>
+                <th className="text-right font-normal px-3 py-2 hidden sm:table-cell">Size</th>
+                <th className="text-right font-normal px-3 py-2 hidden md:table-cell">Date</th>
+                <th className="w-28"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-900">
+              {items.map((o) => {
+                const isSelected = selected.has(o.id);
+                const tpl = tplForOutput(o);
+                return (
+                  <tr
+                    key={o.id}
+                    className={`transition ${
+                      highlight === o.id ? "bg-emerald-500/5" :
+                      isSelected ? "bg-violet-500/[0.07]" : "hover:bg-neutral-900/40"
+                    }`}
+                  >
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelect(o.id)}
+                        className="h-4 w-4 rounded border-neutral-600 bg-neutral-900 text-violet-500 focus:ring-violet-500 cursor-pointer"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white truncate max-w-[300px]">{o.name}</span>
+                        {tpl && (
+                          <QuickPreview
+                            pageWidth={tpl.page_width}
+                            pageHeight={tpl.page_height}
+                            shapes={tpl.shapes}
+                          />
+                        )}
+                      </div>
+                      {showTimeSaved && (
+                        <div className="text-[10px] text-violet-300/60 mt-0.5">
+                          ≈ {humanizeMinutes(minutesSavedForOutput(o.slots_filled, timePrefs))} saved
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-400 tabular-nums hidden sm:table-cell">
+                      {o.slots_filled}/{o.slots_total}
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-400 tabular-nums hidden sm:table-cell">
+                      {(o.file_size / 1024).toFixed(0)} KB
+                    </td>
+                    <td className="px-3 py-2 text-right text-neutral-500 hidden md:table-cell">
+                      {new Date(o.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => onDownload(o.id)}
+                          className="rounded-md bg-white/90 px-3 py-1 text-xs font-semibold text-neutral-950 hover:bg-white"
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={() => onDelete(o.id)}
+                          className="text-xs text-neutral-500 hover:text-rose-400 px-1.5 py-1"
+                          title="Delete"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import { deleteTemplate, listTemplates, Template } from "../api/templates";
 import { CardGridSkeleton } from "../components/Skeleton";
 import { LockedButton } from "../components/app/LockedOverlay";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
+import QuickPreview from "../components/app/QuickPreview";
 import UsageHint from "../components/app/UsageHint";
 import { formatApiError, FormattedApiError } from "../utils/apiError";
 
@@ -188,7 +189,7 @@ export default function Templates() {
               key={t.id}
               className="group rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 space-y-3 hover:border-neutral-700 transition"
             >
-              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 space-y-1">
                   <div className="font-semibold truncate">{t.name}</div>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -205,14 +206,21 @@ export default function Templates() {
                     {Math.round((t.page_width * 25.4) / 72)} × {Math.round((t.page_height * 25.4) / 72)} mm
                   </div>
                 </div>
-                <button
-                  onClick={() => onDelete(t.id)}
-                  className="shrink-0 text-xs text-neutral-500 hover:text-rose-400 px-2 py-1 -mr-2 -mt-1 transition"
-                  title="Delete"
-                  aria-label={`Delete template ${t.name}`}
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-1 shrink-0 -mr-2 -mt-1">
+                  <QuickPreview
+                    pageWidth={t.page_width}
+                    pageHeight={t.page_height}
+                    shapes={t.shapes}
+                  />
+                  <button
+                    onClick={() => onDelete(t.id)}
+                    className="text-xs text-neutral-500 hover:text-rose-400 px-2 py-1 transition"
+                    title="Delete"
+                    aria-label={`Delete template ${t.name}`}
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
               <div className="flex gap-2 text-xs">
                 <Link
@@ -340,6 +348,11 @@ export default function Templates() {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 shrink-0">
+                  <QuickPreview
+                    pageWidth={t.page_width}
+                    pageHeight={t.page_height}
+                    shapes={t.shapes}
+                  />
                   <Link
                     to={`/app/templates/${t.id}`}
                     className="hidden sm:inline-flex items-center rounded-md border border-neutral-800 px-2.5 py-1.5 text-xs hover:border-neutral-600 transition"

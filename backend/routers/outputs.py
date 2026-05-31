@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.auth import AuthenticatedUser, get_current_user
@@ -63,4 +65,29 @@ def delete_output(
     except Exception:
         pass
     db.delete(out)
+    db.commit()
+
+
+class BulkDeleteOutputs(BaseModel):
+    ids: List[uuid.UUID]
+
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+def bulk_delete_outputs(
+    body: BulkDeleteOutputs,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    user = _resolve_user(db, auth)
+    rows = (
+        db.query(Output)
+        .filter(Output.user_id == user.id, Output.id.in_(body.ids))
+        .all()
+    )
+    for out in rows:
+        try:
+            storage.delete(out.r2_key)
+        except Exception:
+            pass
+        db.delete(out)
     db.commit()

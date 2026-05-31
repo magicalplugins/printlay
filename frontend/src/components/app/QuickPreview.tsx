@@ -99,7 +99,7 @@ export default function QuickPreview({
             viewBox={`0 0 ${pageWidth} ${pageHeight}`}
             className="rounded-md bg-white"
           >
-            {shapes.map((s, i) => {
+            {shapes.filter((s) => s.is_position_slot).map((s, i) => {
               const [x1, y1, x2, y2] = s.bbox;
               const x = x1;
               const y = y1;
@@ -140,7 +140,7 @@ export default function QuickPreview({
             })}
           </svg>
           <div className="text-[10px] text-neutral-500 mt-1.5 text-center">
-            {Math.round((pageWidth * 25.4) / 72)} × {Math.round((pageHeight * 25.4) / 72)} mm · {shapes.length} slot{shapes.length !== 1 ? "s" : ""}
+            {Math.round((pageWidth * 25.4) / 72)} × {Math.round((pageHeight * 25.4) / 72)} mm · {shapes.filter((s) => s.is_position_slot).length} slot{shapes.filter((s) => s.is_position_slot).length !== 1 ? "s" : ""}
           </div>
         </div>,
         document.body

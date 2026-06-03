@@ -949,6 +949,138 @@ def unsubscribe(
     )
 
 
+# ---------- admin: list all catalogues ----------
+
+
+@router.get("/admin/catalogues")
+def admin_list_catalogues(
+    q: str | None = None,
+    filter: str | None = None,
+    sort: str = "newest",
+    limit: int = 50,
+    offset: int = 0,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Global catalogue browser for admin. Returns all categories with owner
+    email, asset counts, status flags, and thumbnail previews."""
+    base = db.query(AssetCategory)
+
+    if q:
+        like = f"%{q.lower()}%"
+        base = base.join(User, User.id == AssetCategory.user_id).filter(
+            or_(
+                func.lower(AssetCategory.name).like(like),
+                func.lower(User.email).like(like),
+            )
+        )
+
+    if filter == "official":
+        base = base.filter(AssetCategory.is_official.is_(True))
+    elif filter == "private":
+        base = base.filter(AssetCategory.is_private_share.is_(True))
+    elif filter == "user":
+        base = base.filter(
+            AssetCategory.is_official.is_(False),
+            AssetCategory.is_private_share.is_(False),
+        )
+
+    total = base.count()
+
+    if sort == "assets":
+        from sqlalchemy import desc
+        asset_count_sub = (
+            db.query(Asset.category_id, func.count(Asset.id).label("cnt"))
+            .group_by(Asset.category_id)
+            .subquery()
+        )
+        base = base.outerjoin(asset_count_sub, asset_count_sub.c.category_id == AssetCategory.id)
+        base = base.order_by(desc(asset_count_sub.c.cnt))
+    elif sort == "name":
+        base = base.order_by(AssetCategory.name)
+    else:
+        base = base.order_by(AssetCategory.created_at.desc())
+
+    cats = base.offset(offset).limit(limit).all()
+    if not cats:
+        return {"total": total, "items": []}
+
+    cat_ids = [c.id for c in cats]
+    owner_ids = list({c.user_id for c in cats})
+
+    owners = {u.id: u.email for u in db.query(User).filter(User.id.in_(owner_ids)).all()}
+
+    counts = dict(
+        db.query(Asset.category_id, func.count(Asset.id))
+        .filter(Asset.category_id.in_(cat_ids))
+        .group_by(Asset.category_id)
+        .all()
+    )
+
+    thumbs_raw = (
+        db.query(Asset)
+        .filter(
+            Asset.category_id.in_(cat_ids),
+            Asset.thumbnail_r2_key.isnot(None),
+        )
+        .all()
+    )
+    cat_thumbs: dict[str, list[str]] = {}
+    for a in thumbs_raw:
+        cid = str(a.category_id)
+        if cid not in cat_thumbs:
+            cat_thumbs[cid] = []
+        if len(cat_thumbs[cid]) < 4:
+            thumb, _ = _asset_urls(a)
+            if thumb:
+                cat_thumbs[cid].append(thumb)
+
+    items = []
+    for c in cats:
+        items.append({
+            "id": str(c.id),
+            "name": c.name,
+            "owner_email": owners.get(c.user_id, "unknown"),
+            "asset_count": counts.get(c.id, 0),
+            "is_official": c.is_official,
+            "is_private_share": c.is_private_share,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "thumbnails": cat_thumbs.get(str(c.id), []),
+        })
+
+    return {"total": total, "items": items}
+
+
+@router.delete("/admin/catalogues/{cat_id}", status_code=status.HTTP_204_NO_CONTENT)
+def admin_delete_catalogue(
+    cat_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """Admin force-delete any catalogue and its assets."""
+    cat = db.query(AssetCategory).filter(AssetCategory.id == cat_id).one_or_none()
+    if cat is None:
+        raise HTTPException(404, "Category not found")
+    cat_name = cat.name
+    owner_id = cat.user_id
+    assets = db.query(Asset).filter(Asset.category_id == cat_id).all()
+    for a in assets:
+        for key in [a.r2_key, a.r2_key_original, a.thumbnail_r2_key]:
+            if key:
+                try:
+                    storage.delete(key)
+                except Exception:
+                    pass
+        db.delete(a)
+    db.delete(cat)
+    db.commit()
+    record(
+        db, admin, "catalogue.admin_deleted",
+        target_type="category", target_id=cat_id,
+        payload={"name": cat_name, "owner_id": str(owner_id), "assets_removed": len(assets)},
+    )
+
+
 # ---------- admin: mark official + push subscriptions ----------
 
 
@@ -959,16 +1091,12 @@ def admin_set_official(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> CategoryOut:
-    """Flip the official flag on one of the admin's own categories. Also
-    cascades the flag to the contained assets (denormalised mirror)."""
+    """Flip the official flag on a category. Admin can toggle any category."""
     cat = db.query(AssetCategory).filter(
-        AssetCategory.id == cat_id, AssetCategory.user_id == admin.id
+        AssetCategory.id == cat_id,
     ).one_or_none()
     if cat is None:
-        raise HTTPException(
-            404,
-            "Category not found (must be one you own)",
-        )
+        raise HTTPException(404, "Category not found")
     cat.is_official = is_official
     db.query(Asset).filter(Asset.category_id == cat.id).update(
         {Asset.is_official: is_official}, synchronize_session=False
@@ -993,10 +1121,10 @@ def admin_set_private_share(
     """Toggle private-share on a category. Private-share catalogues don't
     appear in the public browse list but can be assigned to specific users."""
     cat = db.query(AssetCategory).filter(
-        AssetCategory.id == cat_id, AssetCategory.user_id == admin.id
+        AssetCategory.id == cat_id,
     ).one_or_none()
     if cat is None:
-        raise HTTPException(404, "Category not found (must be one you own)")
+        raise HTTPException(404, "Category not found")
     cat.is_private_share = is_private_share
     db.commit()
     db.refresh(cat)

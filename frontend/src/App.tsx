@@ -44,6 +44,7 @@ const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
 const AffiliateSignup = lazyWithRetry(() => import("./pages/AffiliateSignup"));
 const AffiliateDashboard = lazyWithRetry(() => import("./pages/AffiliateDashboard"));
 const AdminAffiliate = lazyWithRetry(() => import("./pages/AdminAffiliate"));
+const AdminCatalogues = lazyWithRetry(() => import("./pages/AdminCatalogues"));
 
 export default function App() {
   return (
@@ -163,6 +164,14 @@ export default function App() {
                   element={
                     <RequireAdmin>
                       <AdminAffiliate />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="admin/catalogues"
+                  element={
+                    <RequireAdmin>
+                      <AdminCatalogues />
                     </RequireAdmin>
                   }
                 />

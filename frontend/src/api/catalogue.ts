@@ -171,3 +171,38 @@ export type CatalogueSubscriber = {
 
 export const adminListSubscribers = (categoryId: string) =>
   api<CatalogueSubscriber[]>(`/api/admin/catalogues/${categoryId}/subscribers`);
+
+export type AdminCatalogueItem = {
+  id: string;
+  name: string;
+  owner_email: string;
+  asset_count: number;
+  is_official: boolean;
+  is_private_share: boolean;
+  created_at: string | null;
+  thumbnails: string[];
+};
+
+export type AdminCataloguesPage = {
+  total: number;
+  items: AdminCatalogueItem[];
+};
+
+export const getAdminCatalogues = (params: {
+  q?: string;
+  filter?: string;
+  sort?: string;
+  limit?: number;
+  offset?: number;
+}) => {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.filter) sp.set("filter", params.filter);
+  if (params.sort) sp.set("sort", params.sort);
+  if (params.limit) sp.set("limit", String(params.limit));
+  if (params.offset) sp.set("offset", String(params.offset));
+  return api<AdminCataloguesPage>(`/api/admin/catalogues?${sp.toString()}`);
+};
+
+export const adminDeleteCatalogue = (categoryId: string) =>
+  api<void>(`/api/admin/catalogues/${categoryId}`, { method: "DELETE" });

@@ -1,0 +1,358 @@
+"""Affiliate business logic — ref code generation, click/conversion tracking, payout runner.
+
+Pure domain logic — no HTTP concerns. Called by routers and webhook handlers.
+"""
+from __future__ import annotations
+
+import hashlib
+import logging
+import secrets
+import string
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+from uuid import UUID
+
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
+
+from backend.models.affiliate import (
+    AffiliateClick,
+    AffiliateConversion,
+    AffiliatePayout,
+    AffiliateProfile,
+)
+from backend.models.user import User
+from backend.services import stripe_connect
+
+log = logging.getLogger(__name__)
+
+HOLD_DAYS = 14
+REF_CODE_LENGTH = 8
+
+
+# ---------------------------------------------------------------------------
+# Ref code generation
+# ---------------------------------------------------------------------------
+
+def generate_ref_code() -> str:
+    """Generate a short alphanumeric ref code (lowercase, URL-safe)."""
+    alphabet = string.ascii_lowercase + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(REF_CODE_LENGTH))
+
+
+def ensure_unique_ref_code(db: Session) -> str:
+    """Generate a ref code that doesn't collide with existing ones."""
+    for _ in range(10):
+        code = generate_ref_code()
+        exists = db.execute(
+            select(AffiliateProfile.id).where(AffiliateProfile.ref_code == code)
+        ).scalar_one_or_none()
+        if not exists:
+            return code
+    raise RuntimeError("Failed to generate unique ref code after 10 attempts")
+
+
+# ---------------------------------------------------------------------------
+# Profile management
+# ---------------------------------------------------------------------------
+
+def create_profile(
+    db: Session,
+    email: str,
+    user_id: Optional[UUID] = None,
+    name: Optional[str] = None,
+    commission_rate: float = 0.20,
+) -> AffiliateProfile:
+    """Create a new affiliate profile with a unique ref code."""
+    ref_code = ensure_unique_ref_code(db)
+    profile = AffiliateProfile(
+        email=email,
+        user_id=user_id,
+        name=name,
+        ref_code=ref_code,
+        commission_rate=commission_rate,
+        status="active",
+    )
+    db.add(profile)
+    db.flush()
+    log.info("Created affiliate profile %s (ref=%s) for %s", profile.id, ref_code, email)
+    return profile
+
+
+def get_profile_by_ref_code(db: Session, ref_code: str) -> Optional[AffiliateProfile]:
+    return db.execute(
+        select(AffiliateProfile).where(AffiliateProfile.ref_code == ref_code)
+    ).scalar_one_or_none()
+
+
+def get_profile_by_user_id(db: Session, user_id: UUID) -> Optional[AffiliateProfile]:
+    return db.execute(
+        select(AffiliateProfile).where(AffiliateProfile.user_id == user_id)
+    ).scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# Click tracking
+# ---------------------------------------------------------------------------
+
+def _hash_ip(ip: str) -> str:
+    """One-way hash of IP for privacy. We don't need the raw IP."""
+    return hashlib.sha256(ip.encode()).hexdigest()[:32]
+
+
+def record_click(
+    db: Session,
+    affiliate_id: UUID,
+    ip: str,
+    user_agent: Optional[str] = None,
+    landing_path: Optional[str] = None,
+) -> AffiliateClick:
+    """Record an affiliate link click."""
+    click = AffiliateClick(
+        affiliate_id=affiliate_id,
+        ip_hash=_hash_ip(ip),
+        user_agent_snippet=(user_agent or "")[:200] or None,
+        landing_path=(landing_path or "")[:512] or None,
+    )
+    db.add(click)
+    db.flush()
+    return click
+
+
+# ---------------------------------------------------------------------------
+# Conversion recording
+# ---------------------------------------------------------------------------
+
+def record_conversion(
+    db: Session,
+    affiliate_id: UUID,
+    referred_user_id: UUID,
+    stripe_invoice_id: Optional[str],
+    charge_amount_pence: int,
+    commission_rate: float,
+    click_id: Optional[UUID] = None,
+) -> AffiliateConversion:
+    """Record a conversion when a referred user makes their first payment.
+
+    Creates a PENDING conversion — it will be approved after HOLD_DAYS
+    (unless manually reversed by admin).
+    """
+    commission_pence = int(charge_amount_pence * commission_rate)
+
+    conversion = AffiliateConversion(
+        affiliate_id=affiliate_id,
+        click_id=click_id,
+        referred_user_id=referred_user_id,
+        stripe_invoice_id=stripe_invoice_id,
+        stripe_charge_amount_pence=charge_amount_pence,
+        commission_pence=commission_pence,
+        commission_type="first_payment",
+        status="pending",
+    )
+    db.add(conversion)
+    db.flush()
+
+    log.info(
+        "Recorded conversion: affiliate=%s user=%s amount=%d commission=%d",
+        affiliate_id, referred_user_id, charge_amount_pence, commission_pence,
+    )
+    return conversion
+
+
+def has_existing_conversion(db: Session, referred_user_id: UUID) -> bool:
+    """Check if this user already generated a conversion (one-time model)."""
+    exists = db.execute(
+        select(AffiliateConversion.id).where(
+            AffiliateConversion.referred_user_id == referred_user_id,
+            AffiliateConversion.commission_type == "first_payment",
+        )
+    ).scalar_one_or_none()
+    return exists is not None
+
+
+# ---------------------------------------------------------------------------
+# Approval runner (called on schedule or manually)
+# ---------------------------------------------------------------------------
+
+def approve_held_conversions(db: Session) -> int:
+    """Move pending conversions past the hold period to 'approved' and credit balances.
+
+    Returns count of newly approved conversions.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=HOLD_DAYS)
+    pending = db.execute(
+        select(AffiliateConversion).where(
+            AffiliateConversion.status == "pending",
+            AffiliateConversion.converted_at <= cutoff,
+        )
+    ).scalars().all()
+
+    count = 0
+    for conv in pending:
+        conv.status = "approved"
+        conv.approved_at = datetime.now(timezone.utc)
+        db.execute(
+            update(AffiliateProfile)
+            .where(AffiliateProfile.id == conv.affiliate_id)
+            .values(
+                pending_balance_pence=AffiliateProfile.pending_balance_pence + conv.commission_pence,
+                total_earned_pence=AffiliateProfile.total_earned_pence + conv.commission_pence,
+            )
+        )
+        count += 1
+
+    if count:
+        db.flush()
+        log.info("Approved %d held conversions", count)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# Payout runner
+# ---------------------------------------------------------------------------
+
+def run_payouts(db: Session) -> list[dict]:
+    """Pay out all affiliates whose approved balance exceeds their threshold.
+
+    Returns a list of payout summaries for admin display.
+    """
+    now = datetime.now(timezone.utc)
+    results: list[dict] = []
+
+    profiles = db.execute(
+        select(AffiliateProfile).where(
+            AffiliateProfile.status == "active",
+            AffiliateProfile.stripe_connect_onboarding_complete.is_(True),
+            AffiliateProfile.pending_balance_pence > 0,
+        )
+    ).scalars().all()
+
+    for profile in profiles:
+        if profile.pending_balance_pence < profile.min_payout_threshold_pence:
+            continue
+
+        amount = profile.pending_balance_pence
+
+        last_payout = db.execute(
+            select(AffiliatePayout)
+            .where(AffiliatePayout.affiliate_id == profile.id)
+            .order_by(AffiliatePayout.period_end.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+        period_start = last_payout.period_end if last_payout else profile.created_at
+        period_end = now
+
+        try:
+            transfer_id = stripe_connect.create_transfer(
+                account_id=profile.stripe_connect_account_id,
+                amount_pence=amount,
+                description=f"PrintLay affiliate payout {period_start.date()} → {period_end.date()}",
+                idempotency_key=f"payout-{profile.id}-{period_end.isoformat()}",
+            )
+        except Exception as e:
+            log.error("Payout failed for affiliate %s: %s", profile.id, e)
+            results.append({"affiliate_id": str(profile.id), "error": str(e)})
+            continue
+
+        payout = AffiliatePayout(
+            affiliate_id=profile.id,
+            stripe_transfer_id=transfer_id,
+            amount_pence=amount,
+            status="paid",
+            period_start=period_start,
+            period_end=period_end,
+            paid_at=now,
+        )
+        db.add(payout)
+
+        profile.pending_balance_pence = 0
+        profile.total_paid_pence += amount
+
+        results.append({
+            "affiliate_id": str(profile.id),
+            "amount_pence": amount,
+            "transfer_id": transfer_id,
+        })
+
+    db.flush()
+    log.info("Payout run complete: %d processed", len(results))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Stats helpers (for dashboard / admin)
+# ---------------------------------------------------------------------------
+
+def get_affiliate_stats(db: Session, affiliate_id: UUID) -> dict:
+    """Return summary stats for the affiliate dashboard."""
+    total_clicks = db.execute(
+        select(func.count(AffiliateClick.id)).where(
+            AffiliateClick.affiliate_id == affiliate_id
+        )
+    ).scalar() or 0
+
+    total_conversions = db.execute(
+        select(func.count(AffiliateConversion.id)).where(
+            AffiliateConversion.affiliate_id == affiliate_id
+        )
+    ).scalar() or 0
+
+    recent_clicks_30d = db.execute(
+        select(func.count(AffiliateClick.id)).where(
+            AffiliateClick.affiliate_id == affiliate_id,
+            AffiliateClick.clicked_at >= datetime.now(timezone.utc) - timedelta(days=30),
+        )
+    ).scalar() or 0
+
+    return {
+        "total_clicks": total_clicks,
+        "total_conversions": total_conversions,
+        "recent_clicks_30d": recent_clicks_30d,
+        "conversion_rate": round(total_conversions / total_clicks * 100, 1) if total_clicks else 0.0,
+    }
+
+
+def get_admin_overview(db: Session) -> dict:
+    """Return high-level affiliate programme stats for admin."""
+    total_affiliates = db.execute(
+        select(func.count(AffiliateProfile.id))
+    ).scalar() or 0
+
+    active_affiliates = db.execute(
+        select(func.count(AffiliateProfile.id)).where(
+            AffiliateProfile.status == "active"
+        )
+    ).scalar() or 0
+
+    total_clicks = db.execute(
+        select(func.count(AffiliateClick.id))
+    ).scalar() or 0
+
+    total_conversions = db.execute(
+        select(func.count(AffiliateConversion.id))
+    ).scalar() or 0
+
+    total_earned = db.execute(
+        select(func.coalesce(func.sum(AffiliateConversion.commission_pence), 0))
+    ).scalar() or 0
+
+    total_paid = db.execute(
+        select(func.coalesce(func.sum(AffiliatePayout.amount_pence), 0)).where(
+            AffiliatePayout.status == "paid"
+        )
+    ).scalar() or 0
+
+    pending_balance = db.execute(
+        select(func.coalesce(func.sum(AffiliateProfile.pending_balance_pence), 0))
+    ).scalar() or 0
+
+    return {
+        "total_affiliates": total_affiliates,
+        "active_affiliates": active_affiliates,
+        "total_clicks": total_clicks,
+        "total_conversions": total_conversions,
+        "total_commission_pence": total_earned,
+        "total_paid_pence": total_paid,
+        "pending_balance_pence": pending_balance,
+    }

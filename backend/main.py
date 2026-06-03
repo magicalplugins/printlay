@@ -11,6 +11,8 @@ from slowapi.errors import RateLimitExceeded
 from backend.config import get_settings
 from backend.rate_limit import limiter
 from backend.routers import admin as admin_router
+from backend.routers import admin_affiliate as admin_affiliate_router
+from backend.routers import affiliate as affiliate_router
 from backend.routers import auth as auth_router
 from backend.routers import billing as billing_router
 from backend.routers import catalogue as catalogue_router
@@ -67,6 +69,8 @@ app.include_router(support_access_router.user_router)
 app.include_router(changelog_router.public_router)
 app.include_router(changelog_router.admin_router)
 app.include_router(admin_router.router)
+app.include_router(admin_affiliate_router.router)
+app.include_router(affiliate_router.router)
 
 
 @app.get("/api/health")

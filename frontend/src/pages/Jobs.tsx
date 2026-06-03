@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { deleteJob, duplicateJob, Job, listJobs, updateJob } from "../api/jobs";
 import { listTemplates, Template } from "../api/templates";
+import { bulkThumbnails } from "../api/catalogue";
 import { CardGridSkeleton } from "../components/Skeleton";
 import { LockedButton } from "../components/app/LockedOverlay";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
@@ -50,6 +51,7 @@ export default function Jobs() {
   const [deleting, setDeleting] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
+  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
 
   function load() {
     listJobs().then(setItems).catch((e) => reportErr(e));
@@ -60,10 +62,31 @@ export default function Jobs() {
     listTemplates().then(setTemplates).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!items || items.length === 0) return;
+    const assetIds = new Set<string>();
+    for (const j of items) {
+      for (const a of Object.values(j.assignments)) {
+        if (a.asset_id) assetIds.add(a.asset_id);
+      }
+    }
+    if (assetIds.size === 0) return;
+    bulkThumbnails([...assetIds]).then(setThumbMap).catch(() => {});
+  }, [items]);
+
   const tplMap = useMemo(
     () => new Map(templates.map((t) => [t.id, t])),
     [templates]
   );
+
+  function slotImagesFor(job: Job): Record<number, string> {
+    const map: Record<number, string> = {};
+    for (const [slotIdx, assignment] of Object.entries(job.assignments)) {
+      const url = thumbMap[assignment.asset_id];
+      if (url) map[Number(slotIdx)] = url;
+    }
+    return map;
+  }
 
   useEffect(() => {
     if (editingId && editInputRef.current) {
@@ -308,6 +331,7 @@ export default function Jobs() {
                             pageWidth={tplMap.get(j.template_id)!.page_width}
                             pageHeight={tplMap.get(j.template_id)!.page_height}
                             shapes={tplMap.get(j.template_id)!.shapes}
+                            slotImages={slotImagesFor(j)}
                           />
                         </span>
                       )}
@@ -495,6 +519,7 @@ export default function Jobs() {
                       pageWidth={tplMap.get(j.template_id)!.page_width}
                       pageHeight={tplMap.get(j.template_id)!.page_height}
                       shapes={tplMap.get(j.template_id)!.shapes}
+                      slotImages={slotImagesFor(j)}
                     />
                   )}
                   <Link

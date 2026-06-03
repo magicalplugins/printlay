@@ -25,6 +25,13 @@ class AssetCategory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     users via opt-in subscriptions (catalogue_subscriptions). The owning
     admin still appears in `user_id` so existing per-user filters work."""
 
+    is_private_share: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """When True, this category is shared only with specific users assigned
+    by admin. Unlike official catalogues, private shares don't appear in the
+    public browse list — users can only access them if explicitly assigned."""
+
 
 class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "assets"

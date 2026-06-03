@@ -194,11 +194,11 @@ export default function StickerEditor() {
         setFilterId("none");
         setBakedFilterId("none");
       } catch (e: any) {
-        setError(
-          e?.body?.detail ||
-            e?.message ||
-            "AI style failed. Please try again."
-        );
+        const detail =
+          (typeof e?.body === "object" && e?.body?.detail) ||
+          (typeof e?.body === "string" && e.body.length < 300 && e.body) ||
+          null;
+        setError(detail || e?.message || "AI style failed. Please try again.");
       } finally {
         setAiStyling(null);
       }

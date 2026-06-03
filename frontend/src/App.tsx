@@ -41,6 +41,9 @@ const Help = lazyWithRetry(() => import("./pages/Help"));
 const Pricing = lazyWithRetry(() => import("./pages/Pricing"));
 const Terms = lazyWithRetry(() => import("./pages/Terms"));
 const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
+const AffiliateSignup = lazyWithRetry(() => import("./pages/AffiliateSignup"));
+const AffiliateDashboard = lazyWithRetry(() => import("./pages/AffiliateDashboard"));
+const AdminAffiliate = lazyWithRetry(() => import("./pages/AdminAffiliate"));
 
 export default function App() {
   return (
@@ -54,6 +57,7 @@ export default function App() {
               <Route path="/register" element={<Register />} />
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/terms" element={<Terms />} />
+              <Route path="/affiliate" element={<AffiliateSignup />} />
               <Route
                 path="/billing/success"
                 element={
@@ -104,6 +108,7 @@ export default function App() {
                 <Route path="outputs" element={<Outputs />} />
                 <Route path="sheets" element={<SheetBuilder />} />
                 <Route path="settings" element={<Settings />} />
+                <Route path="affiliate" element={<AffiliateDashboard />} />
                 <Route path="help" element={<Help />} />
                 <Route
                   path="admin"
@@ -150,6 +155,14 @@ export default function App() {
                   element={
                     <RequireAdmin>
                       <AdminChangelog />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="admin/affiliate"
+                  element={
+                    <RequireAdmin>
+                      <AdminAffiliate />
                     </RequireAdmin>
                   }
                 />

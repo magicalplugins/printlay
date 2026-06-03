@@ -6,6 +6,8 @@ interface QuickPreviewProps {
   pageWidth: number;
   pageHeight: number;
   shapes: Shape[];
+  /** Optional map of shape_index → thumbnail URL to render images in slots */
+  slotImages?: Record<number, string>;
   className?: string;
 }
 
@@ -17,6 +19,7 @@ export default function QuickPreview({
   pageWidth,
   pageHeight,
   shapes,
+  slotImages,
   className = "",
 }: QuickPreviewProps) {
   const [open, setOpen] = useState(false);
@@ -100,42 +103,73 @@ export default function QuickPreview({
             className="rounded-md bg-white"
           >
             {shapes.filter((s) => s.is_position_slot).map((s, i) => {
-              const [x1, y1, x2, y2] = s.bbox;
-              const x = x1;
-              const y = y1;
-              const w = x2 - x1;
-              const h = y2 - y1;
+              const [x, y, w, h] = s.bbox;
               const cx = x + w / 2;
               const cy = y + h / 2;
               const sw = Math.max(1, pageWidth * 0.003);
+              const imgUrl = slotImages?.[s.shape_index];
 
               if (s.kind === "ellipse") {
                 return (
-                  <ellipse
-                    key={i}
-                    cx={cx}
-                    cy={cy}
-                    rx={w / 2}
-                    ry={h / 2}
+                  <g key={i}>
+                    {imgUrl && (
+                      <>
+                        <clipPath id={`clip-${i}`}>
+                          <ellipse cx={cx} cy={cy} rx={w / 2} ry={h / 2} />
+                        </clipPath>
+                        <image
+                          href={imgUrl}
+                          x={x}
+                          y={y}
+                          width={w}
+                          height={h}
+                          preserveAspectRatio="xMidYMid slice"
+                          clipPath={`url(#clip-${i})`}
+                        />
+                      </>
+                    )}
+                    <ellipse
+                      cx={cx}
+                      cy={cy}
+                      rx={w / 2}
+                      ry={h / 2}
+                      fill="none"
+                      stroke="#8B5CF6"
+                      strokeWidth={sw}
+                    />
+                  </g>
+                );
+              }
+              return (
+                <g key={i}>
+                  {imgUrl && (
+                    <>
+                      <clipPath id={`clip-${i}`}>
+                        <rect x={x} y={y} width={w} height={h} rx={s.corner_radius_pt ?? 0} ry={s.corner_radius_pt ?? 0} />
+                      </clipPath>
+                      <image
+                        href={imgUrl}
+                        x={x}
+                        y={y}
+                        width={w}
+                        height={h}
+                        preserveAspectRatio="xMidYMid slice"
+                        clipPath={`url(#clip-${i})`}
+                      />
+                    </>
+                  )}
+                  <rect
+                    x={x}
+                    y={y}
+                    width={w}
+                    height={h}
+                    rx={s.corner_radius_pt ?? 0}
+                    ry={s.corner_radius_pt ?? 0}
                     fill="none"
                     stroke="#8B5CF6"
                     strokeWidth={sw}
                   />
-                );
-              }
-              return (
-                <rect
-                  key={i}
-                  x={x}
-                  y={y}
-                  width={w}
-                  height={h}
-                  rx={s.corner_radius_pt ?? 0}
-                  ry={s.corner_radius_pt ?? 0}
-                  fill="none"
-                  stroke="#8B5CF6"
-                  strokeWidth={sw}
-                />
+                </g>
               );
             })}
           </svg>

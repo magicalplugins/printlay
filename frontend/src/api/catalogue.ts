@@ -5,6 +5,7 @@ export type Category = {
   name: string;
   created_at: string;
   is_official?: boolean;
+  is_private_share?: boolean;
   subscribed?: boolean;
   asset_count?: number | null;
 };
@@ -88,6 +89,13 @@ export const bulkDeleteAssets = (assetIds: string[]) =>
     body: JSON.stringify({ asset_ids: assetIds }),
   });
 
+/** Get thumbnail URLs for a batch of asset IDs in one round-trip. */
+export const bulkThumbnails = (assetIds: string[]) =>
+  api<Record<string, string | null>>("/api/assets/bulk-thumbnails", {
+    method: "POST",
+    body: JSON.stringify({ asset_ids: assetIds }),
+  });
+
 export function exportCategoryUrl(categoryId: string): string {
   // Browser-direct download: streams the bundle without buffering through JS.
   return `/api/categories/${categoryId}/export`;
@@ -137,6 +145,12 @@ export const adminSetOfficial = (categoryId: string, isOfficial: boolean) =>
     { method: "PATCH" }
   );
 
+export const adminSetPrivateShare = (categoryId: string, isPrivateShare: boolean) =>
+  api<Category>(
+    `/api/admin/catalogues/${categoryId}/private-share?is_private_share=${isPrivateShare}`,
+    { method: "PATCH" }
+  );
+
 export const adminAssignSubscriber = (categoryId: string, userId: string) =>
   api<void>(
     `/api/admin/catalogues/${categoryId}/assign?user_id=${userId}`,
@@ -148,3 +162,12 @@ export const adminUnassignSubscriber = (categoryId: string, userId: string) =>
     `/api/admin/catalogues/${categoryId}/assign?user_id=${userId}`,
     { method: "DELETE" }
   );
+
+export type CatalogueSubscriber = {
+  id: string;
+  email: string;
+  display_name: string | null;
+};
+
+export const adminListSubscribers = (categoryId: string) =>
+  api<CatalogueSubscriber[]>(`/api/admin/catalogues/${categoryId}/subscribers`);

@@ -497,7 +497,7 @@ def ai_style_sticker(
             cutout, body.style, api_key, custom_prompt=body.custom_prompt
         )
     except RuntimeError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"AI style failed: {exc}")
 

@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -106,6 +106,13 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # on their own OpenAI account/credits. Never returned to the client in
     # plaintext — the API only exposes a boolean "is it set?".
     openai_api_key_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # ---- Affiliate attribution ----
+    referred_by_affiliate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("affiliate_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     def has_completed_profile(self) -> bool:
         """True when the user has supplied the post-signup profile fields. We

@@ -62,6 +62,7 @@ def get_or_provision(
     auth_id: uuid.UUID,
     email: str,
     invite_token: str | None = None,
+    affiliate_ref: str | None = None,
 ) -> User:
     """Return the existing app-side user row, or create one with a fresh
     Pro trial. Idempotent + safe to call from any router.
@@ -69,6 +70,9 @@ def get_or_provision(
     If `invite_token` is supplied and resolves to a valid invite issued
     to this email, the trial length comes from the invite instead of
     the default 7 days. The invite is then marked accepted.
+
+    If `affiliate_ref` is supplied and maps to a valid affiliate profile,
+    the new user is attributed to that affiliate.
 
     Email is updated in-place if the Supabase email has changed since last
     sync (users do change email addresses)."""
@@ -89,8 +93,15 @@ def get_or_provision(
         email=email,
         trial_ends_at=now + timedelta(days=trial_days),
     )
+
+    if affiliate_ref:
+        from backend.services.affiliate_service import get_profile_by_ref_code
+        profile = get_profile_by_ref_code(db, affiliate_ref)
+        if profile and profile.status == "active":
+            row.referred_by_affiliate_id = profile.id
+
     db.add(row)
-    db.flush()  # need row.id for invite.accepted_user_id
+    db.flush()
 
     if invite is not None:
         invite.accepted_at = now
@@ -106,6 +117,7 @@ def get_or_provision(
             "trial_days": trial_days,
             "via_invite": invite is not None,
             "invite_id": str(invite.id) if invite else None,
+            "affiliate_ref": affiliate_ref if row.referred_by_affiliate_id else None,
         },
     )
     telemetry.emit(

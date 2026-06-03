@@ -13,8 +13,10 @@ class CategoryOut(BaseModel):
     is_official: bool = False
     """True for admin-curated catalogues. The frontend renders these
     read-only and badges them so subscribers know they can't be edited."""
+    is_private_share: bool = False
+    """True for catalogues shared privately with specific users by admin."""
     subscribed: bool = False
-    """For official categories: whether the calling user is opted in."""
+    """For official/private-share categories: whether the calling user is opted in."""
     asset_count: int | None = None
     """Convenience for the browse panel; populated by list_official only."""
 

@@ -18,6 +18,12 @@ export default function Register() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get("invite");
+  const refCode = searchParams.get("ref");
+
+  // Persist affiliate ref code for attribution during provisioning
+  useEffect(() => {
+    if (refCode) localStorage.setItem("printlay.ref", refCode);
+  }, [refCode]);
 
   const [invite, setInvite] = useState<InviteState>(
     inviteToken ? { kind: "checking", token: inviteToken } : { kind: "none" }

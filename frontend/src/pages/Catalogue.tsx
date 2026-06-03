@@ -1,10 +1,15 @@
-import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  adminAssignSubscriber,
+  adminListSubscribers,
   adminSetOfficial,
+  adminSetPrivateShare,
+  adminUnassignSubscriber,
   Asset,
   bulkDeleteAssets,
   Category,
+  CatalogueSubscriber,
   createCategory,
   deleteAsset,
   deleteCategory,
@@ -18,6 +23,7 @@ import {
   unsubscribeFromCatalogue,
   uploadAsset,
 } from "../api/catalogue";
+import { getAdminUsers } from "../api/admin";
 import { useMe } from "../auth/MeProvider";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
 import UsageHint from "../components/app/UsageHint";
@@ -64,6 +70,137 @@ function OfficialBadge() {
   );
 }
 
+function PrivateBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-300 text-[9px] uppercase tracking-widest border border-sky-500/30">
+      Shared
+    </span>
+  );
+}
+
+function ShareModal({
+  categoryId,
+  categoryName,
+  onClose,
+}: {
+  categoryId: string;
+  categoryName: string;
+  onClose: () => void;
+}) {
+  const [subscribers, setSubscribers] = useState<CatalogueSubscriber[]>([]);
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState<{ id: string; email: string }[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const loadSubs = useCallback(async () => {
+    const data = await adminListSubscribers(categoryId);
+    setSubscribers(data);
+  }, [categoryId]);
+
+  useEffect(() => { loadSubs(); }, [loadSubs]);
+
+  useEffect(() => {
+    if (!searchQ.trim()) { setSearchResults([]); return; }
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await getAdminUsers(searchQ.trim(), 10);
+        setSearchResults(
+          (res.items || [])
+            .filter((u: { id: string }) => !subscribers.find((s) => s.id === u.id))
+            .map((u: { id: string; email: string }) => ({ id: u.id, email: u.email }))
+        );
+      } catch { setSearchResults([]); }
+      setSearching(false);
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [searchQ, subscribers]);
+
+  async function onAssign(userId: string) {
+    setBusy(true);
+    try {
+      await adminAssignSubscriber(categoryId, userId);
+      await loadSubs();
+      setSearchQ("");
+      setSearchResults([]);
+    } catch { /* ignore */ }
+    setBusy(false);
+  }
+
+  async function onRemove(userId: string) {
+    setBusy(true);
+    try {
+      await adminUnassignSubscriber(categoryId, userId);
+      await loadSubs();
+    } catch { /* ignore */ }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-lg font-semibold mb-1">Share "{categoryName}"</h3>
+        <p className="text-sm text-neutral-400 mb-4">Add or remove users who can access this private catalogue.</p>
+
+        <input
+          type="text"
+          value={searchQ}
+          onChange={(e) => setSearchQ(e.target.value)}
+          placeholder="Search users by email..."
+          className="w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:border-sky-500 mb-2"
+        />
+
+        {searching && <p className="text-xs text-neutral-500 mb-2">Searching...</p>}
+
+        {searchResults.length > 0 && (
+          <div className="max-h-32 overflow-y-auto rounded-lg border border-neutral-700 mb-4">
+            {searchResults.map((u) => (
+              <div key={u.id} className="flex items-center justify-between px-3 py-2 hover:bg-neutral-800">
+                <span className="text-sm text-neutral-200 truncate">{u.email}</span>
+                <button
+                  onClick={() => onAssign(u.id)}
+                  disabled={busy}
+                  className="text-xs px-2 py-1 rounded bg-sky-600 text-white hover:bg-sky-500 disabled:opacity-40"
+                >
+                  Add
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-2">
+          <p className="text-xs uppercase tracking-wider text-neutral-500 mb-2">Shared with ({subscribers.length})</p>
+          {subscribers.length === 0 && <p className="text-sm text-neutral-500">No users assigned yet.</p>}
+          <div className="max-h-48 overflow-y-auto space-y-1">
+            {subscribers.map((s) => (
+              <div key={s.id} className="flex items-center justify-between rounded-lg bg-neutral-800 px-3 py-2">
+                <span className="text-sm text-neutral-200 truncate">{s.email}</span>
+                <button
+                  onClick={() => onRemove(s.id)}
+                  disabled={busy}
+                  className="text-xs px-2 py-1 rounded bg-rose-600/80 text-white hover:bg-rose-500 disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 flex justify-end">
+          <button onClick={onClose} className="rounded-lg border border-neutral-600 px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-800">
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Catalogue() {
   const { me } = useMe();
   const isAdmin = !!me?.is_admin;
@@ -102,6 +239,9 @@ export default function Catalogue() {
   // Anchor for shift-click range selection in list view.
   const lastSelectedRef = useRef<string | null>(null);
 
+  // Private share modal
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(VIEW_MODE_KEY, viewMode);
@@ -138,7 +278,7 @@ export default function Catalogue() {
     () => cats?.find((c) => c.id === active) ?? null,
     [cats, active]
   );
-  const isReadOnly = !!activeCat?.is_official && !isAdmin;
+  const isReadOnly = !!(activeCat?.is_official || activeCat?.is_private_share) && !isAdmin;
 
   const filteredAssets = useMemo(() => {
     if (!assets) return null;
@@ -230,8 +370,7 @@ export default function Catalogue() {
 
   async function onDeleteCat(id: string) {
     const c = cats?.find((x) => x.id === id);
-    if (c?.is_official && !isAdmin) {
-      // Subscriber clicking "remove" - actually unsubscribe.
+    if ((c?.is_official || c?.is_private_share) && !isAdmin) {
       await onUnsubscribe(id);
       return;
     }
@@ -244,7 +383,7 @@ export default function Catalogue() {
 
   function startRename(c: Category) {
     // Subscribers can't rename official categories they don't own
-    if (c.is_official && !isAdmin) return;
+    if ((c.is_official || c.is_private_share) && !isAdmin) return;
     setRenamingId(c.id);
     setRenameValue(c.name);
     setTimeout(() => renameInputRef.current?.select(), 0);
@@ -474,7 +613,20 @@ export default function Catalogue() {
     try {
       await adminSetOfficial(activeCat.id, !activeCat.is_official);
       await loadCats();
-      setOfficials(null); // force re-fetch on next browse open
+      setOfficials(null);
+    } catch (e) {
+      reportErr(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onTogglePrivateShare() {
+    if (!isAdmin || !activeCat) return;
+    setBusy(true);
+    try {
+      await adminSetPrivateShare(activeCat.id, !activeCat.is_private_share);
+      await loadCats();
     } catch (e) {
       reportErr(e);
     } finally {
@@ -551,6 +703,7 @@ export default function Catalogue() {
                   >
                     <span className="truncate">{c.name}</span>
                     {c.is_official && <OfficialBadge />}
+                    {c.is_private_share && !c.is_official && <PrivateBadge />}
                   </span>
                 )}
                 <button
@@ -560,7 +713,7 @@ export default function Catalogue() {
                   }}
                   className="shrink-0 text-xs text-neutral-500 hover:text-rose-400"
                   title={
-                    c.is_official && !isAdmin
+                    (c.is_official || c.is_private_share) && !isAdmin
                       ? "Unsubscribe from this catalogue"
                       : "Delete category"
                   }
@@ -671,6 +824,34 @@ export default function Catalogue() {
                       {activeCat.is_official
                         ? "★ Marked Official"
                         : "☆ Mark as Official"}
+                    </button>
+                  )}
+                  {isAdmin && activeCat && !activeCat.is_official && (
+                    <button
+                      onClick={onTogglePrivateShare}
+                      disabled={busy}
+                      className={`rounded-lg border px-3 py-2 text-sm transition ${
+                        activeCat.is_private_share
+                          ? "border-sky-500/50 bg-sky-500/10 text-sky-200 hover:bg-sky-500/15"
+                          : "border-neutral-700 text-neutral-200 hover:border-sky-400 hover:text-sky-200"
+                      }`}
+                      title={
+                        activeCat.is_private_share
+                          ? "Remove private share — assigned users will lose access"
+                          : "Enable private sharing — assign specific users in Admin > Users"
+                      }
+                    >
+                      {activeCat.is_private_share
+                        ? "🔒 Private Share"
+                        : "🔗 Share Privately"}
+                    </button>
+                  )}
+                  {isAdmin && activeCat?.is_private_share && (
+                    <button
+                      onClick={() => setShareModalOpen(true)}
+                      className="rounded-lg border border-sky-500/50 px-3 py-2 text-sm text-sky-200 hover:bg-sky-500/10"
+                    >
+                      Manage Access
                     </button>
                   )}
                   <button
@@ -1002,6 +1183,14 @@ export default function Catalogue() {
             </div>
           </div>
         </div>
+      )}
+
+      {shareModalOpen && activeCat && (
+        <ShareModal
+          categoryId={activeCat.id}
+          categoryName={activeCat.name}
+          onClose={() => setShareModalOpen(false)}
+        />
       )}
     </div>
   );

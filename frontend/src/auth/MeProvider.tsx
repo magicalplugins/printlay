@@ -50,8 +50,10 @@ export function MeProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const token = recallInviteToken();
-      const m = await getMe(token);
+      const affiliateRef = localStorage.getItem("printlay.ref");
+      const m = await getMe(token, affiliateRef);
       if (token) forgetInviteToken();
+      if (affiliateRef) localStorage.removeItem("printlay.ref");
       setMe(m);
     } catch (e) {
       setError(String(e));

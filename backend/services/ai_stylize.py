@@ -181,13 +181,23 @@ def stylize_image(
             headers=headers,
             files=files,
             data=data,
-            timeout=240.0,
+            timeout=90.0,
+        )
+    except httpx.TimeoutException:
+        raise RuntimeError(
+            "OpenAI took too long to respond (>90s). Try again — "
+            "or switch to a simpler style."
         )
     except httpx.HTTPError as exc:
         raise RuntimeError(f"Could not reach OpenAI: {exc}") from exc
 
     if resp.status_code == 401:
         raise RuntimeError("OpenAI rejected your API key (401). Check it in Settings.")
+    if resp.status_code == 403:
+        raise RuntimeError(
+            "OpenAI denied access (403). Your API key may not have permission "
+            "for image generation. Check your OpenAI account settings."
+        )
     if resp.status_code == 429:
         raise RuntimeError(
             "OpenAI rate limit / quota reached on your account. Try again shortly "
@@ -199,7 +209,7 @@ def stylize_image(
             detail = resp.json().get("error", {}).get("message", "")
         except Exception:
             detail = resp.text[:300]
-        raise RuntimeError(f"OpenAI image generation failed ({resp.status_code}): {detail}")
+        raise RuntimeError(f"OpenAI error ({resp.status_code}): {detail}")
 
     try:
         payload = resp.json()

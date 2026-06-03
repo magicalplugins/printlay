@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.audit import record
@@ -94,15 +94,15 @@ def _own_category(db: Session, user: User, cat_id: uuid.UUID) -> AssetCategory:
 
 
 def _accessible_category(db: Session, user: User, cat_id: uuid.UUID) -> AssetCategory:
-    """Returns a category the user can READ: either their own, or an official
-    catalogue they're subscribed to. Admins can read every official, even
-    without an explicit subscription."""
+    """Returns a category the user can READ: either their own, or an official/
+    private-share catalogue they're subscribed to. Admins can read any
+    shareable catalogue even without an explicit subscription."""
     cat = db.query(AssetCategory).filter(AssetCategory.id == cat_id).one_or_none()
     if cat is None:
         raise HTTPException(404, "Category not found")
     if cat.user_id == user.id:
         return cat
-    if cat.is_official:
+    if cat.is_official or cat.is_private_share:
         if is_admin_email(user.email):
             return cat
         sub = (
@@ -129,6 +129,7 @@ def _category_to_out(
         name=cat.name,
         created_at=cat.created_at,
         is_official=cat.is_official,
+        is_private_share=cat.is_private_share,
         subscribed=subscribed,
         asset_count=asset_count,
     )
@@ -159,7 +160,10 @@ def list_categories(
         .join(CatalogueSubscription, CatalogueSubscription.category_id == AssetCategory.id)
         .filter(
             CatalogueSubscription.user_id == user.id,
-            AssetCategory.is_official.is_(True),
+            or_(
+                AssetCategory.is_official.is_(True),
+                AssetCategory.is_private_share.is_(True),
+            ),
         )
         .order_by(AssetCategory.name)
         .all()
@@ -579,6 +583,61 @@ class BulkDeleteOut(BaseModel):
     doesn't 500."""
 
 
+class BulkThumbnailIn(BaseModel):
+    asset_ids: list[str] = Field(max_length=500)
+
+
+@router.post("/assets/bulk-thumbnails")
+def bulk_thumbnails(
+    payload: BulkThumbnailIn,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str | None]:
+    """Return a map of asset_id → thumbnail_url for a batch of IDs.
+    Returns URLs for assets the user owns or has access to via subscriptions."""
+    from backend.routers.templates import _resolve_user as resolve
+    user = resolve(db, auth)
+    if not payload.asset_ids:
+        return {}
+    uuids = []
+    for aid in payload.asset_ids:
+        try:
+            uuids.append(uuid.UUID(aid))
+        except ValueError:
+            continue
+
+    subscribed_cat_ids = {
+        row[0] for row in
+        db.query(CatalogueSubscription.category_id)
+        .filter(CatalogueSubscription.user_id == user.id)
+        .all()
+    }
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.id.in_(uuids))
+        .all()
+    )
+    result: dict[str, str | None] = {}
+    for a in rows:
+        if a.user_id == user.id:
+            pass
+        elif a.category_id in subscribed_cat_ids:
+            cat = db.query(AssetCategory).filter(AssetCategory.id == a.category_id).first()
+            if not (cat and (cat.is_official or cat.is_private_share)):
+                continue
+        else:
+            continue
+        thumb, _ = _asset_urls(a)
+        result[str(a.id)] = thumb
+    return result
+    result: dict[str, str | None] = {}
+    for a in rows:
+        thumb, _ = _asset_urls(a)
+        result[str(a.id)] = thumb
+    return result
+
+
 @router.post(
     "/assets/bulk-delete",
     response_model=BulkDeleteOut,
@@ -924,19 +983,39 @@ def admin_set_official(
     return _category_to_out(cat, subscribed=False)
 
 
-@router.post("/admin/catalogues/{cat_id}/assign", status_code=status.HTTP_204_NO_CONTENT)
+@router.patch("/admin/catalogues/{cat_id}/private-share")
+def admin_set_private_share(
+    cat_id: uuid.UUID,
+    is_private_share: bool,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> CategoryOut:
+    """Toggle private-share on a category. Private-share catalogues don't
+    appear in the public browse list but can be assigned to specific users."""
+    cat = db.query(AssetCategory).filter(
+        AssetCategory.id == cat_id, AssetCategory.user_id == admin.id
+    ).one_or_none()
+    if cat is None:
+        raise HTTPException(404, "Category not found (must be one you own)")
+    cat.is_private_share = is_private_share
+    db.commit()
+    db.refresh(cat)
+    record(
+        db, admin, "catalogue.is_private_share",
+        target_type="category", target_id=cat.id,
+        payload={"is_private_share": is_private_share},
+    )
+    return _category_to_out(cat, subscribed=False)
 def admin_assign_subscriber(
     cat_id: uuid.UUID,
     user_id: uuid.UUID,
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> None:
-    """Force-subscribe a specific user to an official catalogue. Useful for
-    onboarding (e.g. a wholesale magic-supply customer who needs the
-    Playing Cards pack)."""
+    """Force-subscribe a specific user to an official or private-share catalogue."""
     cat = db.query(AssetCategory).filter(AssetCategory.id == cat_id).one_or_none()
-    if cat is None or not cat.is_official:
-        raise HTTPException(404, "Official catalogue not found")
+    if cat is None or not (cat.is_official or cat.is_private_share):
+        raise HTTPException(404, "Shareable catalogue not found")
     target = db.query(User).filter(User.id == user_id).one_or_none()
     if target is None:
         raise HTTPException(404, "User not found")
@@ -984,7 +1063,29 @@ def admin_unassign_subscriber(
     )
 
 
-@router.post("/admin/assets/refresh-thumbnails", status_code=status.HTTP_200_OK)
+@router.get("/admin/catalogues/{cat_id}/subscribers")
+def admin_list_subscribers(
+    cat_id: uuid.UUID,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    """List users currently subscribed/assigned to a shareable catalogue."""
+    cat = db.query(AssetCategory).filter(AssetCategory.id == cat_id).one_or_none()
+    if cat is None or not (cat.is_official or cat.is_private_share):
+        raise HTTPException(404, "Shareable catalogue not found")
+    subs = (
+        db.query(CatalogueSubscription)
+        .filter(CatalogueSubscription.category_id == cat_id)
+        .all()
+    )
+    user_ids = [s.user_id for s in subs]
+    if not user_ids:
+        return []
+    users = db.query(User).filter(User.id.in_(user_ids)).all()
+    return [
+        {"id": str(u.id), "email": u.email, "display_name": u.display_name}
+        for u in users
+    ]
 def refresh_all_thumbnails(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),

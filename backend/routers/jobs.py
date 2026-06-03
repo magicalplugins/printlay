@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from backend.audit import record
 from backend.auth import AuthenticatedUser, get_current_user
 from backend.database import get_db
-from backend.models import Asset, ColorProfile, Job, Output, Template, User
+from backend.models import Asset, CatalogueSubscription, AssetCategory, ColorProfile, Job, Output, Template, User
 from backend.rate_limit import generate_burst_limit, generate_limit, limiter
 from backend.routers.templates import _resolve_user
 from backend.schemas.asset import AssetOut
@@ -79,6 +79,36 @@ def _asset_to_out(a: Asset) -> AssetOut:
         created_at=a.created_at,
         page_count=max(1, int(getattr(a, "page_count", 1) or 1)),
     )
+
+
+def _accessible_assets(db: Session, user: User, asset_ids: set[uuid.UUID]) -> dict[uuid.UUID, Asset]:
+    """Load assets by ID, allowing both owned assets and assets from
+    subscribed official catalogues."""
+    if not asset_ids:
+        return {}
+
+    subscribed_cat_ids = {
+        row[0] for row in
+        db.query(CatalogueSubscription.category_id)
+        .filter(CatalogueSubscription.user_id == user.id)
+        .all()
+    }
+
+    rows = (
+        db.query(Asset)
+        .filter(Asset.id.in_(asset_ids))
+        .all()
+    )
+
+    result: dict[uuid.UUID, Asset] = {}
+    for a in rows:
+        if a.user_id == user.id:
+            result[a.id] = a
+        elif a.category_id in subscribed_cat_ids:
+            cat = db.query(AssetCategory).filter(AssetCategory.id == a.category_id).first()
+            if cat and (cat.is_official or cat.is_private_share):
+                result[a.id] = a
+    return result
 
 
 def _purge_job_uploads(db: Session, job: Job) -> None:
@@ -387,12 +417,7 @@ def apply_queue(
 
     asset_ids = {item.asset_id for item in payload.queue}
     if asset_ids:
-        rows = (
-            db.query(Asset)
-            .filter(Asset.id.in_(asset_ids), Asset.user_id == user.id)
-            .all()
-        )
-        owned = {a.id: a for a in rows}
+        owned = _accessible_assets(db, user, asset_ids)
         missing = asset_ids - owned.keys()
         if missing:
             raise HTTPException(404, f"Asset not found: {next(iter(missing))}")
@@ -452,9 +477,8 @@ def fill_job(
     """
     user = _resolve_user(db, auth)
     job = _own_job(db, user, job_id)
-    asset = db.query(Asset).filter(
-        Asset.id == payload.asset_id, Asset.user_id == user.id
-    ).one_or_none()
+    accessible = _accessible_assets(db, user, {payload.asset_id})
+    asset = accessible.get(payload.asset_id)
     if asset is None:
         raise HTTPException(404, "Asset not found")
 
@@ -844,13 +868,19 @@ def generate_output(
 
     asset_pdfs: dict[int, bytes] = {}
     slot_transforms: dict[int, pdf_compositor.SlotTransform] = {}
+
+    all_asset_ids = set()
+    for assignment in (job.assignments or {}).values():
+        aid = assignment.get("asset_id")
+        if aid:
+            all_asset_ids.add(uuid.UUID(aid))
+    accessible = _accessible_assets(db, user, all_asset_ids) if all_asset_ids else {}
+
     for slot_key, assignment in (job.assignments or {}).items():
         asset_id = assignment.get("asset_id")
         if not asset_id:
             continue
-        asset = db.query(Asset).filter(
-            Asset.id == uuid.UUID(asset_id), Asset.user_id == user.id
-        ).one_or_none()
+        asset = accessible.get(uuid.UUID(asset_id))
         if asset is None:
             continue
         try:

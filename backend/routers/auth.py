@@ -72,6 +72,11 @@ def me(
             "extend an existing trial."
         ),
     ),
+    ref: str | None = Query(
+        default=None,
+        max_length=32,
+        description="Affiliate referral code for attribution on first provision.",
+    ),
     user: AuthenticatedUser = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ) -> UserOut:
@@ -86,6 +91,7 @@ def me(
         auth_id=user.auth_id,
         email=user.email,
         invite_token=invite,
+        affiliate_ref=ref,
     )
     return _to_user_out(row)
 

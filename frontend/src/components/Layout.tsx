@@ -20,6 +20,7 @@ const NAV = [
   { to: "/app/catalogue", label: "Catalogue" },
   { to: "/app/sheets", label: "Sheets" },
   { to: "/app/outputs", label: "Outputs" },
+  { to: "/app/affiliate", label: "Affiliate" },
   { to: "/app/settings", label: "Settings" },
   { to: "/app/help", label: "Help" },
 ];

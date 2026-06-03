@@ -1,3 +1,9 @@
+from backend.models.affiliate import (
+    AffiliateClick,
+    AffiliateConversion,
+    AffiliatePayout,
+    AffiliateProfile,
+)
 from backend.models.app_setting import AppSetting
 from backend.models.asset import Asset, AssetCategory, CatalogueSubscription
 from backend.models.audit import AuditEvent

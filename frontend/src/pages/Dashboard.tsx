@@ -129,6 +129,9 @@ export default function Dashboard() {
         <TrialEndingBanner days={trialDaysLeft} />
       )}
 
+      {/* ─── Affiliate promo ───────────────────────────────────────── */}
+      <AffiliateBanner />
+
       {/* ─── Usage strip ────────────────────────────────────────────── */}
       {status && status.plan !== "locked" && (
         <section className="space-y-3">
@@ -794,6 +797,45 @@ function TrialEndingBanner({ days }: { days: number }) {
         className="rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-neutral-950 hover:bg-neutral-200 transition"
       >
         Choose a plan →
+      </Link>
+    </div>
+  );
+}
+
+function AffiliateBanner() {
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem("printlay.affiliate_banner_dismissed") === "1"
+  );
+
+  if (dismissed) return null;
+
+  function handleDismiss() {
+    localStorage.setItem("printlay.affiliate_banner_dismissed", "1");
+    setDismissed(true);
+  }
+
+  return (
+    <div className="rounded-xl border border-violet-500/20 bg-gradient-to-r from-violet-500/5 to-fuchsia-500/5 p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4 relative">
+      <button
+        onClick={handleDismiss}
+        className="absolute top-2 right-2 text-gray-500 hover:text-gray-300 text-lg leading-none"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
+      <div className="flex-1 space-y-1">
+        <p className="font-semibold text-violet-300">
+          Earn 20% commission — refer a friend
+        </p>
+        <p className="text-sm text-neutral-400">
+          Share your unique link and earn commission on every new subscriber you bring to PrintLay.
+        </p>
+      </div>
+      <Link
+        to="/app/affiliate"
+        className="shrink-0 rounded-lg bg-violet-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-violet-500 transition"
+      >
+        Learn more →
       </Link>
     </div>
   );

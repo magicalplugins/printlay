@@ -30,11 +30,13 @@ export type Me = {
 /** Fetch the calling user's app profile. If `inviteToken` is provided
  *  and this is the user's very first call (i.e. they're being
  *  provisioned), the backend will honour it and grant the longer trial
- *  baked into the invite. Subsequent calls ignore the token. */
-export const getMe = (inviteToken?: string | null) => {
-  const qs = inviteToken
-    ? `?invite=${encodeURIComponent(inviteToken)}`
-    : "";
+ *  baked into the invite. Subsequent calls ignore the token.
+ *  Similarly, `affiliateRef` is passed for first-provision attribution. */
+export const getMe = (inviteToken?: string | null, affiliateRef?: string | null) => {
+  const params = new URLSearchParams();
+  if (inviteToken) params.set("invite", inviteToken);
+  if (affiliateRef) params.set("ref", affiliateRef);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   return api<Me>(`/api/auth/me${qs}`);
 };
 

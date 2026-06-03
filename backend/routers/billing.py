@@ -767,6 +767,8 @@ def _dispatch_event(db: Session, event: stripe.Event) -> None:
         _handle_subscription_deleted(db, obj)
     elif etype == "invoice.payment_failed":
         _handle_invoice_failed(db, obj)
+    elif etype == "invoice.payment_succeeded":
+        _handle_invoice_paid(db, obj)
     else:
         log.debug("ignoring stripe event type %s", etype)
 
@@ -840,3 +842,42 @@ def _handle_invoice_failed(db: Session, invoice_obj: dict) -> None:
     # We just surface the state in the UI.
     user.stripe_subscription_status = "past_due"
     log.warning("payment failed for user %s; status -> past_due", user.id)
+
+
+def _handle_invoice_paid(db: Session, invoice_obj: dict) -> None:
+    """Record an affiliate conversion on first successful payment."""
+    from backend.services import affiliate_service
+
+    customer_id = invoice_obj.get("customer")
+    user = stripe_billing.find_user_for_event(
+        db, customer_id=customer_id, user_id_meta=None
+    )
+    if not user:
+        return
+    if not user.referred_by_affiliate_id:
+        return
+    if affiliate_service.has_existing_conversion(db, user.id):
+        return
+
+    amount_paid = invoice_obj.get("amount_paid", 0)
+    if amount_paid <= 0:
+        return
+
+    profile = db.query(
+        affiliate_service.AffiliateProfile
+    ).filter_by(id=user.referred_by_affiliate_id).first()
+    if not profile or profile.status != "active":
+        return
+
+    affiliate_service.record_conversion(
+        db,
+        affiliate_id=profile.id,
+        referred_user_id=user.id,
+        stripe_invoice_id=invoice_obj.get("id"),
+        charge_amount_pence=amount_paid,
+        commission_rate=profile.commission_rate,
+    )
+    log.info(
+        "Affiliate conversion recorded: user=%s affiliate=%s amount=%d",
+        user.id, profile.id, amount_paid,
+    )

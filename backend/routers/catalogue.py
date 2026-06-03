@@ -1086,7 +1086,7 @@ def admin_list_subscribers(
         return []
     users = db.query(User).filter(User.id.in_(user_ids)).all()
     return [
-        {"id": str(u.id), "email": u.email, "display_name": u.display_name}
+        {"id": str(u.id), "email": u.email, "display_name": u.company_name}
         for u in users
     ]
 def refresh_all_thumbnails(

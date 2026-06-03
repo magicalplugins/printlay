@@ -126,7 +126,9 @@ function ShareModal({
       await loadSubs();
       setSearchQ("");
       setSearchResults([]);
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      alert(e?.body?.detail || e?.message || "Failed to assign user");
+    }
     setBusy(false);
   }
 
@@ -135,7 +137,9 @@ function ShareModal({
     try {
       await adminUnassignSubscriber(categoryId, userId);
       await loadSubs();
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      alert(e?.body?.detail || e?.message || "Failed to remove user");
+    }
     setBusy(false);
   }
 

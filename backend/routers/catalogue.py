@@ -1006,6 +1006,9 @@ def admin_set_private_share(
         payload={"is_private_share": is_private_share},
     )
     return _category_to_out(cat, subscribed=False)
+
+
+@router.post("/admin/catalogues/{cat_id}/assign", status_code=status.HTTP_204_NO_CONTENT)
 def admin_assign_subscriber(
     cat_id: uuid.UUID,
     user_id: uuid.UUID,

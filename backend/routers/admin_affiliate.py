@@ -10,7 +10,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.auth import require_admin
+from backend.auth import is_admin_email, require_admin
 from backend.config import get_settings
 from backend.database import get_db
 from backend.models.affiliate import (
@@ -22,7 +22,7 @@ from backend.models.affiliate import (
 )
 from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
-from backend.services import affiliate_service, affiliate_welcome_email
+from backend.services import account_deletion, affiliate_service, affiliate_welcome_email
 
 router = APIRouter(
     prefix="/api/admin/affiliate",
@@ -424,6 +424,64 @@ def update_affiliate(
 
     db.commit()
     return {"ok": True}
+
+
+class DeleteAffiliateResponse(BaseModel):
+    scope: str  # "affiliate_only" | "affiliate_and_account"
+    deleted_account: bool
+    message: str
+
+
+@router.delete("/{affiliate_id}", response_model=DeleteAffiliateResponse)
+def delete_affiliate(
+    affiliate_id: str,
+    db: Session = Depends(get_db),
+):
+    """Delete an affiliate. If they have no Printlay login (pure affiliate /
+    unclaimed ghost) only their affiliate records are removed. If they have a
+    NON-paying login, the whole account and all its data is wiped too. A
+    paying customer (active subscription / enterprise) or an admin is never
+    wiped — only their affiliate records are removed, the account is kept."""
+    profile = db.query(AffiliateProfile).filter(
+        AffiliateProfile.id == _uuid.UUID(affiliate_id)
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Affiliate not found")
+
+    linked_user = None
+    if profile.user_id is not None:
+        linked_user = db.query(User).filter(User.id == profile.user_id).first()
+
+    # Decide whether the linked account can be wiped.
+    protect_account = False
+    reason = ""
+    if linked_user is not None:
+        if account_deletion.is_paying(linked_user):
+            protect_account = True
+            reason = "Linked account is a paying customer — affiliate removed, account preserved."
+        elif is_admin_email(linked_user.email):
+            protect_account = True
+            reason = "Linked account is an admin — affiliate removed, account preserved."
+
+    if linked_user is not None and not protect_account:
+        summary = account_deletion.delete_user_completely(db, linked_user)
+        return DeleteAffiliateResponse(
+            scope="affiliate_and_account",
+            deleted_account=True,
+            message=(
+                f"Deleted affiliate and full account for {summary['email']}."
+                + ("" if summary["supabase_auth_deleted"] else
+                   f" (Supabase login not removed: {summary['supabase_error']})")
+            ),
+        )
+
+    account_deletion.delete_affiliate_records(db, profile)
+    db.commit()
+    return DeleteAffiliateResponse(
+        scope="affiliate_only",
+        deleted_account=False,
+        message=reason or "Affiliate records deleted.",
+    )
 
 
 @router.post("/conversions/{conversion_id}/override")

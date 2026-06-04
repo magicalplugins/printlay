@@ -22,7 +22,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from backend.audit import record
-from backend.auth import require_admin
+from backend.auth import is_admin_email, require_admin
 from backend.database import get_db
 from backend.models import (
     Asset,
@@ -35,8 +35,15 @@ from backend.models import (
     TrialInvite,
     User,
 )
+from backend.models.affiliate import AffiliateProfile
 from backend.models.trial_invite import generate_token
-from backend.services import entitlements, invite_email, messaging, secrets_store
+from backend.services import (
+    account_deletion,
+    entitlements,
+    invite_email,
+    messaging,
+    secrets_store,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -518,6 +525,7 @@ def dropouts(
 def list_users(
     q: str | None = Query(None, description="Filter by email substring"),
     stripe_status: str | None = Query(None, description="Filter by stripe_subscription_status"),
+    affiliate: bool = Query(False, description="Only users who are affiliates"),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     _admin: User = Depends(require_admin),
@@ -527,6 +535,14 @@ def list_users(
     if q:
         like = f"%{q.lower()}%"
         base = base.filter(func.lower(User.email).like(like))
+    if affiliate:
+        base = base.filter(
+            User.id.in_(
+                db.query(AffiliateProfile.user_id).filter(
+                    AffiliateProfile.user_id.isnot(None)
+                )
+            )
+        )
     if stripe_status:
         if stripe_status == "trialing":
             now = _utcnow()
@@ -553,6 +569,14 @@ def list_users(
     )
 
     user_ids = [r.id for r in rows]
+    affiliate_ids: set = set()
+    if user_ids:
+        affiliate_ids = {
+            uid
+            for (uid,) in db.query(AffiliateProfile.user_id)
+            .filter(AffiliateProfile.user_id.in_(user_ids))
+            .all()
+        }
     job_counts: dict = {}
     output_counts: dict = {}
     if user_ids:
@@ -588,6 +612,7 @@ def list_users(
             "founder_member": r.founder_member,
             "created_at": r.created_at.isoformat(),
             "is_active": r.is_active,
+            "is_affiliate": r.id in affiliate_ids,
             "jobs_total": job_counts.get(r.id, 0),
             "pdfs_total": output_counts.get(r.id, 0),
         }
@@ -762,6 +787,55 @@ def patch_user(
     db.refresh(u)
     record(db, admin, "admin.user_patched", target_type="user", target_id=u.id, payload=changes)
     return {"ok": True, "changes": changes, "plan": _plan_label(u)}
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Permanently delete a user and ALL their data — templates, jobs,
+    assets, outputs, colour profiles, sticker data, their affiliate profile
+    (DB cascade), plus their Supabase login. Irreversible.
+
+    Refuses for paying customers (active subscription / enterprise) and for
+    admins or yourself — deactivate those instead."""
+    try:
+        uid = _uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user id")
+
+    u = db.query(User).filter(User.id == uid).one_or_none()
+    if u is None:
+        raise HTTPException(404, "User not found")
+
+    if u.id == admin.id:
+        raise HTTPException(400, "You can't delete your own account.")
+    if is_admin_email(u.email):
+        raise HTTPException(400, "Admin accounts can't be deleted here.")
+    if account_deletion.is_paying(u):
+        raise HTTPException(
+            409,
+            "This is a paying customer (active subscription / enterprise). "
+            "Cancel their subscription or deactivate the account instead.",
+        )
+
+    deleted_email = u.email
+    # Record the audit BEFORE the row is gone (audit.user_id is SET NULL on
+    # delete, so we attribute it to the acting admin with the email in payload).
+    record(
+        db,
+        admin,
+        "admin.user_deleted",
+        target_type="user",
+        target_id=u.id,
+        payload={"email": deleted_email},
+    )
+    db.commit()
+
+    summary = account_deletion.delete_user_completely(db, u)
+    return {"ok": True, **summary}
 
 
 # ---------- bulk messaging ----------

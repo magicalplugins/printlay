@@ -230,3 +230,12 @@ export const resendAffiliateWelcome = (id: string) =>
     `/api/admin/affiliate/${id}/resend-welcome`,
     { method: "POST" }
   );
+
+export type DeleteAffiliateResult = {
+  scope: string; // affiliate_only | affiliate_and_account
+  deleted_account: boolean;
+  message: string;
+};
+
+export const deleteAffiliate = (id: string) =>
+  api<DeleteAffiliateResult>(`/api/admin/affiliate/${id}`, { method: "DELETE" });

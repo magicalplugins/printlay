@@ -1,9 +1,11 @@
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AdminUserRow,
   UserDetail,
   UserPatch,
+  deleteAdminUser,
   getAdminUsers,
   getUserDetail,
   patchAdminUser,
@@ -153,6 +155,8 @@ export default function AdminUsers() {
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [affiliateOnly, setAffiliateOnly] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -171,7 +175,7 @@ export default function AdminUsers() {
   const loadRows = () => {
     setLoading(true);
     setErr(null);
-    getAdminUsers(debouncedQ || undefined, PAGE_SIZE, page * PAGE_SIZE)
+    getAdminUsers(debouncedQ || undefined, PAGE_SIZE, page * PAGE_SIZE, undefined, affiliateOnly)
       .then((res) => {
         setRows(res.items);
         setTotal(res.total);
@@ -184,7 +188,7 @@ export default function AdminUsers() {
     let cancelled = false;
     setLoading(true);
     setErr(null);
-    getAdminUsers(debouncedQ || undefined, PAGE_SIZE, page * PAGE_SIZE)
+    getAdminUsers(debouncedQ || undefined, PAGE_SIZE, page * PAGE_SIZE, undefined, affiliateOnly)
       .then((res) => {
         if (cancelled) return;
         setRows(res.items);
@@ -193,7 +197,36 @@ export default function AdminUsers() {
       .catch((e) => !cancelled && setErr(String(e)))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, [debouncedQ, page]);
+  }, [debouncedQ, page, affiliateOnly]);
+
+  async function handleDeleteUser(u: AdminUserRow, e: ReactMouseEvent) {
+    e.stopPropagation();
+    const msg =
+      `Permanently delete ${u.email}?\n\n` +
+      `This wipes ALL their data — templates, jobs, artwork, outputs, colour profiles` +
+      (u.is_affiliate ? `, their affiliate profile` : ``) +
+      ` — and removes their login. This cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    setDeletingId(u.id);
+    setErr(null);
+    try {
+      const res = await deleteAdminUser(u.id);
+      if (res.supabase_auth_deleted === false && res.supabase_error) {
+        setErr(
+          `Account data deleted, but the login wasn't removed: ${res.supabase_error}`
+        );
+      }
+      loadRows();
+    } catch (e2: unknown) {
+      const detail =
+        e2 && typeof e2 === "object" && "detail" in e2
+          ? String((e2 as { detail: unknown }).detail)
+          : String(e2);
+      setErr(`Delete failed: ${detail}`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   // Load all users for map view (up to 500)
   useEffect(() => {
@@ -303,6 +336,16 @@ export default function AdminUsers() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => { setAffiliateOnly((v) => !v); setPage(0); }}
+          className={`px-3 h-10 rounded-lg border text-xs uppercase tracking-widest whitespace-nowrap ${
+            affiliateOnly
+              ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-200"
+              : "border-neutral-800 text-neutral-400 hover:bg-neutral-900"
+          }`}
+        >
+          Affiliates
+        </button>
       </div>
 
       {err && <div className="text-rose-400 text-sm">{err}</div>}
@@ -342,6 +385,11 @@ export default function AdminUsers() {
                         Founder
                       </span>
                     )}
+                    {u.is_affiliate && (
+                      <span className="rounded-full bg-emerald-500/15 border border-emerald-500/40 px-1.5 py-0 text-[9px] font-medium text-emerald-300 uppercase tracking-wider">
+                        Affiliate
+                      </span>
+                    )}
                     {!u.is_active && (
                       <span className="rounded-full border border-neutral-700 bg-neutral-800 px-1.5 py-0 text-[9px] text-neutral-500 uppercase">
                         suspended
@@ -371,7 +419,17 @@ export default function AdminUsers() {
                 <td className="px-4 py-2.5 text-right text-neutral-500 text-xs">
                   {formatRelative(u.created_at)}
                 </td>
-                <td className="px-2 py-2.5 text-right text-neutral-600">›</td>
+                <td className="px-2 py-2.5 text-right whitespace-nowrap">
+                  <button
+                    onClick={(e) => handleDeleteUser(u, e)}
+                    disabled={deletingId === u.id}
+                    title="Permanently delete this user and all their data"
+                    className="text-xs text-rose-400/80 hover:text-rose-300 disabled:opacity-40"
+                  >
+                    {deletingId === u.id ? "Deleting…" : "Delete"}
+                  </button>
+                  <span className="text-neutral-600 ml-2">›</span>
+                </td>
               </tr>
             ))}
             {!loading && filtered.length === 0 && (

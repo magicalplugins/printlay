@@ -5,6 +5,7 @@ import {
   AffiliateListItem,
   PayoutItem,
   createGhostAffiliate,
+  deleteAffiliate,
   getAdminAffiliateList,
   getAdminOverview,
   getAffiliateReferrals,
@@ -92,6 +93,24 @@ export default function AdminAffiliate() {
     const next = current === "active" ? "paused" : "active";
     await updateAffiliate(id, { status: next });
     await load();
+  }
+
+  async function handleDeleteAffiliate(a: AffiliateListItem) {
+    const warning = a.has_account
+      ? `Delete affiliate "${a.email}"?\n\nThey have a Printlay account. If it is NOT a paying customer, the entire account and ALL its data will be permanently deleted (templates, jobs, artwork, outputs) along with their Supabase login. Paying customers and admins are protected — only the affiliate records are removed.\n\nThis cannot be undone.`
+      : `Delete affiliate "${a.email}"?\n\nThis removes their affiliate records (clicks, conversions, payouts, events). This cannot be undone.`;
+    if (!window.confirm(warning)) return;
+    try {
+      const res = await deleteAffiliate(a.id);
+      setPayoutResult(res.message);
+      await load();
+    } catch (e: unknown) {
+      const detail =
+        e && typeof e === "object" && "detail" in e
+          ? String((e as { detail: unknown }).detail)
+          : String(e);
+      setPayoutResult(`Delete failed: ${detail}`);
+    }
   }
 
   if (loading) {
@@ -232,9 +251,15 @@ export default function AdminAffiliate() {
                     )}
                     <button
                       onClick={() => handleToggleStatus(a.id, a.status)}
-                      className="text-xs text-gray-400 hover:text-white transition-colors"
+                      className="text-xs text-gray-400 hover:text-white transition-colors mr-3"
                     >
                       {a.status === "active" ? "Pause" : "Activate"}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteAffiliate(a)}
+                      className="text-xs text-rose-400 hover:text-rose-300 transition-colors"
+                    >
+                      Delete
                     </button>
                   </td>
                 </tr>

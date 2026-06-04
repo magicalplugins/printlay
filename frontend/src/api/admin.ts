@@ -80,6 +80,7 @@ export type AdminUserRow = {
   founder_member: boolean;
   created_at: string;
   is_active: boolean;
+  is_affiliate: boolean;
   jobs_total: number;
   pdfs_total: number;
 };
@@ -99,15 +100,28 @@ export const getAdminUsers = (
   q?: string,
   limit = 50,
   offset = 0,
-  stripeStatus?: string
+  stripeStatus?: string,
+  affiliateOnly = false
 ) => {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
   params.set("limit", String(limit));
   params.set("offset", String(offset));
   if (stripeStatus) params.set("stripe_status", stripeStatus);
+  if (affiliateOnly) params.set("affiliate", "true");
   return api<AdminUsersPage>(`/api/admin/users?${params.toString()}`);
 };
+
+export type DeleteUserResult = {
+  ok: boolean;
+  email: string;
+  deleted_affiliate_profile: boolean;
+  supabase_auth_deleted: boolean | null;
+  supabase_error: string | null;
+};
+
+export const deleteAdminUser = (userId: string) =>
+  api<DeleteUserResult>(`/api/admin/users/${userId}`, { method: "DELETE" });
 
 // ---- Bulk messaging ----
 

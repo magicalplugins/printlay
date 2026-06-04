@@ -140,10 +140,11 @@ def track_click(
     db: Session = Depends(get_db),
     next: str = Query(default="/register"),
 ):
-    """Record a click and redirect to the registration page with ref param."""
+    """Record a click and bounce to the normal site, dropping the referral
+    cookie so a later signup or enquiry is still credited to the affiliate."""
     profile = affiliate_service.get_profile_by_ref_code(db, ref_code)
     if not profile or profile.status != "active":
-        return RedirectResponse(url="/register", status_code=302)
+        return RedirectResponse(url="/", status_code=302)
 
     ip = request.client.host if request.client else "0.0.0.0"
     ua = request.headers.get("user-agent", "")
@@ -152,8 +153,9 @@ def track_click(
     )
     db.commit()
 
-    target = f"/register?ref={ref_code}"
-    return RedirectResponse(url=target, status_code=302)
+    resp = RedirectResponse(url="/", status_code=302)
+    affiliate_service.set_ref_cookie(resp, ref_code)
+    return resp
 
 
 # ---------------------------------------------------------------------------

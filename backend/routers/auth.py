@@ -7,7 +7,7 @@ from the frontend; this router only:
 - Lets the SPA persist the post-signup profile completion gate.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from backend.audit import record
@@ -77,6 +77,11 @@ def me(
         max_length=32,
         description="Affiliate referral code for attribution on first provision.",
     ),
+    plref: str | None = Cookie(
+        default=None,
+        max_length=32,
+        description="Referral cookie dropped by the share-link redirect.",
+    ),
     user: AuthenticatedUser = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ) -> UserOut:
@@ -91,7 +96,9 @@ def me(
         auth_id=user.auth_id,
         email=user.email,
         invite_token=invite,
-        affiliate_ref=ref,
+        # Explicit ?ref= wins (e.g. legacy links / direct), else the cookie
+        # the share-link redirect dropped on the homepage visit.
+        affiliate_ref=ref or plref,
     )
     return _to_user_out(row)
 

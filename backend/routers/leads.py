@@ -11,7 +11,7 @@ inbox with junk.
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,7 @@ def submit_lead(
     request: Request,
     payload: LeadIn,
     auth: Optional[AuthenticatedUser] = Depends(get_current_user_optional),
+    plref: Optional[str] = Cookie(default=None, max_length=32),
     db: Session = Depends(get_db),
 ) -> LeadOut:
     """Create a new lead. Always returns 200 on success — the widget shows
@@ -96,7 +97,8 @@ def submit_lead(
     #   1. explicit ref code carried from the marketing link
     #   2. the logged-in submitter's own referring affiliate
     _attribute_lead_to_affiliate(
-        db, lead=lead, ref=payload.ref, user_id=user_id, category=payload.category
+        db, lead=lead, ref=payload.ref or plref, user_id=user_id,
+        category=payload.category,
     )
 
     db.commit()

@@ -160,6 +160,31 @@ def normalize_vanity_slug(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Referral cookie
+# ---------------------------------------------------------------------------
+# Share links land the visitor on the normal site (the homepage), not a
+# signup page — they should just see Printlay. We drop a first-party cookie
+# carrying the ref code so that whatever they do next (sign up, or submit the
+# chat/ticket widget) is still credited to the affiliate for up to 30 days.
+
+REF_COOKIE_NAME = "plref"
+REF_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30-day attribution window
+
+
+def set_ref_cookie(response, ref_code: str) -> None:
+    """Attach the referral-attribution cookie to a response."""
+    response.set_cookie(
+        REF_COOKIE_NAME,
+        ref_code,
+        max_age=REF_COOKIE_MAX_AGE,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Click tracking
 # ---------------------------------------------------------------------------
 

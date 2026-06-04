@@ -153,7 +153,8 @@ def _serve_spa(full_path: str) -> FileResponse | JSONResponse:
 
 # ---- Affiliate share links ----
 # Two natural-looking entry points that record a click and bounce the visitor
-# to /register?ref=<code> with attribution intact:
+# to the normal homepage (so they just see Printlay), dropping a first-party
+# referral cookie so a later signup OR chat/ticket message is still credited:
 #   /r/<ref_code>   short link for every affiliate
 #   /<vanity_slug>  vanity link for hand-picked "ghost" affiliates
 # Both are registered BEFORE the SPA catch-all so they win on match. The
@@ -180,7 +181,9 @@ def _track_and_redirect(db, profile, request) -> _RedirectResponse:
         db.commit()
     except Exception:
         db.rollback()
-    return _RedirectResponse(url=f"/register?ref={profile.ref_code}", status_code=302)
+    resp = _RedirectResponse(url="/", status_code=302)
+    _affiliate_service.set_ref_cookie(resp, profile.ref_code)
+    return resp
 
 
 @app.get("/r/{ref_code}", include_in_schema=False)
@@ -191,7 +194,7 @@ def short_affiliate_link(
 ):
     profile = _affiliate_service.get_profile_by_ref_code(db, ref_code)
     if not profile or profile.status != "active":
-        return _RedirectResponse(url="/register", status_code=302)
+        return _RedirectResponse(url="/", status_code=302)
     return _track_and_redirect(db, profile, request)
 
 

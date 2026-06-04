@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   AdminOverview,
   AffiliateDetail,
@@ -584,9 +585,20 @@ function ReferralsModal({
                         </div>
                       </div>
                       {e.exists ? (
-                        <p className="text-sm text-gray-400 whitespace-pre-wrap break-words">
-                          {e.message}
-                        </p>
+                        <>
+                          <p className="text-sm text-gray-400 whitespace-pre-wrap break-words">
+                            {e.message}
+                          </p>
+                          {e.lead_id && (
+                            <Link
+                              to={`/app/admin/leads?focus=${e.lead_id}`}
+                              onClick={onClose}
+                              className="inline-block text-xs text-violet-300 hover:text-violet-200"
+                            >
+                              Open in inbox →
+                            </Link>
+                          )}
+                        </>
                       ) : (
                         <p className="text-xs italic text-gray-600">
                           This enquiry was logged but the message has since been deleted.

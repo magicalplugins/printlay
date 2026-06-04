@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AdminLead,
   AdminLeadsPage,
@@ -112,6 +112,8 @@ function categoryBadge(category: LeadCategory) {
 }
 
 export default function AdminLeads() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const focusId = searchParams.get("focus");
   const [filter, setFilter] = useState<LeadStatus | "inbox">("inbox");
   const [categoryFilter, setCategoryFilter] = useState<LeadCategory | "all">("all");
   const [query, setQuery] = useState("");
@@ -172,6 +174,28 @@ export default function AdminLeads() {
     () => data?.items.find((l) => l.id === selectedId) ?? null,
     [data, selectedId]
   );
+
+  // Deep-link from the affiliate enquiry drill-down: ?focus=<lead_id>.
+  // Select it once it's in the loaded list; if the inbox doesn't contain it
+  // (it may be archived), switch to the archive and try once more. Clear the
+  // param afterwards so the admin can freely click other leads.
+  useEffect(() => {
+    if (!focusId || !data) return;
+    const clearFocus = () => {
+      const next = new URLSearchParams(searchParams);
+      next.delete("focus");
+      setSearchParams(next, { replace: true });
+    };
+    if (data.items.some((l) => l.id === focusId)) {
+      setSelectedId(focusId);
+      clearFocus();
+    } else if (filter !== "archived") {
+      setFilter("archived");
+    } else {
+      // Not in inbox or archive — the lead was deleted. Give up gracefully.
+      clearFocus();
+    }
+  }, [focusId, data, filter, searchParams, setSearchParams]);
 
   // Auto-mark "new" leads as "read" when opened.
   useEffect(() => {

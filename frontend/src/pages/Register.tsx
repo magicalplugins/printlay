@@ -19,6 +19,11 @@ export default function Register() {
   const [searchParams] = useSearchParams();
   const inviteToken = searchParams.get("invite");
   const refCode = searchParams.get("ref");
+  // Ghost/affiliate partners arrive via the welcome email with ?partner=1.
+  // Their account is created locked (no product trial), so we swap the
+  // "free trial" copy for partner-account setup and land them on their
+  // affiliate dashboard afterwards.
+  const isPartner = searchParams.get("partner") === "1";
 
   // Persist affiliate ref code for attribution during provisioning
   useEffect(() => {
@@ -70,13 +75,16 @@ export default function Register() {
     setErr(null);
     setInfo(null);
     // Carry the invite through the email-confirmation redirect, if any.
+    // Partners land on their affiliate dashboard instead of the (locked)
+    // product area.
+    const landing = isPartner ? "/app/affiliate" : "/app";
     const redirectQuery =
       invite.kind === "valid" ? `?invite=${invite.token}` : "";
     const { data, error } = await client.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: window.location.origin + "/app" + redirectQuery,
+        emailRedirectTo: window.location.origin + landing + redirectQuery,
       },
     });
     setBusy(false);
@@ -85,12 +93,14 @@ export default function Register() {
       return;
     }
     if (data.session) {
-      navigate("/app", { replace: true });
+      navigate(landing, { replace: true });
     } else {
       setInfo(
         invite.kind === "valid"
           ? "Almost there — check your inbox to confirm your email, then sign in to claim your trial."
-          : "Check your inbox to confirm your email, then sign in. (You can disable this in Supabase Authentication → Providers → Email if you'd rather skip verification during build.)"
+          : isPartner
+            ? "Almost there — check your inbox to confirm your email, then sign in to reach your partner dashboard."
+            : "Check your inbox to confirm your email, then sign in. (You can disable this in Supabase Authentication → Providers → Email if you'd rather skip verification during build.)"
       );
     }
   }
@@ -102,6 +112,21 @@ export default function Register() {
       <div className="w-full max-w-sm space-y-8">
         {isInvited ? (
           <InvitedHero days={invite.info.trial_days} />
+        ) : isPartner ? (
+          <div className="text-center space-y-2">
+            <Link
+              to="/"
+              className="text-xs uppercase tracking-widest text-neutral-500"
+            >
+              Printlay · Partner programme
+            </Link>
+            <h1 className="text-3xl font-bold tracking-tight">
+              Set up your partner account
+            </h1>
+            <p className="text-sm text-neutral-400">
+              Create a login to access your partner dashboard, share link and trial invites.
+            </p>
+          </div>
         ) : (
           <div className="text-center space-y-2">
             <Link
@@ -173,7 +198,7 @@ export default function Register() {
             type="submit"
             disabled={busy || !client}
             className={`w-full rounded-lg px-4 py-3 font-semibold disabled:opacity-40 transition ${
-              isInvited
+              isInvited || isPartner
                 ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white hover:from-violet-400 hover:to-fuchsia-400"
                 : "bg-white text-neutral-950 hover:bg-neutral-200"
             }`}
@@ -182,7 +207,9 @@ export default function Register() {
               ? "Creating…"
               : isInvited
                 ? `Claim my ${invite.info.trial_days}-day trial →`
-                : "Start 7-day trial →"}
+                : isPartner
+                  ? "Create partner account →"
+                  : "Start 7-day trial →"}
           </button>
 
           <p className="text-xs text-neutral-500 leading-relaxed">

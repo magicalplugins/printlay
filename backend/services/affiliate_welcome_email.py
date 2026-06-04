@@ -25,8 +25,11 @@ class WelcomeSendResult:
 
 
 def build_register_url() -> str:
+    # The ?partner=1 flag tells the Register page to drop the "free trial"
+    # language and present a partner-account setup instead (the affiliate
+    # account is created locked, with no product trial).
     base = get_settings().public_base_url.rstrip("/")
-    return f"{base}/register"
+    return f"{base}/register?partner=1"
 
 
 def _html_body(

@@ -370,11 +370,7 @@ function GhostForm({
       });
       setDone({ link: res.share_link, sent: res.welcome_email_sent, error: res.welcome_email_error });
     } catch (e: unknown) {
-      const detail =
-        e && typeof e === "object" && "detail" in e
-          ? String((e as { detail: unknown }).detail)
-          : String(e);
-      setErr(detail);
+      setErr(apiErrMessage(e));
     } finally {
       setBusy(false);
     }

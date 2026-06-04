@@ -20,6 +20,7 @@ from backend.models.affiliate import (
     AffiliatePayout,
     AffiliateProfile,
 )
+from backend.models.lead import Lead
 from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
 from backend.services import account_deletion, affiliate_service, affiliate_welcome_email
@@ -85,11 +86,23 @@ class ReferralOut(BaseModel):
     status: str  # invited | trial | expired | customer
 
 
+class EnquiryOut(BaseModel):
+    submitted_at: Optional[str]
+    name: Optional[str]
+    email: Optional[str]
+    category: Optional[str]
+    message: Optional[str]
+    status: Optional[str]  # new | read | responded | archived (lead status)
+    lead_id: Optional[str]
+    exists: bool  # False if the underlying lead was deleted/archived away
+
+
 class AffiliateDetailResponse(BaseModel):
     id: str
     email: str
     name: Optional[str]
     referrals: list[ReferralOut]
+    enquiries: list[EnquiryOut]
 
 
 class AdminOverviewResponse(BaseModel):
@@ -377,11 +390,58 @@ def affiliate_referrals(
             status="invited",
         ))
 
+    # 3. Enquiries (chat/ticket leads) credited to this affiliate. We logged a
+    #    "lead" funnel event at submission time with a lead_id pointing at the
+    #    actual message — resolve it so you can read what they asked. If the
+    #    lead row was since deleted we still show the event with exists=False.
+    lead_events = (
+        db.query(AffiliateEvent)
+        .filter(
+            AffiliateEvent.affiliate_id == aid,
+            AffiliateEvent.event_type == affiliate_service.EVENT_LEAD,
+        )
+        .order_by(AffiliateEvent.created_at.desc())
+        .all()
+    )
+    lead_ids = [e.lead_id for e in lead_events if e.lead_id is not None]
+    leads_by_id: dict[_uuid.UUID, Lead] = {}
+    if lead_ids:
+        for ld in db.query(Lead).filter(Lead.id.in_(lead_ids)).all():
+            leads_by_id[ld.id] = ld
+
+    enquiries: list[EnquiryOut] = []
+    for ev in lead_events:
+        ld = leads_by_id.get(ev.lead_id) if ev.lead_id is not None else None
+        if ld is not None:
+            enquiries.append(EnquiryOut(
+                submitted_at=ld.created_at.isoformat() if ld.created_at else None,
+                name=ld.name,
+                email=ld.email,
+                category=ld.category,
+                message=ld.message,
+                status=ld.status,
+                lead_id=str(ld.id),
+                exists=True,
+            ))
+        else:
+            # Lead row gone (deleted) — fall back to whatever the event captured.
+            enquiries.append(EnquiryOut(
+                submitted_at=ev.created_at.isoformat() if ev.created_at else None,
+                name=None,
+                email=None,
+                category=None,
+                message=ev.detail,
+                status=None,
+                lead_id=str(ev.lead_id) if ev.lead_id else None,
+                exists=False,
+            ))
+
     return AffiliateDetailResponse(
         id=str(profile.id),
         email=profile.email,
         name=profile.name,
         referrals=referrals,
+        enquiries=enquiries,
     )
 
 

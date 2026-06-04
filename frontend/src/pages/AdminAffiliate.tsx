@@ -502,42 +502,102 @@ function ReferralsModal({
           </div>
         )}
         {detail && (
-          detail.referrals.length === 0 ? (
-            <p className="text-sm text-gray-500 py-6 text-center">No referrals yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="text-gray-500 text-xs uppercase tracking-wider">
-                <tr>
-                  <th className="px-2 py-1 text-left">Person</th>
-                  <th className="px-2 py-1 text-left">Signed up</th>
-                  <th className="px-2 py-1 text-left">Trial ends</th>
-                  <th className="px-2 py-1 text-center">Status</th>
-                  <th className="px-2 py-1 text-right">Commission</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-800">
-                {detail.referrals.map((r, i) => (
-                  <tr key={i}>
-                    <td className="px-2 py-2 text-gray-200 truncate max-w-[220px]">{r.email}</td>
-                    <td className="px-2 py-2 text-gray-400">
-                      {r.signed_up_at ? new Date(r.signed_up_at).toLocaleDateString() : "—"}
-                    </td>
-                    <td className="px-2 py-2 text-gray-400">
-                      {r.trial_ends_at ? new Date(r.trial_ends_at).toLocaleDateString() : "—"}
-                    </td>
-                    <td className="px-2 py-2 text-center">
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${statusStyle[r.status] || "bg-gray-700/40 text-gray-400"}`}>
-                        {r.status}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2 text-right text-gray-300">
-                      {r.commission_pence ? pence(r.commission_pence) : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )
+          <div className="space-y-6">
+            {/* People referred (signups, trials, customers, pending invites) */}
+            <div className="space-y-2">
+              <h3 className="text-xs uppercase tracking-wider text-gray-500">
+                People referred ({detail.referrals.length})
+              </h3>
+              {detail.referrals.length === 0 ? (
+                <p className="text-sm text-gray-500 py-3">No sign-ups or invites yet.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="text-gray-500 text-xs uppercase tracking-wider">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Person</th>
+                      <th className="px-2 py-1 text-left">Signed up</th>
+                      <th className="px-2 py-1 text-left">Trial ends</th>
+                      <th className="px-2 py-1 text-center">Status</th>
+                      <th className="px-2 py-1 text-right">Commission</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800">
+                    {detail.referrals.map((r, i) => (
+                      <tr key={i}>
+                        <td className="px-2 py-2 text-gray-200 truncate max-w-[220px]">{r.email}</td>
+                        <td className="px-2 py-2 text-gray-400">
+                          {r.signed_up_at ? new Date(r.signed_up_at).toLocaleDateString() : "—"}
+                        </td>
+                        <td className="px-2 py-2 text-gray-400">
+                          {r.trial_ends_at ? new Date(r.trial_ends_at).toLocaleDateString() : "—"}
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${statusStyle[r.status] || "bg-gray-700/40 text-gray-400"}`}>
+                            {r.status}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2 text-right text-gray-300">
+                          {r.commission_pence ? pence(r.commission_pence) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Enquiries — the actual chat / ticket messages they submitted */}
+            <div className="space-y-2">
+              <h3 className="text-xs uppercase tracking-wider text-gray-500">
+                Enquiries ({detail.enquiries.length})
+              </h3>
+              {detail.enquiries.length === 0 ? (
+                <p className="text-sm text-gray-500 py-3">No enquiries from this link yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {detail.enquiries.map((e, i) => (
+                    <li
+                      key={i}
+                      className="rounded-lg border border-gray-800 bg-gray-900/40 p-3 space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="text-sm text-gray-200 font-medium truncate">
+                          {e.name || e.email || "Anonymous enquiry"}
+                          {e.email && e.name && (
+                            <span className="text-gray-500 font-normal"> · {e.email}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs">
+                          {e.category && (
+                            <span className="px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300">
+                              {e.category}
+                            </span>
+                          )}
+                          {e.status && (
+                            <span className="px-1.5 py-0.5 rounded bg-gray-700/40 text-gray-300">
+                              {e.status}
+                            </span>
+                          )}
+                          <span className="text-gray-500">
+                            {e.submitted_at ? new Date(e.submitted_at).toLocaleDateString() : "—"}
+                          </span>
+                        </div>
+                      </div>
+                      {e.exists ? (
+                        <p className="text-sm text-gray-400 whitespace-pre-wrap break-words">
+                          {e.message}
+                        </p>
+                      ) : (
+                        <p className="text-xs italic text-gray-600">
+                          This enquiry was logged but the message has since been deleted.
+                        </p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>

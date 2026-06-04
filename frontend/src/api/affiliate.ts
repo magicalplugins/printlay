@@ -85,11 +85,23 @@ export type AffiliateReferral = {
   status: string; // invited | trial | expired | customer
 };
 
+export type AffiliateEnquiry = {
+  submitted_at: string | null;
+  name: string | null;
+  email: string | null;
+  category: string | null;
+  message: string | null;
+  status: string | null;
+  lead_id: string | null;
+  exists: boolean;
+};
+
 export type AffiliateDetail = {
   id: string;
   email: string;
   name: string | null;
   referrals: AffiliateReferral[];
+  enquiries: AffiliateEnquiry[];
 };
 
 export type GhostCreated = {

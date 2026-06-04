@@ -9,6 +9,7 @@ import {
 } from "../api/outputs";
 import { listTemplates, Template } from "../api/templates";
 import { listJobs, Job } from "../api/jobs";
+import { bulkThumbnails } from "../api/catalogue";
 import { useMe } from "../auth/MeProvider";
 import QuickPreview from "../components/app/QuickPreview";
 import UsageHint from "../components/app/UsageHint";
@@ -54,6 +55,30 @@ export default function Outputs() {
 
   const tplMap = useMemo(() => new Map(templates.map((t) => [t.id, t])), [templates]);
   const jobMap = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs]);
+
+  // Build a thumbnail map for all assets referenced in any job's assignments
+  // so QuickPreview can show the artwork rather than blank slots.
+  const [thumbMap, setThumbMap] = useState<Record<string, string | null>>({});
+  useEffect(() => {
+    if (!jobs.length) return;
+    const assetIds = new Set<string>();
+    for (const j of jobs) {
+      for (const a of Object.values(j.assignments)) {
+        if (a.asset_id) assetIds.add(a.asset_id);
+      }
+    }
+    if (assetIds.size === 0) return;
+    bulkThumbnails([...assetIds]).then(setThumbMap).catch(() => {});
+  }, [jobs]);
+
+  function slotImagesFor(job: Job): Record<number, string> {
+    const map: Record<number, string> = {};
+    for (const [slotIdx, assignment] of Object.entries(job.assignments)) {
+      const url = thumbMap[assignment.asset_id];
+      if (url) map[Number(slotIdx)] = url;
+    }
+    return map;
+  }
 
   function switchView(v: ViewMode) {
     setView(v);
@@ -112,6 +137,10 @@ export default function Outputs() {
     const job = jobMap.get(o.job_id);
     if (!job) return undefined;
     return tplMap.get(job.template_id);
+  }
+
+  function jobForOutput(o: Output): Job | undefined {
+    return jobMap.get(o.job_id);
   }
 
   const allSelected = !!items && items.length > 0 && selected.size === items.length;
@@ -206,6 +235,7 @@ export default function Outputs() {
           {items.map((o) => {
             const isSelected = selected.has(o.id);
             const tpl = tplForOutput(o);
+            const job = jobForOutput(o);
             return (
               <div
                 key={o.id}
@@ -245,6 +275,7 @@ export default function Outputs() {
                         pageWidth={tpl.page_width}
                         pageHeight={tpl.page_height}
                         shapes={tpl.shapes}
+                        slotImages={job ? slotImagesFor(job) : undefined}
                       />
                     )}
                     <button
@@ -291,6 +322,7 @@ export default function Outputs() {
               {items.map((o) => {
                 const isSelected = selected.has(o.id);
                 const tpl = tplForOutput(o);
+                const job = jobForOutput(o);
                 return (
                   <tr
                     key={o.id}
@@ -315,6 +347,7 @@ export default function Outputs() {
                             pageWidth={tpl.page_width}
                             pageHeight={tpl.page_height}
                             shapes={tpl.shapes}
+                            slotImages={job ? slotImagesFor(job) : undefined}
                           />
                         )}
                       </div>

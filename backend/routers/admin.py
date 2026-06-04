@@ -1198,6 +1198,7 @@ class InviteRow(BaseModel):
     accepted_user_id: str | None
     revoked_at: str | None
     status: Literal["pending", "accepted", "revoked", "expired"]
+    affiliate_label: str | None = None
 
 
 class InvitesPage(BaseModel):
@@ -1237,7 +1238,11 @@ def _invite_status(invite: TrialInvite, now: datetime) -> str:
 
 
 def _invite_row(
-    invite: TrialInvite, *, inviter_email: str | None, now: datetime
+    invite: TrialInvite,
+    *,
+    inviter_email: str | None,
+    now: datetime,
+    affiliate_label: str | None = None,
 ) -> InviteRow:
     return InviteRow(
         id=str(invite.id),
@@ -1256,7 +1261,26 @@ def _invite_row(
         ),
         revoked_at=invite.revoked_at.isoformat() if invite.revoked_at else None,
         status=_invite_status(invite, now),
+        affiliate_label=affiliate_label,
     )
+
+
+def _affiliate_label_map(
+    db: Session, invites: list[TrialInvite]
+) -> dict[_uuid.UUID, str]:
+    """Map affiliate_id -> a short display label (name or email) for invites
+    that were promoted by an affiliate."""
+    from backend.models.affiliate import AffiliateProfile
+
+    ids = {i.affiliate_id for i in invites if i.affiliate_id}
+    if not ids:
+        return {}
+    rows = (
+        db.query(AffiliateProfile.id, AffiliateProfile.name, AffiliateProfile.email)
+        .filter(AffiliateProfile.id.in_(ids))
+        .all()
+    )
+    return {r[0]: (r[1] or r[2]) for r in rows}
 
 
 def _inviter_email_map(
@@ -1295,6 +1319,7 @@ def list_invites(
     total = len(rows)
     rows = rows[offset : offset + limit]
     inviter_map = _inviter_email_map(db, rows)
+    affiliate_map = _affiliate_label_map(db, rows)
 
     return InvitesPage(
         total=total,
@@ -1303,6 +1328,7 @@ def list_invites(
                 r,
                 inviter_email=inviter_map.get(r.invited_by_user_id),
                 now=now,
+                affiliate_label=affiliate_map.get(r.affiliate_id) if r.affiliate_id else None,
             )
             for r in rows
         ],

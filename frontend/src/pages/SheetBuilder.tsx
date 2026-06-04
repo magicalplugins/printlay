@@ -56,8 +56,14 @@ export default function SheetBuilder() {
 
   // Canvas
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [_panOffset] = useState({ x: 0, y: 0 });
+
+  // Mobile: settings panel slides in/out as a drawer
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  const clampZoom = (z: number) => Math.max(0.1, Math.min(3, z));
 
   // Load data
   useEffect(() => {
@@ -317,6 +323,24 @@ export default function SheetBuilder() {
   useEffect(() => {
     draw();
   }, [draw]);
+
+  const fitToWidth = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !activeSheet) return;
+    // canvas width = media_width_mm * MM_TO_PX * zoom + rulerSize(40) + 20
+    const avail = el.clientWidth - 60 - 8;
+    const z = avail / (activeSheet.media_width_mm * MM_TO_PX);
+    setZoom(Math.max(0.1, Math.min(3, z)));
+  }, [activeSheet]);
+
+  // Auto fit-to-width when opening a sheet (nice default, especially on mobile)
+  const lastFittedId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeSheet) return;
+    if (lastFittedId.current === activeSheet.id) return;
+    lastFittedId.current = activeSheet.id;
+    requestAnimationFrame(() => fitToWidth());
+  }, [activeSheet, fitToWidth]);
 
   // Preset handling
   async function applyPreset(preset: CutterPreset) {
@@ -746,23 +770,23 @@ export default function SheetBuilder() {
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
       {/* Top bar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-neutral-800 bg-neutral-950/80">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-neutral-800 bg-neutral-950/80">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             onClick={() => setActiveSheet(null)}
-            className="text-neutral-400 hover:text-white text-sm"
+            className="text-neutral-400 hover:text-white text-sm shrink-0"
           >
             &larr; Back
           </button>
-          <h2 className="text-white font-semibold">{activeSheet.name}</h2>
-          <span className="text-xs text-neutral-500">
+          <h2 className="text-white font-semibold truncate">{activeSheet.name}</h2>
+          <span className="text-xs text-neutral-500 hidden sm:inline shrink-0">
             {activeSheet.media_width_mm}mm &times;{" "}
             {activeSheet.media_height_mm.toFixed(0)}mm
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {stats && (
-            <span className="text-xs text-neutral-400 mr-3">
+            <span className="text-xs text-neutral-400 mr-1 hidden md:inline">
               {stats.count} stickers · {stats.metres}m
             </span>
           )}
@@ -771,25 +795,45 @@ export default function SheetBuilder() {
             disabled={
               exporting || !activeSheet.placements?.length
             }
-            className="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-medium"
+            className="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white px-3 sm:px-4 py-1.5 text-sm font-medium"
           >
-            {exporting ? "Exporting..." : "Export PDF"}
+            {exporting ? "…" : (
+              <>
+                <span className="sm:hidden">PDF</span>
+                <span className="hidden sm:inline">Export PDF</span>
+              </>
+            )}
           </button>
           <button
             onClick={handleExportSvg}
             disabled={
               exportingSvg || !activeSheet.placements?.length
             }
-            className="rounded-md bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white px-4 py-1.5 text-sm font-medium"
+            className="rounded-md bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white px-3 sm:px-4 py-1.5 text-sm font-medium"
           >
-            {exportingSvg ? "Exporting..." : "Export Cut Lines"}
+            {exportingSvg ? "…" : (
+              <>
+                <span className="sm:hidden">Cut</span>
+                <span className="hidden sm:inline">Export Cut Lines</span>
+              </>
+            )}
+          </button>
+          {/* Mobile: open settings drawer */}
+          <button
+            onClick={() => setPanelOpen(true)}
+            className="lg:hidden rounded-md bg-violet-600 hover:bg-violet-500 text-white px-3 py-1.5 text-sm font-medium"
+          >
+            Tools
           </button>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* Canvas area */}
-        <div className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-6">
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-3 sm:p-6"
+        >
           <canvas
             ref={canvasRef}
             className="rounded-lg"
@@ -797,8 +841,62 @@ export default function SheetBuilder() {
           />
         </div>
 
-        {/* Right panel */}
-        <div className="w-80 border-l border-neutral-800 bg-neutral-900 overflow-y-auto p-4 space-y-2">
+        {/* Floating zoom controls (mobile-friendly) */}
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 lg:left-4 lg:translate-x-0 flex items-center gap-1 rounded-full bg-neutral-900/90 border border-neutral-700 px-1.5 py-1 shadow-lg backdrop-blur z-20">
+          <button
+            onClick={() => setZoom((z) => clampZoom(z - 0.1))}
+            className="w-8 h-8 rounded-full text-white hover:bg-neutral-700 flex items-center justify-center text-lg leading-none"
+            aria-label="Zoom out"
+          >
+            −
+          </button>
+          <button
+            onClick={fitToWidth}
+            className="px-2 min-w-[3.5rem] text-xs text-neutral-300 hover:text-white tabular-nums"
+            title="Fit to width"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            onClick={() => setZoom((z) => clampZoom(z + 0.1))}
+            className="w-8 h-8 rounded-full text-white hover:bg-neutral-700 flex items-center justify-center text-lg leading-none"
+            aria-label="Zoom in"
+          >
+            +
+          </button>
+          <button
+            onClick={fitToWidth}
+            className="ml-0.5 px-2 h-8 rounded-full text-xs text-violet-300 hover:bg-neutral-700"
+            title="Fit to width"
+          >
+            Fit
+          </button>
+        </div>
+
+        {/* Mobile backdrop when drawer open */}
+        {panelOpen && (
+          <div
+            className="lg:hidden fixed inset-0 z-30 bg-black/50"
+            onClick={() => setPanelOpen(false)}
+          />
+        )}
+
+        {/* Right panel — slide-in drawer on mobile, static on desktop */}
+        <div
+          className={`bg-neutral-900 border-l border-neutral-800 overflow-y-auto p-4 space-y-2 fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] transform transition-transform duration-300 ease-out ${
+            panelOpen ? "translate-x-0" : "translate-x-full"
+          } lg:static lg:z-auto lg:translate-x-0 lg:w-80 lg:max-w-none lg:transition-none`}
+        >
+          {/* Mobile close header */}
+          <div className="lg:hidden flex items-center justify-between mb-2 -mt-1">
+            <span className="text-sm font-semibold text-white">Sheet Tools</span>
+            <button
+              onClick={() => setPanelOpen(false)}
+              className="text-neutral-400 hover:text-white text-sm rounded-md px-2 py-1 hover:bg-neutral-800"
+            >
+              Close ✕
+            </button>
+          </div>
           {/* Auto-layout */}
           <Panel title="Auto-Layout" defaultOpen>
             <div className="space-y-3">

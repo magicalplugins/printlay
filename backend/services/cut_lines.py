@@ -98,6 +98,87 @@ class CutLineError(RuntimeError):
     pass
 
 
+def rename_cut_separation(
+    *,
+    pdf_bytes: bytes,
+    new_name: str,
+    rgb: tuple[int, int, int],
+    match_name: str = "CutContour",
+) -> bytes:
+    """Return a copy of ``pdf_bytes`` where the embedded cut Separation is
+    renamed (and recoloured) to ``new_name``.
+
+    Stickers are saved with a Separation whose name is ``CutContour`` (the
+    Roland convention). A Mimaki / Summa / other RIP user needs the cut path
+    tagged with THEIR spot name (e.g. ``Through-cut``). RIPs identify the cut
+    by the Separation's internal ``/N`` name, NOT the content-stream resource
+    key — so we only rewrite the Separation array's name + tint transform and
+    leave the content stream untouched. No re-rasterising, fully vector.
+
+    If no matching Separation is found the original bytes are returned.
+    """
+    pikepdf = _pp()
+    Name = pikepdf.Name
+    Array = pikepdf.Array
+    Dictionary = pikepdf.Dictionary
+
+    if new_name == match_name:
+        return pdf_bytes
+
+    try:
+        pdf = pikepdf.open(io.BytesIO(pdf_bytes))
+    except Exception as exc:
+        raise CutLineError(f"Failed to open PDF: {exc}") from exc
+
+    r, g, b = (max(0.0, min(1.0, c / 255.0)) for c in rgb)
+    changed = False
+    try:
+        for page in pdf.pages:
+            resources = page.get("/Resources")
+            if resources is None:
+                continue
+            cs = resources.get("/ColorSpace")
+            if cs is None:
+                continue
+            for key in list(cs.keys()):
+                val = cs[key]
+                try:
+                    is_sep = (
+                        isinstance(val, Array)
+                        and len(val) >= 4
+                        and str(val[0]) == "/Separation"
+                    )
+                except Exception:
+                    is_sep = False
+                if not is_sep:
+                    continue
+                if str(val[1]) != "/" + match_name:
+                    continue
+                tint = Dictionary(
+                    FunctionType=2,
+                    Domain=Array([0, 1]),
+                    Range=Array([0, 1, 0, 1, 0, 1]),
+                    C0=Array([1, 1, 1]),
+                    C1=Array([r, g, b]),
+                    N=1,
+                )
+                cs[key] = Array([
+                    Name("/Separation"),
+                    Name("/" + new_name),
+                    Name("/DeviceRGB"),
+                    tint,
+                ])
+                changed = True
+
+        if not changed:
+            return pdf_bytes
+        out = io.BytesIO()
+        pdf.save(out)
+        return out.getvalue()
+    finally:
+        pdf.close()
+
+
 def embed(
     *,
     pdf_bytes: bytes,

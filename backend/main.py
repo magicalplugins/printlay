@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -136,6 +136,65 @@ def _no_cache_file(path: Path) -> FileResponse:
     return FileResponse(path, headers={"Cache-Control": _NO_CACHE})
 
 
+def _serve_spa(full_path: str) -> FileResponse | JSONResponse:
+    """Serve a real static file if it exists, else hand back index.html so
+    client-side routing (React Router) can take over. index.html is always
+    served with no-cache so a redeploy is picked up immediately."""
+    candidate = STATIC_DIR / full_path
+    if full_path and candidate.is_file():
+        if candidate.suffix in {".html", ".json", ".webmanifest"}:
+            return _no_cache_file(candidate)
+        return FileResponse(candidate)
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return _no_cache_file(index)
+    return JSONResponse({"error": "frontend not built"}, status_code=404)
+
+
+# ---- Affiliate share links ----
+# Two natural-looking entry points that record a click and bounce the visitor
+# to /register?ref=<code> with attribution intact:
+#   /r/<ref_code>   short link for every affiliate
+#   /<vanity_slug>  vanity link for hand-picked "ghost" affiliates
+# Both are registered BEFORE the SPA catch-all so they win on match. The
+# vanity handler falls through to the normal SPA serving for any segment that
+# isn't a live vanity slug, so /register, /pricing, /favicon.ico etc. are
+# completely unaffected.
+
+from fastapi import Depends as _Depends  # noqa: E402
+from fastapi.responses import RedirectResponse as _RedirectResponse  # noqa: E402
+from sqlalchemy.orm import Session as _Session  # noqa: E402
+
+from backend.database import get_db as _get_db  # noqa: E402
+from backend.services import affiliate_service as _affiliate_service  # noqa: E402
+
+
+def _track_and_redirect(db, profile, request) -> _RedirectResponse:
+    ip = request.client.host if request.client else "0.0.0.0"
+    ua = request.headers.get("user-agent", "")
+    try:
+        _affiliate_service.record_click(
+            db, affiliate_id=profile.id, ip=ip, user_agent=ua,
+            landing_path=f"/r/{profile.ref_code}",
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    return _RedirectResponse(url=f"/register?ref={profile.ref_code}", status_code=302)
+
+
+@app.get("/r/{ref_code}", include_in_schema=False)
+def short_affiliate_link(
+    ref_code: str,
+    request: Request,
+    db: _Session = _Depends(_get_db),
+):
+    profile = _affiliate_service.get_profile_by_ref_code(db, ref_code)
+    if not profile or profile.status != "active":
+        return _RedirectResponse(url="/register", status_code=302)
+    return _track_and_redirect(db, profile, request)
+
+
 if STATIC_DIR.exists():
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.exists():
@@ -145,18 +204,27 @@ if STATIC_DIR.exists():
             name="assets",
         )
 
+    @app.get("/{slug}", include_in_schema=False, response_model=None)
+    def vanity_or_spa(
+        slug: str,
+        request: Request,
+        db: _Session = _Depends(_get_db),
+    ):
+        # Vanity affiliate link? Only treat as such when it both looks like a
+        # slug AND resolves to an active profile — otherwise serve the SPA so
+        # single-segment routes (/register, /pricing) and root files
+        # (/favicon.ico) keep working exactly as before.
+        candidate = slug.lower()
+        if (
+            candidate not in _affiliate_service.RESERVED_SLUGS
+            and _affiliate_service._SLUG_RE.match(candidate)
+        ):
+            profile = _affiliate_service.get_profile_by_vanity_slug(db, candidate)
+            if profile and profile.status == "active":
+                return _track_and_redirect(db, profile, request)
+        return _serve_spa(slug)
+
     @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
     def spa_fallback(full_path: str) -> FileResponse | JSONResponse:
         # API routes never reach this handler because they are registered above.
-        # Serve a real file if it exists, else hand back index.html so
-        # client-side routing (React Router) can take over. index.html is
-        # always served with no-cache so a redeploy is picked up immediately.
-        candidate = STATIC_DIR / full_path
-        if full_path and candidate.is_file():
-            if candidate.suffix in {".html", ".json", ".webmanifest"}:
-                return _no_cache_file(candidate)
-            return FileResponse(candidate)
-        index = STATIC_DIR / "index.html"
-        if index.exists():
-            return _no_cache_file(index)
-        return JSONResponse({"error": "frontend not built"}, status_code=404)
+        return _serve_spa(full_path)

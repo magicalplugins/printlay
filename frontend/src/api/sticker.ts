@@ -32,6 +32,21 @@ export interface StickerLook {
   beautifyTone?: number; // 0..1
 }
 
+export interface UploadResponse {
+  session_id: string;
+  src_width_px: number;
+  src_height_px: number;
+}
+
+export async function uploadStickerSource(file: File): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return api<UploadResponse>("/api/sticker/upload", {
+    method: "POST",
+    body: form,
+  });
+}
+
 export async function processSticker(
   file: File,
   method: string = "auto",
@@ -127,6 +142,28 @@ export async function editCutline(
       session_id: sessionId,
       points,
     }),
+  });
+}
+
+export interface CanvasStickerParams {
+  session_id: string;
+  canvas_width_mm: number;
+  canvas_height_mm: number;
+  img_x_mm: number;
+  img_y_mm: number;
+  img_width_mm: number;
+  img_height_mm: number;
+  corner_radius_mm: number;
+  bleed_mm: number;
+  shape: "rectangle" | "circle";
+}
+
+export async function processCanvasSticker(
+  params: CanvasStickerParams
+): Promise<ProcessResponse> {
+  return api<ProcessResponse>("/api/sticker/process-canvas", {
+    method: "POST",
+    body: JSON.stringify(params),
   });
 }
 

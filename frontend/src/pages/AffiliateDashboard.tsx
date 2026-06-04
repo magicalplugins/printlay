@@ -4,12 +4,17 @@ import {
   AffiliateDashboard as DashboardData,
   AffiliateClick,
   AffiliateConversion,
+  AffiliateEvent,
+  AffiliateInvite,
   checkConnectStatus,
   getClicks,
   getConnectLoginLink,
   getConversions,
   getDashboard,
+  getEvents,
   joinAsAffiliate,
+  listAffiliateInvites,
+  sendAffiliateInvite,
   startConnectOnboarding,
 } from "../api/affiliate";
 
@@ -22,19 +27,37 @@ export default function AffiliateDashboard() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [clicks, setClicks] = useState<AffiliateClick[]>([]);
   const [conversions, setConversions] = useState<AffiliateConversion[]>([]);
+  const [events, setEvents] = useState<AffiliateEvent[]>([]);
+  const [invites, setInvites] = useState<AffiliateInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [notAffiliate, setNotAffiliate] = useState(false);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   async function load() {
     try {
       const d = await getDashboard();
       setDashboard(d);
       setNotAffiliate(false);
-      const [c, cv] = await Promise.all([getClicks(), getConversions()]);
+      const [c, cv, ev] = await Promise.all([
+        getClicks(),
+        getConversions(),
+        getEvents(),
+      ]);
       setClicks(c);
       setConversions(cv);
+      setEvents(ev);
+      if (d.can_send_invites) {
+        try {
+          setInvites(await listAffiliateInvites());
+        } catch {
+          /* non-fatal */
+        }
+      }
     } catch (e: unknown) {
       if (e && typeof e === "object" && "status" in e && (e as { status: number }).status === 404) {
         setNotAffiliate(true);
@@ -86,6 +109,35 @@ export default function AffiliateDashboard() {
     }
   }
 
+  async function handleSendInvite(e: React.FormEvent) {
+    e.preventDefault();
+    const email = inviteEmail.trim();
+    if (!email) return;
+    setInviteSending(true);
+    setInviteMsg(null);
+    try {
+      const res = await sendAffiliateInvite(email);
+      setInviteEmail("");
+      setInvites(await listAffiliateInvites());
+      setInviteMsg(
+        res.sent
+          ? { kind: "ok", text: `30-day trial invite sent to ${email}.` }
+          : {
+              kind: "err",
+              text: `Invite saved but email failed: ${res.send_error || "unknown error"}`,
+            }
+      );
+    } catch (err: unknown) {
+      const detail =
+        err && typeof err === "object" && "detail" in err
+          ? String((err as { detail: unknown }).detail)
+          : String(err);
+      setInviteMsg({ kind: "err", text: detail });
+    } finally {
+      setInviteSending(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -117,7 +169,7 @@ export default function AffiliateDashboard() {
     return <p className="text-rose-400 text-center py-8">{error || "Failed to load"}</p>;
   }
 
-  const shareLink = `${window.location.origin}/api/affiliate/click/${dashboard.ref_code}`;
+  const shareLink = dashboard.share_link;
 
   return (
     <div className="space-y-6">
@@ -152,18 +204,104 @@ export default function AffiliateDashboard() {
             Copy
           </button>
         </div>
+        {dashboard.vanity_slug && (
+          <p className="text-[11px] text-gray-600">
+            Your personal vanity link — every click, trial and sale tracks back to you.
+          </p>
+        )}
       </div>
 
-      {/* Stats grid */}
+      {/* Send a 30-day trial invite */}
+      {dashboard.can_send_invites && (
+        <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.04] p-4 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Invite a customer</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Send a contact a <strong className="text-gray-300">30-day free trial</strong>.
+              The trial — and any sale — is automatically credited to you.
+            </p>
+          </div>
+          <form onSubmit={handleSendInvite} className="flex items-center gap-2">
+            <input
+              type="email"
+              required
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="customer@email.com"
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600"
+            />
+            <button
+              type="submit"
+              disabled={inviteSending}
+              className="shrink-0 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500 disabled:opacity-50 transition-colors"
+            >
+              {inviteSending ? "Sending…" : "Send invite"}
+            </button>
+          </form>
+          {inviteMsg && (
+            <p className={`text-xs ${inviteMsg.kind === "ok" ? "text-emerald-400" : "text-rose-400"}`}>
+              {inviteMsg.text}
+            </p>
+          )}
+          {invites.length > 0 && (
+            <div className="divide-y divide-gray-800 max-h-56 overflow-y-auto border-t border-gray-800 pt-1">
+              {invites.map((inv, i) => (
+                <div key={i} className="flex items-center justify-between py-2 text-sm gap-3">
+                  <span className="text-gray-300 truncate flex-1">{inv.email}</span>
+                  <span className="text-gray-600 text-xs shrink-0">
+                    {new Date(inv.created_at).toLocaleDateString()}
+                  </span>
+                  <span
+                    className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                      inv.status === "accepted"
+                        ? "bg-emerald-500/10 text-emerald-400"
+                        : inv.status === "pending"
+                        ? "bg-sky-500/10 text-sky-400"
+                        : "bg-gray-700/40 text-gray-400"
+                    }`}
+                  >
+                    {inv.status === "accepted" ? "signed up" : inv.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Funnel: clicks → trials → leads → sales */}
+      <div>
+        <h2 className="text-xs uppercase tracking-wider text-gray-500 font-medium mb-2">
+          Your funnel
+        </h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Total Clicks" value={dashboard.total_clicks.toLocaleString()} />
+          <StatCard
+            label="Trials Generated"
+            value={dashboard.total_signups.toLocaleString()}
+            sub={`${dashboard.signups_30d} in last 30d`}
+          />
+          <StatCard
+            label="Enquiries (chat/ticket)"
+            value={dashboard.total_leads.toLocaleString()}
+          />
+          <StatCard label="Sales" value={dashboard.total_conversions.toLocaleString()} />
+        </div>
+      </div>
+
+      {/* Rates + earnings */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="Total Clicks" value={dashboard.total_clicks.toLocaleString()} />
-        <StatCard label="Conversions" value={dashboard.total_conversions.toLocaleString()} />
-        <StatCard label="Conversion Rate" value={`${dashboard.conversion_rate}%`} />
+        <StatCard label="Click → Sale" value={`${dashboard.conversion_rate}%`} />
+        <StatCard label="Trial → Sale" value={`${dashboard.signup_to_sale_rate}%`} />
+        <StatCard label="Commission" value={`${(dashboard.commission_rate * 100).toFixed(0)}%`} />
         <StatCard label="Last 30 Days" value={`${dashboard.recent_clicks_30d} clicks`} />
         <StatCard label="Pending Balance" value={pence(dashboard.pending_balance_pence)} highlight />
         <StatCard label="Total Earned" value={pence(dashboard.total_earned_pence)} />
         <StatCard label="Total Paid" value={pence(dashboard.total_paid_pence)} />
-        <StatCard label="Commission" value={`${(dashboard.commission_rate * 100).toFixed(0)}%`} />
+        <StatCard
+          label="Payout At"
+          value={pence(dashboard.min_payout_threshold_pence)}
+        />
       </div>
 
       {/* Stripe Connect */}
@@ -196,6 +334,45 @@ export default function AffiliateDashboard() {
           </div>
         )}
       </div>
+
+      {/* Recent activity — trials & enquiries (even without a sale) */}
+      {events.length > 0 && (
+        <div className="rounded-xl border border-gray-800 bg-gray-900/50 p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-white">Recent Activity</h2>
+          <p className="text-xs text-gray-500">
+            Trials and enquiries generated by your link — these don&apos;t earn
+            commission on their own, but show your link is working.
+          </p>
+          <div className="divide-y divide-gray-800 max-h-64 overflow-y-auto">
+            {events.slice(0, 30).map((e, i) => (
+              <div key={i} className="flex items-center justify-between py-2 text-sm gap-3">
+                <span className="text-gray-400 shrink-0">
+                  {new Date(e.created_at).toLocaleDateString()}{" "}
+                  {new Date(e.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <span className="text-gray-500 text-xs truncate flex-1 text-right">
+                  {e.detail || ""}
+                </span>
+                <span
+                  className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                    e.event_type === "signup"
+                      ? "bg-sky-500/10 text-sky-400"
+                      : e.event_type === "invite"
+                      ? "bg-violet-500/10 text-violet-300"
+                      : "bg-amber-500/10 text-amber-400"
+                  }`}
+                >
+                  {e.event_type === "signup"
+                    ? "trial"
+                    : e.event_type === "invite"
+                    ? "invite sent"
+                    : "enquiry"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Recent conversions */}
       {conversions.length > 0 && (
@@ -252,7 +429,7 @@ export default function AffiliateDashboard() {
   );
 }
 
-function StatCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function StatCard({ label, value, highlight, sub }: { label: string; value: string; highlight?: boolean; sub?: string }) {
   return (
     <div className={`rounded-xl border p-3 ${
       highlight
@@ -263,6 +440,7 @@ function StatCard({ label, value, highlight }: { label: string; value: string; h
       <div className={`text-lg font-semibold ${highlight ? "text-violet-300" : "text-white"}`}>
         {value}
       </div>
+      {sub && <div className="text-[11px] text-gray-600 mt-0.5">{sub}</div>}
     </div>
   );
 }

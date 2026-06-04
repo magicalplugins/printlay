@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session
 from backend.models.affiliate import (
     AffiliateClick,
     AffiliateConversion,
+    AffiliateEvent,
     AffiliatePayout,
     AffiliateProfile,
 )
@@ -62,21 +64,37 @@ def create_profile(
     user_id: Optional[UUID] = None,
     name: Optional[str] = None,
     commission_rate: float = 0.20,
+    is_ghost: bool = False,
+    vanity_slug: Optional[str] = None,
 ) -> AffiliateProfile:
     """Create a new affiliate profile with a unique ref code."""
     ref_code = ensure_unique_ref_code(db)
     profile = AffiliateProfile(
-        email=email,
+        email=email.lower(),
         user_id=user_id,
         name=name,
         ref_code=ref_code,
         commission_rate=commission_rate,
         status="active",
+        is_ghost=is_ghost,
+        vanity_slug=vanity_slug,
     )
     db.add(profile)
     db.flush()
-    log.info("Created affiliate profile %s (ref=%s) for %s", profile.id, ref_code, email)
+    log.info(
+        "Created affiliate profile %s (ref=%s, ghost=%s, slug=%s) for %s",
+        profile.id, ref_code, is_ghost, vanity_slug, email,
+    )
     return profile
+
+
+def share_link(profile: AffiliateProfile, base_url: str) -> str:
+    """The natural-looking link an affiliate shares. Ghost affiliates get a
+    vanity URL (base/<slug>); everyone else gets the short /r/<ref_code>."""
+    base = base_url.rstrip("/")
+    if profile.vanity_slug:
+        return f"{base}/{profile.vanity_slug}"
+    return f"{base}/r/{profile.ref_code}"
 
 
 def get_profile_by_ref_code(db: Session, ref_code: str) -> Optional[AffiliateProfile]:
@@ -89,6 +107,56 @@ def get_profile_by_user_id(db: Session, user_id: UUID) -> Optional[AffiliateProf
     return db.execute(
         select(AffiliateProfile).where(AffiliateProfile.user_id == user_id)
     ).scalar_one_or_none()
+
+
+def get_profile_by_email(db: Session, email: str) -> Optional[AffiliateProfile]:
+    return db.execute(
+        select(AffiliateProfile).where(AffiliateProfile.email == email.lower())
+    ).scalar_one_or_none()
+
+
+def get_profile_by_vanity_slug(db: Session, slug: str) -> Optional[AffiliateProfile]:
+    return db.execute(
+        select(AffiliateProfile).where(AffiliateProfile.vanity_slug == slug.lower())
+    ).scalar_one_or_none()
+
+
+# ---------------------------------------------------------------------------
+# Vanity slug validation
+# ---------------------------------------------------------------------------
+
+# Single-segment paths the frontend/router already own. A vanity slug can
+# never be one of these, otherwise printlay.co.uk/<slug> would hijack a real
+# page. Keep this in sync with top-level SPA routes + static file names.
+RESERVED_SLUGS: frozenset[str] = frozenset({
+    "api", "app", "assets", "r", "affiliate", "register", "login", "logout",
+    "signup", "signin", "sign-up", "sign-in", "pricing", "terms", "privacy",
+    "about", "contact", "support", "help", "docs", "blog", "dashboard",
+    "admin", "account", "settings", "profile", "billing", "checkout",
+    "invite", "invites", "favicon.ico", "robots.txt", "sitemap.xml",
+    "manifest.webmanifest", "index.html", "static", "public", "health",
+    "build", "auth", "home", "templates", "jobs", "sheets", "outputs",
+    "catalogue", "catalog", "stickers", "sticker", "ghost", "trial",
+    "join", "connect", "click", "go", "ref", "u", "s",
+})
+
+_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+
+
+def normalize_vanity_slug(raw: str) -> str:
+    """Validate + normalize a desired vanity slug. Raises ValueError with a
+    human message on any problem so the router can surface it as a 400."""
+    slug = (raw or "").strip().lower()
+    if not slug:
+        raise ValueError("Vanity slug is required.")
+    if not _SLUG_RE.match(slug):
+        raise ValueError(
+            "Use 3–40 lowercase letters, numbers or hyphens "
+            "(must start and end with a letter or number)."
+        )
+    if slug in RESERVED_SLUGS:
+        raise ValueError(f"'{slug}' is reserved — pick another handle.")
+    return slug
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +185,65 @@ def record_click(
     db.add(click)
     db.flush()
     return click
+
+
+# ---------------------------------------------------------------------------
+# Funnel event tracking (signups / leads)
+# ---------------------------------------------------------------------------
+
+EVENT_SIGNUP = "signup"
+EVENT_LEAD = "lead"
+
+
+def record_event(
+    db: Session,
+    affiliate_id: UUID,
+    event_type: str,
+    *,
+    referred_user_id: Optional[UUID] = None,
+    lead_id: Optional[UUID] = None,
+    detail: Optional[str] = None,
+) -> AffiliateEvent:
+    """Record a funnel event (signup / lead) for an affiliate. Pure insert —
+    the caller owns the transaction/commit."""
+    event = AffiliateEvent(
+        affiliate_id=affiliate_id,
+        event_type=event_type,
+        referred_user_id=referred_user_id,
+        lead_id=lead_id,
+        detail=(detail or "")[:255] or None,
+    )
+    db.add(event)
+    db.flush()
+    log.info(
+        "Recorded affiliate event: affiliate=%s type=%s user=%s lead=%s",
+        affiliate_id, event_type, referred_user_id, lead_id,
+    )
+    return event
+
+
+def record_signup_event(
+    db: Session,
+    affiliate_id: UUID,
+    referred_user_id: UUID,
+    detail: Optional[str] = None,
+) -> Optional[AffiliateEvent]:
+    """Record a referred signup/trial once per user (idempotent)."""
+    existing = db.execute(
+        select(AffiliateEvent.id).where(
+            AffiliateEvent.event_type == EVENT_SIGNUP,
+            AffiliateEvent.referred_user_id == referred_user_id,
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return None
+    return record_event(
+        db,
+        affiliate_id,
+        EVENT_SIGNUP,
+        referred_user_id=referred_user_id,
+        detail=detail,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +432,39 @@ def get_affiliate_stats(db: Session, affiliate_id: UUID) -> dict:
         )
     ).scalar() or 0
 
+    total_signups = db.execute(
+        select(func.count(AffiliateEvent.id)).where(
+            AffiliateEvent.affiliate_id == affiliate_id,
+            AffiliateEvent.event_type == EVENT_SIGNUP,
+        )
+    ).scalar() or 0
+
+    total_leads = db.execute(
+        select(func.count(AffiliateEvent.id)).where(
+            AffiliateEvent.affiliate_id == affiliate_id,
+            AffiliateEvent.event_type == EVENT_LEAD,
+        )
+    ).scalar() or 0
+
+    signups_30d = db.execute(
+        select(func.count(AffiliateEvent.id)).where(
+            AffiliateEvent.affiliate_id == affiliate_id,
+            AffiliateEvent.event_type == EVENT_SIGNUP,
+            AffiliateEvent.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
+        )
+    ).scalar() or 0
+
     return {
         "total_clicks": total_clicks,
         "total_conversions": total_conversions,
         "recent_clicks_30d": recent_clicks_30d,
         "conversion_rate": round(total_conversions / total_clicks * 100, 1) if total_clicks else 0.0,
+        "total_signups": total_signups,
+        "total_leads": total_leads,
+        "signups_30d": signups_30d,
+        # Trials that turned into paying customers — the metric affiliates
+        # (and we) actually care about once trials are flowing.
+        "signup_to_sale_rate": round(total_conversions / total_signups * 100, 1) if total_signups else 0.0,
     }
 
 
@@ -347,6 +502,18 @@ def get_admin_overview(db: Session) -> dict:
         select(func.coalesce(func.sum(AffiliateProfile.pending_balance_pence), 0))
     ).scalar() or 0
 
+    total_signups = db.execute(
+        select(func.count(AffiliateEvent.id)).where(
+            AffiliateEvent.event_type == EVENT_SIGNUP
+        )
+    ).scalar() or 0
+
+    total_leads = db.execute(
+        select(func.count(AffiliateEvent.id)).where(
+            AffiliateEvent.event_type == EVENT_LEAD
+        )
+    ).scalar() or 0
+
     return {
         "total_affiliates": total_affiliates,
         "active_affiliates": active_affiliates,
@@ -355,4 +522,6 @@ def get_admin_overview(db: Session) -> dict:
         "total_commission_pence": total_earned,
         "total_paid_pence": total_paid,
         "pending_balance_pence": pending_balance,
+        "total_signups": total_signups,
+        "total_leads": total_leads,
     }

@@ -9,6 +9,7 @@ export type LeadSubmit = {
   page_url?: string;
   category: LeadCategory;
   phone?: string;
+  ref?: string;
 };
 
 export const submitLead = (payload: LeadSubmit) =>

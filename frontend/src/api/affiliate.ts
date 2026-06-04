@@ -13,6 +13,29 @@ export type AffiliateDashboard = {
   total_conversions: number;
   recent_clicks_30d: number;
   conversion_rate: number;
+  total_signups: number;
+  total_leads: number;
+  signups_30d: number;
+  signup_to_sale_rate: number;
+  is_ghost: boolean;
+  vanity_slug: string | null;
+  share_link: string;
+  can_send_invites: boolean;
+};
+
+export type AffiliateInvite = {
+  email: string;
+  status: string; // pending | accepted | expired | revoked
+  trial_days: number;
+  created_at: string;
+  sent_at: string | null;
+  accepted_at: string | null;
+};
+
+export type AffiliateEvent = {
+  created_at: string;
+  event_type: string; // "signup" | "lead"
+  detail: string | null;
 };
 
 export type AffiliateClick = {
@@ -41,7 +64,41 @@ export type AffiliateListItem = {
   stripe_connect_onboarding_complete: boolean;
   total_clicks: number;
   total_conversions: number;
+  total_signups: number;
+  total_leads: number;
+  is_ghost: boolean;
+  vanity_slug: string | null;
+  share_link: string;
+  has_account: boolean;
   created_at: string;
+};
+
+export type AffiliateReferral = {
+  user_id: string | null;
+  email: string;
+  signed_up_at: string | null;
+  trial_ends_at: string | null;
+  is_trialing: boolean;
+  subscription_status: string | null;
+  has_paid: boolean;
+  commission_pence: number;
+  status: string; // invited | trial | expired | customer
+};
+
+export type AffiliateDetail = {
+  id: string;
+  email: string;
+  name: string | null;
+  referrals: AffiliateReferral[];
+};
+
+export type GhostCreated = {
+  id: string;
+  ref_code: string;
+  vanity_slug: string;
+  share_link: string;
+  welcome_email_sent: boolean;
+  welcome_email_error: string | null;
 };
 
 export type AdminOverview = {
@@ -52,6 +109,8 @@ export type AdminOverview = {
   total_commission_pence: number;
   total_paid_pence: number;
   pending_balance_pence: number;
+  total_signups: number;
+  total_leads: number;
 };
 
 export type PayoutItem = {
@@ -81,6 +140,18 @@ export const getClicks = (limit = 50) =>
 
 export const getConversions = (limit = 50) =>
   api<AffiliateConversion[]>(`/api/affiliate/conversions?limit=${limit}`);
+
+export const getEvents = (limit = 50) =>
+  api<AffiliateEvent[]>(`/api/affiliate/events?limit=${limit}`);
+
+export const sendAffiliateInvite = (email: string, note?: string) =>
+  api<{ invite: AffiliateInvite; sent: boolean; send_error: string | null }>(
+    "/api/affiliate/invites",
+    { method: "POST", body: JSON.stringify({ email, note }) }
+  );
+
+export const listAffiliateInvites = () =>
+  api<AffiliateInvite[]>("/api/affiliate/invites");
 
 export const startConnectOnboarding = () =>
   api<{ url: string }>("/api/affiliate/connect/onboard", { method: "POST" });
@@ -113,7 +184,12 @@ export const getAdminAffiliateList = (statusFilter?: string) => {
 
 export const updateAffiliate = (
   id: string,
-  body: { status?: string; commission_rate?: number; min_payout_threshold_pence?: number }
+  body: {
+    status?: string;
+    commission_rate?: number;
+    min_payout_threshold_pence?: number;
+    vanity_slug?: string;
+  }
 ) =>
   api<{ ok: boolean }>(`/api/admin/affiliate/${id}`, {
     method: "PATCH",
@@ -134,3 +210,23 @@ export const runPayouts = () =>
 
 export const getPayouts = (limit = 50) =>
   api<PayoutItem[]>(`/api/admin/affiliate/payouts?limit=${limit}`);
+
+export const createGhostAffiliate = (body: {
+  email: string;
+  name?: string;
+  vanity_slug: string;
+  commission_rate?: number;
+}) =>
+  api<GhostCreated>("/api/admin/affiliate/create-ghost", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const getAffiliateReferrals = (id: string) =>
+  api<AffiliateDetail>(`/api/admin/affiliate/${id}/referrals`);
+
+export const resendAffiliateWelcome = (id: string) =>
+  api<{ ok: boolean; error: string | null }>(
+    `/api/admin/affiliate/${id}/resend-welcome`,
+    { method: "POST" }
+  );

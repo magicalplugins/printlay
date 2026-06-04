@@ -8,6 +8,8 @@ import {
   saveSticker,
   aiStyleSticker,
   resumeSticker,
+  uploadStickerSource,
+  processCanvasSticker,
   AI_STYLES,
   AI_RETOUCH,
 } from "../api/sticker";
@@ -15,7 +17,7 @@ import { Category, createCategory, listCategories } from "../api/catalogue";
 import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
 import { useMe } from "../auth/MeProvider";
 
-type Step = "upload" | "options" | "processing" | "preview" | "saving" | "done";
+type Step = "upload" | "options" | "canvas" | "processing" | "preview" | "saving" | "done";
 type CutlineMode = "contour" | "rectangle" | "face";
 type Precision = "tight" | "medium";
 
@@ -45,6 +47,11 @@ export default function StickerEditor() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [stickerName, setStickerName] = useState<string>("");
   const [savedAssetId, setSavedAssetId] = useState<string | null>(null);
+
+  // Canvas editor state (for rectangle/keep-background mode)
+  const [canvasSessionId, setCanvasSessionId] = useState<string | null>(null);
+  const [srcWidthPx, setSrcWidthPx] = useState(0);
+  const [srcHeightPx, setSrcHeightPx] = useState(0);
 
   // Resume a previously saved sticker when ?asset= is present.
   const resumedRef = useRef(false);
@@ -97,12 +104,31 @@ export default function StickerEditor() {
 
   const handleProcess = useCallback(async () => {
     if (!file) return;
+
+    // For rectangle/keep-background, go to canvas editor instead
+    if (cutlineMode === "rectangle") {
+      setStep("processing");
+      setError(null);
+      try {
+        const upload = await uploadStickerSource(file);
+        setCanvasSessionId(upload.session_id);
+        setSrcWidthPx(upload.src_width_px);
+        setSrcHeightPx(upload.src_height_px);
+        setStep("canvas");
+      } catch (e: any) {
+        const msg =
+          e?.body?.detail || e?.message || "Upload failed. Please try again.";
+        setError(msg);
+        setStep("options");
+      }
+      return;
+    }
+
     setStep("processing");
     setError(null);
 
     try {
-      const method = cutlineMode === "rectangle" ? "none" : "auto";
-      const res = await processSticker(file, method, 2.0, cutlineMode, precision);
+      const res = await processSticker(file, "auto", 2.0, cutlineMode, precision);
       setResult(res);
       setTighten(0);
       setFilterId("none");
@@ -115,6 +141,49 @@ export default function StickerEditor() {
       setStep("options");
     }
   }, [file, cutlineMode, precision]);
+
+  const handleCanvasGenerate = useCallback(
+    async (params: {
+      canvasWidthMm: number;
+      canvasHeightMm: number;
+      imgXMm: number;
+      imgYMm: number;
+      imgWidthMm: number;
+      imgHeightMm: number;
+      cornerRadiusMm: number;
+      bleedMm: number;
+      shape: "rectangle" | "circle";
+    }) => {
+      if (!canvasSessionId) return;
+      setStep("processing");
+      setError(null);
+      try {
+        const res = await processCanvasSticker({
+          session_id: canvasSessionId,
+          canvas_width_mm: params.canvasWidthMm,
+          canvas_height_mm: params.canvasHeightMm,
+          img_x_mm: params.imgXMm,
+          img_y_mm: params.imgYMm,
+          img_width_mm: params.imgWidthMm,
+          img_height_mm: params.imgHeightMm,
+          corner_radius_mm: params.cornerRadiusMm,
+          bleed_mm: params.bleedMm,
+          shape: params.shape,
+        });
+        setResult(res);
+        setTighten(0);
+        setFilterId("none");
+        setBakedFilterId("none");
+        setStep("preview");
+      } catch (e: any) {
+        const msg =
+          e?.body?.detail || e?.message || "Generation failed. Please try again.";
+        setError(msg);
+        setStep("canvas");
+      }
+    },
+    [canvasSessionId]
+  );
 
   const [regenerating, setRegenerating] = useState(false);
 
@@ -299,6 +368,16 @@ export default function StickerEditor() {
         />
       )}
 
+      {step === "canvas" && preview && (
+        <CanvasEditorStep
+          previewUrl={preview}
+          srcWidthPx={srcWidthPx}
+          srcHeightPx={srcHeightPx}
+          onGenerate={handleCanvasGenerate}
+          onBack={() => setStep("options")}
+        />
+      )}
+
       {step === "processing" && <ProcessingState originalPreview={preview} />}
 
       {step === "preview" && result && (
@@ -406,7 +485,7 @@ function OptionsStep({
             active={cutlineMode === "rectangle"}
             onClick={() => setCutlineMode("rectangle")}
             title="Keep background"
-            desc="Rounded rectangle sticker with full image"
+            desc="Set custom dimensions & position image on canvas"
             icon={
               <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <rect x="4" y="6" width="24" height="20" rx="4" strokeDasharray="3 2" />
@@ -431,7 +510,7 @@ function OptionsStep({
         className="w-full rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
       >
         {cutlineMode === "rectangle"
-          ? "Generate sticker"
+          ? "Set up canvas →"
           : cutlineMode === "face"
           ? "Create face sticker"
           : "Remove background & generate"}
@@ -469,6 +548,431 @@ function ModeCard({
       <div className="text-sm font-semibold">{title}</div>
       <div className="text-xs text-neutral-500 mt-0.5">{desc}</div>
     </button>
+  );
+}
+
+/** Numeric input that lets you clear the field and type a fresh value
+ *  (selects all on focus, allows an empty buffer while editing, and
+ *  clamps to min/max on blur). Fixes the "always leaves a 0" behaviour
+ *  of naive controlled number inputs. */
+function NumberField({
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  className,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  className?: string;
+}) {
+  const [text, setText] = useState(String(value));
+  const focused = useRef(false);
+
+  useEffect(() => {
+    // Keep the buffer in sync with external changes (e.g. aspect-locked
+    // height updating when width changes), but not while the user types.
+    if (!focused.current) setText(String(Math.round(value * 100) / 100));
+  }, [value]);
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={min}
+      max={max}
+      step={step}
+      value={text}
+      onFocus={(e) => {
+        focused.current = true;
+        e.currentTarget.select();
+      }}
+      onChange={(e) => {
+        setText(e.target.value);
+        const n = parseFloat(e.target.value);
+        if (!Number.isNaN(n)) onChange(n);
+      }}
+      onBlur={() => {
+        focused.current = false;
+        let n = parseFloat(text);
+        if (Number.isNaN(n)) n = min ?? 0;
+        if (min != null) n = Math.max(min, n);
+        if (max != null) n = Math.min(max, n);
+        onChange(n);
+        setText(String(Math.round(n * 100) / 100));
+      }}
+      className={className}
+    />
+  );
+}
+
+function CanvasEditorStep({
+  previewUrl,
+  srcWidthPx,
+  srcHeightPx,
+  onGenerate,
+  onBack,
+}: {
+  previewUrl: string;
+  srcWidthPx: number;
+  srcHeightPx: number;
+  onGenerate: (params: {
+    canvasWidthMm: number;
+    canvasHeightMm: number;
+    imgXMm: number;
+    imgYMm: number;
+    imgWidthMm: number;
+    imgHeightMm: number;
+    cornerRadiusMm: number;
+    bleedMm: number;
+    shape: "rectangle" | "circle";
+  }) => void;
+  onBack: () => void;
+}) {
+  const [canvasW, setCanvasW] = useState(100);
+  const [canvasH, setCanvasH] = useState(100);
+  const [cornerRadius, setCornerRadius] = useState(3);
+  const [bleed, setBleed] = useState(3);
+  const [shape, setShape] = useState<"rectangle" | "circle">("rectangle");
+
+  // Image positioning in mm relative to canvas top-left
+  const srcAspect = srcWidthPx / (srcHeightPx || 1);
+  const [imgW, setImgW] = useState(() => canvasW);
+  const [imgH, setImgH] = useState(() => canvasW / srcAspect);
+  const [imgX, setImgX] = useState(0);
+  const [imgY, setImgY] = useState(0);
+
+  // Dragging state
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const dragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0, imgX: 0, imgY: 0 });
+
+  // Load the source image for canvas rendering
+  const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => setImgEl(im);
+    im.src = previewUrl;
+  }, [previewUrl]);
+
+  // Recompute default image size when canvas dims change
+  useEffect(() => {
+    const fitW = canvasW;
+    const fitH = fitW / srcAspect;
+    setImgW(fitW);
+    setImgH(fitH);
+    setImgX((canvasW - fitW) / 2);
+    setImgY((canvasH - fitH) / 2);
+  }, [canvasW, canvasH, srcAspect]);
+
+  const totalW = canvasW + bleed * 2;
+  const totalH = canvasH + bleed * 2;
+
+  const scale = (() => {
+    const maxDisplayPx = 400;
+    const maxDim = Math.max(totalW, totalH);
+    return maxDisplayPx / maxDim;
+  })();
+
+  // Draw the editor preview using the EXACT same geometry as the backend.
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const dispW = totalW * scale;
+    const dispH = totalH * scale;
+    c.width = Math.round(dispW * dpr);
+    c.height = Math.round(dispH * dpr);
+    c.style.width = `${dispW}px`;
+    c.style.height = `${dispH}px`;
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0); // 1 unit = 1mm
+
+    // Bleed background (grey)
+    ctx.fillStyle = "#d4d4d4";
+    ctx.fillRect(0, 0, totalW, totalH);
+    // Sticker area (white)
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(bleed, bleed, canvasW, canvasH);
+
+    // Image (clipped to the full sticker+bleed area)
+    if (imgEl) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, totalW, totalH);
+      ctx.clip();
+      ctx.drawImage(imgEl, bleed + imgX, bleed + imgY, imgW, imgH);
+      ctx.restore();
+    }
+
+    // Cut line (dashed blue)
+    ctx.strokeStyle = "#2684ff";
+    ctx.lineWidth = 0.4;
+    ctx.setLineDash([1.2, 0.9]);
+    if (shape === "circle") {
+      ctx.beginPath();
+      ctx.ellipse(totalW / 2, totalH / 2, canvasW / 2, canvasH / 2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      const r = Math.min(cornerRadius, canvasW / 2, canvasH / 2);
+      const x = bleed, y = bleed, w = canvasW, h = canvasH;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.arcTo(x + w, y, x + w, y + r, r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+      ctx.lineTo(x + r, y + h);
+      ctx.arcTo(x, y + h, x, y + h - r, r);
+      ctx.lineTo(x, y + r);
+      ctx.arcTo(x, y, x + r, y, r);
+      ctx.closePath();
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }, [imgEl, totalW, totalH, scale, bleed, canvasW, canvasH, imgX, imgY, imgW, imgH, shape, cornerRadius]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    dragging.current = true;
+    dragStart.current = { x: e.clientX, y: e.clientY, imgX, imgY };
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!dragging.current) return;
+      const dx = (e.clientX - dragStart.current.x) / scale;
+      const dy = (e.clientY - dragStart.current.y) / scale;
+      setImgX(dragStart.current.imgX + dx);
+      setImgY(dragStart.current.imgY + dy);
+    };
+    const handleMouseUp = () => {
+      dragging.current = false;
+    };
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [scale]);
+
+  const centerH = () => setImgX((canvasW - imgW) / 2);
+  const centerV = () => setImgY((canvasH - imgH) / 2);
+  const centerBoth = () => { centerH(); centerV(); };
+
+  const handleScale = (factor: number) => {
+    const newW = imgW * factor;
+    const newH = imgH * factor;
+    setImgW(newW);
+    setImgH(newH);
+    // Always re-center on canvas after scaling
+    setImgX((canvasW - newW) / 2);
+    setImgY((canvasH - newH) / 2);
+  };
+
+  return (
+    <div className="space-y-5">
+      <button onClick={onBack} className="text-sm text-neutral-400 hover:text-white">
+        ← Back to options
+      </button>
+
+      <h2 className="text-lg font-semibold">Canvas Setup</h2>
+
+      {/* Dimension inputs */}
+      <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 space-y-3">
+        <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+          Sticker Dimensions (mm)
+        </legend>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block">
+            <span className="text-xs text-neutral-400">Width</span>
+            <NumberField
+              min={10}
+              max={500}
+              value={canvasW}
+              onChange={setCanvasW}
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-neutral-400">Height</span>
+            <NumberField
+              min={10}
+              max={500}
+              value={canvasH}
+              onChange={setCanvasH}
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      {/* Visual canvas preview */}
+      <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4">
+        <p className="text-xs text-neutral-500 mb-3">
+          Drag the image to position it. Blue dashed line = cut line, grey area = bleed.
+        </p>
+        <div className="flex justify-center">
+          <canvas
+            ref={canvasRef}
+            className="cursor-move select-none rounded"
+            onMouseDown={handleMouseDown}
+          />
+        </div>
+      </div>
+
+      {/* Image controls */}
+      <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 space-y-3">
+        <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+          Image Position & Scale
+        </legend>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => handleScale(1.1)}
+            className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            + Scale Up
+          </button>
+          <button
+            onClick={() => handleScale(0.9)}
+            className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            − Scale Down
+          </button>
+          <button
+            onClick={centerH}
+            className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            Center H
+          </button>
+          <button
+            onClick={centerV}
+            className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            Center V
+          </button>
+          <button
+            onClick={centerBoth}
+            className="rounded-lg bg-violet-600 hover:bg-violet-500 px-3 py-1.5 text-xs font-medium text-white"
+          >
+            Center Both
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          <label className="block">
+            <span className="text-xs text-neutral-400">Image Width (mm)</span>
+            <NumberField
+              min={1}
+              step={0.5}
+              value={Math.round(imgW * 10) / 10}
+              onChange={(w) => {
+                setImgW(w);
+                setImgH(w / srcAspect);
+              }}
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-neutral-400">Image Height (mm)</span>
+            <NumberField
+              min={1}
+              step={0.5}
+              value={Math.round(imgH * 10) / 10}
+              onChange={(h) => {
+                setImgW(h * srcAspect);
+                setImgH(h);
+              }}
+              className="mt-1 w-full rounded-lg bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm text-white"
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      {/* Cut line controls */}
+      <fieldset className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 space-y-3">
+        <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
+          Cut Line
+        </legend>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="shape"
+              checked={shape === "rectangle"}
+              onChange={() => setShape("rectangle")}
+              className="accent-violet-500"
+            />
+            <span className="text-sm text-neutral-300">Rectangle</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="shape"
+              checked={shape === "circle"}
+              onChange={() => setShape("circle")}
+              className="accent-violet-500"
+            />
+            <span className="text-sm text-neutral-300">Circle / Oval</span>
+          </label>
+        </div>
+        {shape === "rectangle" && (
+          <label className="block">
+            <span className="text-xs text-neutral-400">
+              Corner Radius: {cornerRadius} mm
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={Math.min(canvasW, canvasH) / 2}
+              step={0.5}
+              value={cornerRadius}
+              onChange={(e) => setCornerRadius(+e.target.value)}
+              className="w-full mt-1 accent-violet-500"
+            />
+          </label>
+        )}
+        <label className="block">
+          <span className="text-xs text-neutral-400">
+            Bleed: {bleed} mm
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={0.5}
+            value={bleed}
+            onChange={(e) => setBleed(+e.target.value)}
+            className="w-full mt-1 accent-violet-500"
+          />
+        </label>
+      </fieldset>
+
+      <button
+        onClick={() =>
+          onGenerate({
+            canvasWidthMm: canvasW,
+            canvasHeightMm: canvasH,
+            imgXMm: imgX,
+            imgYMm: imgY,
+            imgWidthMm: imgW,
+            imgHeightMm: imgH,
+            cornerRadiusMm: cornerRadius,
+            bleedMm: bleed,
+            shape,
+          })
+        }
+        className="w-full rounded-xl bg-white px-6 py-3.5 font-semibold text-neutral-950 hover:bg-neutral-200 transition"
+      >
+        Generate Sticker
+      </button>
+    </div>
   );
 }
 

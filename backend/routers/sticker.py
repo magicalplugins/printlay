@@ -140,6 +140,41 @@ class UsageResponse(BaseModel):
     plan: str
 
 
+class UploadResponse(BaseModel):
+    session_id: str
+    src_width_px: int
+    src_height_px: int
+
+
+@router.post("/upload", response_model=UploadResponse)
+def upload_sticker_source(
+    file: UploadFile = File(...),
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload a source image for the canvas editor without processing."""
+    user = _resolve_user(db, auth)
+    ent = entitlements.for_user(user)
+    if not ent.allows("sticker_editor"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
+
+    raw = file.file.read()
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large (max 25 MB)")
+
+    from backend.services.bg_removal import normalise_orientation
+    raw = normalise_orientation(raw)
+
+    img = Image.open(io.BytesIO(raw))
+    w, h = img.size
+
+    session_id = str(uuid.uuid4())
+    prefix = f"sticker-sessions/{user.id}/{session_id}"
+    storage.put_bytes(f"{prefix}/source.png", raw, "image/png")
+
+    return UploadResponse(session_id=session_id, src_width_px=w, src_height_px=h)
+
+
 @router.post("/process", response_model=ProcessResponse)
 def process_sticker(
     file: UploadFile = File(...),
@@ -289,6 +324,173 @@ def process_sticker(
         ),
         img_w_px=result.cutline.width_px,
         img_h_px=result.cutline.height_px,
+    )
+
+
+class CanvasStickerRequest(BaseModel):
+    """Generate a sticker at exact custom dimensions with positioned image."""
+    session_id: str
+    canvas_width_mm: float
+    canvas_height_mm: float
+    img_x_mm: float = 0.0
+    img_y_mm: float = 0.0
+    img_width_mm: float | None = None
+    img_height_mm: float | None = None
+    corner_radius_mm: float = 3.0
+    bleed_mm: float = 3.0
+    shape: str = "rectangle"  # "rectangle" or "circle"
+
+
+@router.post("/process-canvas", response_model=ProcessResponse)
+def process_canvas_sticker(
+    body: CanvasStickerRequest,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Generate a sticker at exact canvas dimensions with the image positioned
+    on the canvas. Used for 'Keep background' mode with custom sizes."""
+    import json
+    import math
+
+    user = _resolve_user(db, auth)
+    ent = entitlements.for_user(user)
+    if not ent.allows("sticker_editor"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Sticker editor not available on your plan")
+
+    prefix = f"sticker-sessions/{user.id}/{body.session_id}"
+    try:
+        source_bytes = storage.get_bytes(f"{prefix}/source.png")
+    except Exception:
+        raise HTTPException(404, "Sticker session expired. Please re-upload.")
+
+    dpi = 300
+    mm_to_px = dpi / 25.4
+
+    canvas_w_px = max(1, int(round(body.canvas_width_mm * mm_to_px)))
+    canvas_h_px = max(1, int(round(body.canvas_height_mm * mm_to_px)))
+    bleed_px = int(round(body.bleed_mm * mm_to_px))
+
+    src_img = Image.open(io.BytesIO(source_bytes)).convert("RGBA")
+
+    if body.img_width_mm and body.img_height_mm:
+        img_w_px = max(1, int(round(body.img_width_mm * mm_to_px)))
+        img_h_px = max(1, int(round(body.img_height_mm * mm_to_px)))
+    else:
+        img_w_px = canvas_w_px
+        img_h_px = canvas_h_px
+
+    resized = src_img.resize((img_w_px, img_h_px), Image.LANCZOS)
+
+    img_x_px = int(round(body.img_x_mm * mm_to_px))
+    img_y_px = int(round(body.img_y_mm * mm_to_px))
+
+    total_w = canvas_w_px + 2 * bleed_px
+    total_h = canvas_h_px + 2 * bleed_px
+
+    # Use an oversized intermediate to avoid any negative-coordinate PIL issues.
+    # The image position within the sticker area: (img_x_px, img_y_px) from
+    # the sticker top-left corner. We add bleed offset to get position on the
+    # full canvas, then offset everything into the intermediate's positive space.
+    pad = max(img_w_px, img_h_px, total_w, total_h)
+    mid_w = total_w + 2 * pad
+    mid_h = total_h + 2 * pad
+    mid = Image.new("RGBA", (mid_w, mid_h), (255, 255, 255, 255))
+
+    # Image destination in intermediate coords
+    img_dst_x = pad + bleed_px + img_x_px
+    img_dst_y = pad + bleed_px + img_y_px
+    mid.paste(resized, (img_dst_x, img_dst_y), mask=resized.split()[3])
+
+    # Crop the final canvas area from the intermediate
+    crop_x = pad
+    crop_y = pad
+    canvas = mid.crop((crop_x, crop_y, crop_x + total_w, crop_y + total_h)).copy()
+
+    from backend.services.cutline_generator import _rounded_rect_points
+
+    cut_x1 = bleed_px
+    cut_y1 = bleed_px
+    cut_x2 = bleed_px + canvas_w_px
+    cut_y2 = bleed_px + canvas_h_px
+
+    if body.shape == "circle":
+        cx = (cut_x1 + cut_x2) / 2
+        cy = (cut_y1 + cut_y2) / 2
+        rx = (cut_x2 - cut_x1) / 2
+        ry = (cut_y2 - cut_y1) / 2
+        segments = 48
+        points_px = []
+        for i in range(segments):
+            angle = 2 * math.pi * i / segments
+            px = cx + rx * math.cos(angle)
+            py = cy + ry * math.sin(angle)
+            points_px.append((px, py))
+    else:
+        corner_px = int(round(body.corner_radius_mm * mm_to_px))
+        points_px = _rounded_rect_points(cut_x1, cut_y1, cut_x2, cut_y2, corner_px)
+
+    px_to_pt = 72.0 / dpi
+    points_pt = [(x * px_to_pt, y * px_to_pt) for x, y in points_px]
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    canvas_bytes = buf.getvalue()
+
+    width_pt = total_w * px_to_pt
+    height_pt = total_h * px_to_pt
+    width_mm = width_pt * 25.4 / 72.0
+    height_mm = height_pt * 25.4 / 72.0
+
+    from backend.services.sticker_processor import _render_preview as _rp
+    from backend.services.cutline_generator import CutlineResult
+
+    cutline_result = CutlineResult(
+        points_px=points_px,
+        points_pt=points_pt,
+        width_px=total_w,
+        height_px=total_h,
+        width_pt=width_pt,
+        height_pt=height_pt,
+        border_image=canvas_bytes,
+    )
+    preview_png = _rp(cutline_result)
+
+    storage.put_bytes(f"{prefix}/preview.png", preview_png, "image/png")
+    storage.put_bytes(f"{prefix}/border.png", canvas_bytes, "image/png")
+    storage.put_bytes(f"{prefix}/cutout.png", canvas_bytes, "image/png")
+
+    cutline_payload = {
+        "points_px": [list(p) for p in points_px],
+        "points_pt": [list(p) for p in points_pt],
+        "width_px": total_w,
+        "height_px": total_h,
+        "width_pt": width_pt,
+        "height_pt": height_pt,
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+        "work_dpi": dpi,
+    }
+    storage.put_bytes(
+        f"{prefix}/cutline.json",
+        json.dumps(cutline_payload).encode("utf-8"),
+        "application/json",
+    )
+
+    preview_url = storage.presigned_get(f"{prefix}/preview.png", expires_in=3600)
+    border_url = storage.presigned_get(f"{prefix}/border.png", expires_in=3600)
+
+    return ProcessResponse(
+        preview_url=preview_url,
+        border_url=border_url,
+        cutout_url=border_url,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        bg_type="kept",
+        removal_method=None,
+        session_id=body.session_id,
+        cutline_points=_normalised_points(points_px, total_w, total_h),
+        img_w_px=total_w,
+        img_h_px=total_h,
     )
 
 

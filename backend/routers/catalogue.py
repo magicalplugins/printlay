@@ -537,6 +537,106 @@ def get_asset_page_thumbnail(
     )
 
 
+def _accessible_asset(db: Session, user: User, asset_id: uuid.UUID) -> Asset:
+    """Return an asset the user can read (own, official/private-share they're
+    subscribed to, or any shareable for admins). 404 otherwise."""
+    asset = db.query(Asset).filter(Asset.id == asset_id).one_or_none()
+    if asset is None:
+        raise HTTPException(404, "Asset not found")
+    if asset.user_id == user.id:
+        return asset
+    # Non-owned: must be a shareable category the user can read.
+    if asset.category_id is not None:
+        cat = (
+            db.query(AssetCategory)
+            .filter(AssetCategory.id == asset.category_id)
+            .one_or_none()
+        )
+        if cat is not None and (cat.is_official or cat.is_private_share):
+            if is_admin_email(user.email):
+                return asset
+            sub = (
+                db.query(CatalogueSubscription)
+                .filter(
+                    CatalogueSubscription.user_id == user.id,
+                    CatalogueSubscription.category_id == cat.id,
+                )
+                .one_or_none()
+            )
+            if sub is not None:
+                return asset
+    raise HTTPException(404, "Asset not found")
+
+
+def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    s = (hex_str or "").lstrip("#").strip()
+    if len(s) == 3:
+        s = "".join(ch * 2 for ch in s)
+    if len(s) != 6:
+        return (255, 0, 255)
+    try:
+        return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+    except ValueError:
+        return (255, 0, 255)
+
+
+@router.get("/assets/{asset_id}/download")
+def download_asset(
+    asset_id: uuid.UUID,
+    spot_name: str | None = None,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download a single asset. For stickers with a cut line, an optional
+    `spot_name` re-tags the embedded CutContour separation to the user's
+    chosen spot colour (e.g. Mimaki 'Through-cut') so it cuts correctly on
+    their RIP. The spot's display colour is looked up from the user's spot
+    colours (Settings → Preferences)."""
+    from backend.models.spot_colour import SpotColour
+
+    user = _resolve_user(db, auth)
+    asset = _accessible_asset(db, user, asset_id)
+
+    try:
+        data = storage.get_bytes(asset.r2_key)
+    except Exception as exc:
+        raise HTTPException(503, f"Could not read asset: {exc}") from exc
+
+    has_cut = bool(getattr(asset, "cut_contour_json", None))
+    media_type = "application/pdf" if asset.kind == "pdf" else {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "svg": "image/svg+xml",
+    }.get(asset.kind, "application/octet-stream")
+
+    # Re-tag the cut separation to the chosen spot colour (PDF stickers only).
+    if spot_name and has_cut and asset.kind == "pdf":
+        spot = (
+            db.query(SpotColour)
+            .filter(SpotColour.user_id == user.id, SpotColour.name == spot_name)
+            .one_or_none()
+        )
+        rgb = _hex_to_rgb(spot.display_color) if spot else (255, 0, 255)
+        try:
+            from backend.services.cut_lines import rename_cut_separation
+
+            data = rename_cut_separation(
+                pdf_bytes=data, new_name=spot_name, rgb=rgb
+            )
+        except Exception:
+            # Fall back to the stored PDF (default CutContour) on any error.
+            pass
+
+    ext = "pdf" if asset.kind == "pdf" else asset.kind
+    safe = "".join(c if c.isalnum() or c in "-_ " else "_" for c in asset.name).strip() or "asset"
+    filename = f"{safe}.{ext}"
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.delete("/assets/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_asset(
     asset_id: uuid.UUID,

@@ -13,6 +13,7 @@ import {
   createCategory,
   deleteAsset,
   deleteCategory,
+  downloadAsset,
   exportCategory,
   importCategory,
   listAssets,
@@ -23,6 +24,7 @@ import {
   unsubscribeFromCatalogue,
   uploadAsset,
 } from "../api/catalogue";
+import { listSpotColours, SpotColour } from "../api/spotColours";
 import { getAdminUsers } from "../api/admin";
 import { useMe } from "../auth/MeProvider";
 import QuotaErrorBanner from "../components/app/QuotaErrorBanner";
@@ -502,6 +504,37 @@ export default function Catalogue() {
       next.delete(id);
       return next;
     });
+  }
+
+  // ── Download (with optional cut-line spot colour) ──────────────────
+  const [spotColours, setSpotColours] = useState<SpotColour[]>([]);
+  const [downloadModal, setDownloadModal] = useState<Asset | null>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    listSpotColours().then(setSpotColours).catch(() => {});
+  }, []);
+
+  async function handleDownload(asset: Asset, spotName?: string) {
+    setDownloading(true);
+    try {
+      await downloadAsset(asset, spotName);
+      setDownloadModal(null);
+    } catch (e) {
+      alert(`Download failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  function onDownloadAsset(asset: Asset) {
+    // Stickers with a cut line → let the user pick the cut spot colour.
+    // Everything else downloads straight away.
+    if (asset.kind === "pdf" && asset.cut_contour) {
+      setDownloadModal(asset);
+    } else {
+      void handleDownload(asset);
+    }
   }
 
   /* ── Selection model ─────────────────────────────────────────────
@@ -985,7 +1018,29 @@ export default function Catalogue() {
                                     ✎
                                   </button>
                                 )}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onDownloadAsset(a);
+                                  }}
+                                  className={`absolute top-1 ${a.is_sticker_editable ? "right-[3.75rem]" : "right-8"} rounded-md bg-black/70 px-1.5 py-0.5 text-xs text-white opacity-0 group-hover:opacity-100 hover:bg-emerald-600`}
+                                  title="Download"
+                                >
+                                  ↓
+                                </button>
                               </>
+                            )}
+                            {isReadOnly && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDownloadAsset(a);
+                                }}
+                                className="absolute top-1 right-1 rounded-md bg-black/70 px-1.5 py-0.5 text-xs text-white opacity-0 group-hover:opacity-100 hover:bg-emerald-600"
+                                title="Download"
+                              >
+                                ↓
+                              </button>
                             )}
                           </div>
                         );
@@ -1000,6 +1055,7 @@ export default function Catalogue() {
                       onDeselectAll={deselectAll}
                       onDeleteSingle={onDeleteAsset}
                       onEditSticker={(id) => navigate(`/app/templates/new/sticker?asset=${id}`)}
+                      onDownload={onDownloadAsset}
                       readOnly={isReadOnly}
                     />
                   )
@@ -1196,7 +1252,147 @@ export default function Catalogue() {
           onClose={() => setShareModalOpen(false)}
         />
       )}
+
+      {downloadModal && (
+        <DownloadSpotModal
+          asset={downloadModal}
+          spotColours={spotColours}
+          busy={downloading}
+          onClose={() => setDownloadModal(null)}
+          onDownload={(spotName) => void handleDownload(downloadModal, spotName)}
+        />
+      )}
     </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+   DownloadSpotModal — for stickers with a cut line, lets the user pick
+   which spot colour the CutContour separation is tagged with so it cuts
+   correctly on their RIP (Roland CutContour, Mimaki Through-cut, etc.).
+   Spot colours are managed in Settings → Preferences.
+   ───────────────────────────────────────────────────────────────────── */
+function DownloadSpotModal({
+  asset,
+  spotColours,
+  busy,
+  onClose,
+  onDownload,
+}: {
+  asset: Asset;
+  spotColours: SpotColour[];
+  busy: boolean;
+  onClose: () => void;
+  onDownload: (spotName?: string) => void;
+}) {
+  // Default selection: an existing "CutContour" spot if present, else the
+  // literal default name (Roland convention).
+  const [selected, setSelected] = useState<string>("CutContour");
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900 p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-lg font-semibold text-white">Download sticker</h3>
+        <p className="mt-1 text-sm text-neutral-400 truncate">{asset.name}</p>
+        <p className="mt-3 text-xs text-neutral-500">
+          Choose the cut-line spot colour for your cutter / RIP. The cut path
+          will be tagged with this spot name so it routes to the cutter.
+        </p>
+
+        <div className="mt-4 space-y-1.5 max-h-64 overflow-y-auto">
+          {/* Default Roland CutContour, always available */}
+          <SpotChoiceRow
+            name="CutContour"
+            color="#FF00FF"
+            note="Default (Roland)"
+            selected={selected === "CutContour"}
+            onSelect={() => setSelected("CutContour")}
+          />
+          {spotColours
+            .filter((s) => s.name !== "CutContour")
+            .map((s) => (
+              <SpotChoiceRow
+                key={s.id}
+                name={s.name}
+                color={s.display_color}
+                selected={selected === s.name}
+                onSelect={() => setSelected(s.name)}
+              />
+            ))}
+        </div>
+
+        {spotColours.length === 0 && (
+          <p className="mt-2 text-[11px] text-neutral-500">
+            Add custom spot colours (e.g. Mimaki “Through-cut”) in{" "}
+            <a
+              href="/app/settings?tab=preferences"
+              className="text-fuchsia-400 hover:underline"
+            >
+              Settings → Preferences
+            </a>
+            .
+          </p>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-4 py-2 text-sm text-neutral-300"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onDownload(selected)}
+            disabled={busy}
+            className="rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-4 py-2 text-sm font-medium text-white"
+          >
+            {busy ? "Preparing…" : "Download PDF"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SpotChoiceRow({
+  name,
+  color,
+  note,
+  selected,
+  onSelect,
+}: {
+  name: string;
+  color: string;
+  note?: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full flex items-center gap-3 rounded-lg border px-3 py-2 text-left transition ${
+        selected
+          ? "border-fuchsia-400 bg-fuchsia-500/10"
+          : "border-neutral-800 hover:border-neutral-600"
+      }`}
+    >
+      <span
+        className="h-5 w-5 shrink-0 rounded border border-neutral-600"
+        style={{ background: color }}
+      />
+      <span className="text-sm text-white">{name}</span>
+      {note && <span className="text-[11px] text-neutral-500">{note}</span>}
+      {selected && (
+        <span className="ml-auto text-fuchsia-400 text-sm">✓</span>
+      )}
+    </button>
   );
 }
 
@@ -1218,6 +1414,7 @@ function AssetListView({
   onDeselectAll,
   onDeleteSingle,
   onEditSticker,
+  onDownload,
   readOnly,
 }: {
   assets: Asset[];
@@ -1227,6 +1424,7 @@ function AssetListView({
   onDeselectAll: () => void;
   onDeleteSingle: (id: string) => Promise<void> | void;
   onEditSticker?: (id: string) => void;
+  onDownload?: (asset: Asset) => void;
   readOnly: boolean;
 }) {
   const allSelected =
@@ -1349,18 +1547,28 @@ function AssetListView({
                   className="px-3 py-2 text-right"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {!readOnly && (
-                    <span className="inline-flex items-center gap-2">
-                      {a.is_sticker_editable && onEditSticker && (
-                        <button
-                          type="button"
-                          onClick={() => onEditSticker(a.id)}
-                          className="text-xs text-neutral-500 hover:text-fuchsia-400"
-                          title="Edit sticker"
-                        >
-                          ✎
-                        </button>
-                      )}
+                  <span className="inline-flex items-center gap-2">
+                    {onDownload && (
+                      <button
+                        type="button"
+                        onClick={() => onDownload(a)}
+                        className="text-xs text-neutral-500 hover:text-emerald-400"
+                        title="Download"
+                      >
+                        ↓
+                      </button>
+                    )}
+                    {!readOnly && a.is_sticker_editable && onEditSticker && (
+                      <button
+                        type="button"
+                        onClick={() => onEditSticker(a.id)}
+                        className="text-xs text-neutral-500 hover:text-fuchsia-400"
+                        title="Edit sticker"
+                      >
+                        ✎
+                      </button>
+                    )}
+                    {!readOnly && (
                       <button
                         type="button"
                         onClick={() => void onDeleteSingle(a.id)}
@@ -1369,8 +1577,8 @@ function AssetListView({
                       >
                         ✕
                       </button>
-                    </span>
-                  )}
+                    )}
+                  </span>
                 </td>
               </tr>
             );

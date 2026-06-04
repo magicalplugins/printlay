@@ -315,6 +315,7 @@ export type AdminInvite = {
   accepted_user_id: string | null;
   revoked_at: string | null;
   status: InviteStatus;
+  affiliate_label: string | null;
 };
 
 export type AdminInvitesPage = {

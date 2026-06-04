@@ -78,6 +78,42 @@ export async function uploadAsset(
 export const deleteAsset = (id: string) =>
   api<void>(`/api/assets/${id}`, { method: "DELETE" });
 
+/** Download a single asset's file. For stickers with a cut line, pass a
+ *  `spotName` to re-tag the embedded cut separation to that spot colour
+ *  (e.g. Mimaki "Through-cut"). Triggers a browser download. */
+export async function downloadAsset(
+  asset: Pick<Asset, "id" | "name" | "kind">,
+  spotName?: string
+): Promise<void> {
+  const { getSupabase } = await import("../auth/supabase");
+  const supabase = await getSupabase().catch(() => null);
+  const headers: Record<string, string> = {};
+  if (supabase) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session?.access_token)
+      headers.Authorization = `Bearer ${session.access_token}`;
+  }
+  const sp = new URLSearchParams();
+  if (spotName) sp.set("spot_name", spotName);
+  const qs = sp.toString();
+  const res = await fetch(
+    `/api/assets/${asset.id}/download${qs ? `?${qs}` : ""}`,
+    { headers }
+  );
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const ext = asset.kind === "pdf" ? "pdf" : asset.kind;
+  const safe = asset.name.replace(/[^a-z0-9\-_ ]/gi, "_").trim() || "asset";
+  a.download = `${safe}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export type BulkDeleteResult = { deleted: number; skipped: number };
 
 /** Delete many assets in one round-trip. Capped at 500 ids server-side.

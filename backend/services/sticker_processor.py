@@ -278,19 +278,20 @@ def _render_preview(cutline: CutlineResult) -> bytes:
     draw = ImageDraw.Draw(overlay)
 
     if cutline.points_px and len(cutline.points_px) > 2:
-        sampled = _sample_catmullrom_bezier(cutline.points_px, samples_per_segment=18)
-        if sampled:
-            sampled.append(sampled[0])
-            dash_on_px = max(8.0, img.size[0] * 0.012)
-            dash_off_px = max(6.0, img.size[0] * 0.009)
-            _draw_dashed_polyline(
-                draw,
-                sampled,
-                fill=(38, 132, 255, 255),
-                width=max(3, img.size[0] // 280),
-                dash_on=dash_on_px,
-                dash_off=dash_off_px,
-            )
+        # Draw the cut path as straight segments between points — matches the
+        # exported CutContour (which also uses straight segments) exactly.
+        poly = list(cutline.points_px)
+        poly.append(poly[0])
+        dash_on_px = max(8.0, img.size[0] * 0.012)
+        dash_off_px = max(6.0, img.size[0] * 0.009)
+        _draw_dashed_polyline(
+            draw,
+            poly,
+            fill=(38, 132, 255, 255),
+            width=max(3, img.size[0] // 280),
+            dash_on=dash_on_px,
+            dash_off=dash_off_px,
+        )
 
     img = Image.alpha_composite(img, overlay)
     buf = io.BytesIO()
@@ -577,10 +578,16 @@ def _points_to_bezier_content_stream(
     points: list[tuple[float, float]],
     page_height: float,
 ) -> str:
-    """Convert polygon points to a single closed cubic Bézier path.
+    """Convert polygon points to a single closed path of straight line
+    segments. Outputs PDF content stream operators.
 
-    Uses Catmull-Rom to cubic Bézier conversion for smooth curves
-    through all control points. Outputs PDF content stream operators.
+    We intentionally use STRAIGHT line segments (not Catmull-Rom Bézier
+    smoothing) so the exported CutContour matches the cut line shown in
+    the editor exactly. Catmull-Rom smoothing overshoots on geometric
+    shapes (rectangles, rounded rects) producing wavy, bulging cut paths
+    in VersaWorks. The points are already dense (corner arcs are sampled,
+    organic contours are Chaikin-smoothed upstream) so straight segments
+    render smoothly and are the most RIP-compatible representation.
 
     PDF coordinate system has origin at bottom-left, so we flip Y.
     """
@@ -595,23 +602,8 @@ def _points_to_bezier_content_stream(
 
     ops: list[str] = []
     ops.append(f"{pts[0][0]:.4f} {pts[0][1]:.4f} m")
-
-    for i in range(n):
-        p0 = pts[(i - 1) % n]
-        p1 = pts[i]
-        p2 = pts[(i + 1) % n]
-        p3 = pts[(i + 2) % n]
-
-        cp1x = p1[0] + (p2[0] - p0[0]) / 6.0
-        cp1y = p1[1] + (p2[1] - p0[1]) / 6.0
-        cp2x = p2[0] - (p3[0] - p1[0]) / 6.0
-        cp2y = p2[1] - (p3[1] - p1[1]) / 6.0
-
-        ops.append(
-            f"{cp1x:.4f} {cp1y:.4f} {cp2x:.4f} {cp2y:.4f} "
-            f"{p2[0]:.4f} {p2[1]:.4f} c"
-        )
-
+    for i in range(1, n):
+        ops.append(f"{pts[i][0]:.4f} {pts[i][1]:.4f} l")
     ops.append("h")
     return "\n".join(ops)
 

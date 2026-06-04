@@ -1318,6 +1318,13 @@ export default function JobFiller() {
         // designs to the tightest constraint). For uniform templates this is
         // just the first shape.
         const slot = pickRepresentativeShape(tpl.shapes);
+        // Resolve the artwork for the SELECTED page (artboard), not always
+        // page 0. Mirrors the live-preview logic so the designer shows the
+        // same artboard the user picked in the queue.
+        const designerPageUrl =
+          row.pageIndex > 0
+            ? pagePreviewUrls[`${row.asset.id}:${row.pageIndex}`]
+            : undefined;
         return (
           <SlotDesigner
             open
@@ -1350,7 +1357,7 @@ export default function JobFiller() {
               filter_id: row.filterId,
               safe_crop: row.safeCrop,
             }}
-            thumbnailUrl={row.asset.preview_url ?? row.asset.thumbnail_url ?? null}
+            thumbnailUrl={designerPageUrl ?? row.asset.preview_url ?? row.asset.thumbnail_url ?? null}
             assetNaturalWmm={row.asset.width_pt ? row.asset.width_pt / PT_PER_MM : undefined}
             assetNaturalHmm={row.asset.height_pt ? row.asset.height_pt / PT_PER_MM : undefined}
             assetName={row.asset.name}

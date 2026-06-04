@@ -464,6 +464,7 @@ export default function AdminInvites() {
                       Recipient
                     </th>
                     <th className="text-left font-normal px-4 py-2">Trial</th>
+                    <th className="text-left font-normal px-4 py-2">Affiliate</th>
                     <th className="text-left font-normal px-4 py-2">Status</th>
                     <th className="text-left font-normal px-4 py-2">Sent</th>
                     <th className="text-right font-normal px-4 py-2"></th>
@@ -494,6 +495,15 @@ export default function AdminInvites() {
                       </td>
                       <td className="px-4 py-2.5 text-neutral-300 tabular-nums">
                         {inv.trial_days}d
+                      </td>
+                      <td className="px-4 py-2.5">
+                        {inv.affiliate_label ? (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-300">
+                            {inv.affiliate_label}
+                          </span>
+                        ) : (
+                          <span className="text-neutral-600">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5">{statusPill(inv.status)}</td>
                       <td className="px-4 py-2.5 text-neutral-400">
@@ -573,6 +583,13 @@ export default function AdminInvites() {
                     <dd className="text-neutral-200">
                       {selected.invited_by_email}
                     </dd>
+                  </>
+                )}
+
+                {selected.affiliate_label && (
+                  <>
+                    <dt className="text-neutral-500">Promoted by affiliate</dt>
+                    <dd className="text-violet-300">{selected.affiliate_label}</dd>
                   </>
                 )}
               </dl>

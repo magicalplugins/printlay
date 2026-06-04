@@ -66,6 +66,17 @@ class TrialInvite(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Which admin sent this invite. Nulled if the admin user is deleted
     so we don't lose the invite history."""
 
+    affiliate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("affiliate_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    """The affiliate who promoted this invite (when sent by an affiliate
+    from their dashboard). Closes the link→trial→sale attribution chain:
+    when the recipient signs up, the user is attributed to this affiliate
+    even without a click cookie. Null for plain admin-issued invites."""
+
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

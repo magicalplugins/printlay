@@ -163,6 +163,12 @@ export default function LeadChatWidget() {
     setBusy(true);
     setErr(null);
     try {
+      let ref: string | undefined;
+      try {
+        ref = window.localStorage.getItem("printlay.ref") || undefined;
+      } catch {
+        ref = undefined;
+      }
       await submitLead({
         name: name.trim(),
         email: email.trim(),
@@ -171,6 +177,7 @@ export default function LeadChatWidget() {
         phone: phone.trim() || undefined,
         page_url:
           typeof window !== "undefined" ? window.location.href : undefined,
+        ref,
       });
       setSent(true);
     } catch (e) {

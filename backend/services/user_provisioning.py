@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from backend.audit import record
 from backend.models import TrialInvite, User
+from backend.models.affiliate import AffiliateProfile
 from backend.services import telemetry
 
 TRIAL_DAYS = 7
@@ -84,24 +85,93 @@ def get_or_provision(
             db.refresh(row)
         return row
 
+    from backend.services import affiliate_service
+
     now = datetime.now(timezone.utc)
     invite = _consume_invite(db, token=invite_token, email=email)
-    trial_days = invite.trial_days if invite else TRIAL_DAYS
+
+    # Is this signup an affiliate claiming their OWN account? Affiliate
+    # profiles are created (by admin for ghost affiliates, or via public
+    # affiliate signup) with no user_id. When the matching email registers
+    # we link the two — but the login must NOT hand them the product. An
+    # affiliate account is created LOCKED (no trial) unless they were also
+    # explicitly invited to try the product (invite present). The admin can
+    # always grant a trial later from the admin tools.
+    own_affiliate = affiliate_service.get_profile_by_email(db, email)
+    is_unclaimed_affiliate = (
+        own_affiliate is not None and own_affiliate.user_id is None
+    )
+
+    if invite is not None:
+        trial_days: int | None = invite.trial_days
+    elif is_unclaimed_affiliate:
+        trial_days = None  # locked — affiliate dashboard only, product stays off
+    else:
+        trial_days = TRIAL_DAYS
 
     row = User(
         auth_id=auth_id,
         email=email,
-        trial_ends_at=now + timedelta(days=trial_days),
+        trial_ends_at=(now + timedelta(days=trial_days)) if trial_days else None,
     )
 
+    # Who referred this new user (independent of whether they're an affiliate
+    # themselves)? Priority: explicit ?ref= code, then the affiliate tagged on
+    # the invite they redeemed. Never attribute an affiliate to themselves.
+    referred_profile = None
     if affiliate_ref:
-        from backend.services.affiliate_service import get_profile_by_ref_code
-        profile = get_profile_by_ref_code(db, affiliate_ref)
-        if profile and profile.status == "active":
-            row.referred_by_affiliate_id = profile.id
+        p = affiliate_service.get_profile_by_ref_code(db, affiliate_ref)
+        if p and p.status == "active":
+            referred_profile = p
+    if referred_profile is None and invite is not None and invite.affiliate_id:
+        p = (
+            db.query(AffiliateProfile)
+            .filter(AffiliateProfile.id == invite.affiliate_id)
+            .one_or_none()
+        )
+        if p and p.status == "active":
+            referred_profile = p
+
+    own_id = own_affiliate.id if own_affiliate is not None else None
+    if referred_profile is not None and referred_profile.id != own_id:
+        row.referred_by_affiliate_id = referred_profile.id
+    else:
+        referred_profile = None
 
     db.add(row)
     db.flush()
+
+    # Link the affiliate profile to the freshly-created user account.
+    if is_unclaimed_affiliate:
+        own_affiliate.user_id = row.id
+
+    # Track the trial/signup against the referring affiliate even though no
+    # sale has happened yet — this is what lets affiliates see how many trials
+    # they generate, not just paying conversions. Wrapped in a SAVEPOINT so a
+    # tracking failure (e.g. table not migrated yet) rolls back only this
+    # insert and never poisons the outer transaction that provisions the
+    # user — affiliate analytics must never block login.
+    if referred_profile is not None:
+        try:
+            with db.begin_nested():
+                domain = email.split("@", 1)[-1]
+                detail = (
+                    f"trial {trial_days}d · {domain}"
+                    if trial_days
+                    else f"signup · {domain}"
+                )
+                affiliate_service.record_signup_event(
+                    db,
+                    affiliate_id=referred_profile.id,
+                    referred_user_id=row.id,
+                    detail=detail,
+                )
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Failed to record affiliate signup event for user %s", row.id
+            )
 
     if invite is not None:
         invite.accepted_at = now
@@ -118,6 +188,7 @@ def get_or_provision(
             "via_invite": invite is not None,
             "invite_id": str(invite.id) if invite else None,
             "affiliate_ref": affiliate_ref if row.referred_by_affiliate_id else None,
+            "affiliate_account": is_unclaimed_affiliate,
         },
     )
     telemetry.emit(

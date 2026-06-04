@@ -1,6 +1,7 @@
 """Affiliate router — public click tracking, authenticated dashboard, Connect onboarding."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -9,12 +10,43 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from backend.auth import AuthenticatedUser, get_current_user
+from backend.config import get_settings
 from backend.database import get_db
-from backend.models.affiliate import AffiliateClick, AffiliateConversion, AffiliateProfile
+from backend.models.affiliate import (
+    AffiliateClick,
+    AffiliateConversion,
+    AffiliateEvent,
+    AffiliateProfile,
+)
+from backend.models.trial_invite import TrialInvite, generate_token
 from backend.models.user import User
-from backend.services import affiliate_service, stripe_connect
+from backend.services import affiliate_service, invite_email, stripe_connect
 
 router = APIRouter(prefix="/api/affiliate", tags=["affiliate"])
+
+# Affiliates hand out a fixed 30-day trial. The link itself also lives 30 days.
+AFFILIATE_TRIAL_DAYS = 30
+_INVITE_LINK_LIFETIME = timedelta(days=30)
+
+
+def _base_url(request: Request) -> str:
+    configured = (get_settings().public_base_url or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _invite_status(invite: TrialInvite, now: datetime) -> str:
+    if invite.revoked_at is not None:
+        return "revoked"
+    if invite.accepted_at is not None:
+        return "accepted"
+    expires = invite.expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires <= now:
+        return "expired"
+    return "pending"
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +76,34 @@ class AffiliateDashboardResponse(BaseModel):
     total_conversions: int
     recent_clicks_30d: int
     conversion_rate: float
+    total_signups: int
+    total_leads: int
+    signups_30d: int
+    signup_to_sale_rate: float
+    is_ghost: bool
+    vanity_slug: Optional[str]
+    share_link: str
+    can_send_invites: bool
+
+
+class SendInviteRequest(BaseModel):
+    email: EmailStr
+    note: Optional[str] = None
+
+
+class AffiliateInviteOut(BaseModel):
+    email: str
+    status: str  # pending | accepted | expired | revoked
+    trial_days: int
+    created_at: str
+    sent_at: Optional[str]
+    accepted_at: Optional[str]
+
+
+class SendInviteResponse(BaseModel):
+    invite: AffiliateInviteOut
+    sent: bool
+    send_error: Optional[str] = None
 
 
 class ConnectOnboardingResponse(BaseModel):
@@ -61,6 +121,12 @@ class RecentConversionOut(BaseModel):
     commission_pence: int
     status: str
     stripe_charge_amount_pence: int
+
+
+class RecentEventOut(BaseModel):
+    created_at: str
+    event_type: str  # signup | lead
+    detail: Optional[str]
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +222,7 @@ def join_as_affiliate(
 
 @router.get("/dashboard", response_model=AffiliateDashboardResponse)
 def get_dashboard(
+    request: Request,
     auth_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -179,8 +246,144 @@ def get_dashboard(
         total_paid_pence=profile.total_paid_pence,
         min_payout_threshold_pence=profile.min_payout_threshold_pence,
         stripe_connect_onboarding_complete=profile.stripe_connect_onboarding_complete,
+        is_ghost=profile.is_ghost,
+        vanity_slug=profile.vanity_slug,
+        share_link=affiliate_service.share_link(profile, _base_url(request)),
+        can_send_invites=(profile.status == "active"),
         **stats,
     )
+
+
+# ---------------------------------------------------------------------------
+# Authenticated — affiliate-issued 30-day trial invites
+# ---------------------------------------------------------------------------
+
+def _require_active_affiliate(auth_user: AuthenticatedUser, db: Session) -> AffiliateProfile:
+    user = db.query(User).filter(User.auth_id == auth_user.auth_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    profile = affiliate_service.get_profile_by_user_id(db, user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Not an affiliate")
+    if profile.status != "active":
+        raise HTTPException(status_code=403, detail="Your affiliate account is not active.")
+    return profile
+
+
+@router.post("/invites", response_model=SendInviteResponse, status_code=201)
+def send_affiliate_invite(
+    body: SendInviteRequest,
+    auth_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Affiliate sends a 30-day free-trial invite to a contact. The invite is
+    tagged with their affiliate id so the trial — and any eventual sale —
+    attributes back to them automatically."""
+    profile = _require_active_affiliate(auth_user, db)
+    email_clean = body.email.strip().lower()
+    now = datetime.now(timezone.utc)
+
+    # Already a Printlay user? Nothing to invite.
+    existing_user = db.query(User).filter(User.email == email_clean).first()
+    if existing_user is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="That email already has a Printlay account.",
+        )
+
+    # Reuse an existing un-accepted invite for this email (resend) so we don't
+    # spawn duplicate tokens; otherwise create a fresh one.
+    invite = (
+        db.query(TrialInvite)
+        .filter(TrialInvite.email == email_clean, TrialInvite.accepted_at.is_(None))
+        .order_by(TrialInvite.created_at.desc())
+        .first()
+    )
+    if invite is not None:
+        invite.affiliate_id = profile.id
+        invite.trial_days = AFFILIATE_TRIAL_DAYS
+        invite.expires_at = now + _INVITE_LINK_LIFETIME
+        invite.revoked_at = None
+        if body.note:
+            invite.note = body.note[:500]
+    else:
+        invite = TrialInvite(
+            email=email_clean,
+            token=generate_token(),
+            trial_days=AFFILIATE_TRIAL_DAYS,
+            note=(body.note or None),
+            invited_by_user_id=profile.user_id,
+            affiliate_id=profile.id,
+            expires_at=now + _INVITE_LINK_LIFETIME,
+        )
+        db.add(invite)
+    db.flush()
+
+    result = invite_email.send(
+        recipient_email=email_clean,
+        trial_days=AFFILIATE_TRIAL_DAYS,
+        token=invite.token,
+    )
+    if result.ok:
+        invite.sent_at = datetime.now(timezone.utc)
+
+    # Log the invite as a funnel event for the affiliate (savepoint-safe).
+    try:
+        with db.begin_nested():
+            affiliate_service.record_event(
+                db,
+                affiliate_id=profile.id,
+                event_type="invite",
+                detail=f"invite · {email_clean.split('@', 1)[-1]}",
+            )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Failed to record affiliate invite event")
+
+    db.commit()
+    db.refresh(invite)
+
+    return SendInviteResponse(
+        invite=AffiliateInviteOut(
+            email=invite.email,
+            status=_invite_status(invite, datetime.now(timezone.utc)),
+            trial_days=invite.trial_days,
+            created_at=invite.created_at.isoformat(),
+            sent_at=invite.sent_at.isoformat() if invite.sent_at else None,
+            accepted_at=invite.accepted_at.isoformat() if invite.accepted_at else None,
+        ),
+        sent=result.ok,
+        send_error=result.error,
+    )
+
+
+@router.get("/invites", response_model=list[AffiliateInviteOut])
+def list_affiliate_invites(
+    auth_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=100, le=300),
+):
+    """List the invites this affiliate has sent, newest first."""
+    profile = _require_active_affiliate(auth_user, db)
+    now = datetime.now(timezone.utc)
+    invites = (
+        db.query(TrialInvite)
+        .filter(TrialInvite.affiliate_id == profile.id)
+        .order_by(TrialInvite.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        AffiliateInviteOut(
+            email=i.email,
+            status=_invite_status(i, now),
+            trial_days=i.trial_days,
+            created_at=i.created_at.isoformat(),
+            sent_at=i.sent_at.isoformat() if i.sent_at else None,
+            accepted_at=i.accepted_at.isoformat() if i.accepted_at else None,
+        )
+        for i in invites
+    ]
 
 
 @router.get("/clicks", response_model=list[RecentClickOut])
@@ -245,6 +448,38 @@ def get_recent_conversions(
             stripe_charge_amount_pence=c.stripe_charge_amount_pence,
         )
         for c in conversions
+    ]
+
+
+@router.get("/events", response_model=list[RecentEventOut])
+def get_recent_events(
+    auth_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, le=200),
+):
+    """Return recent funnel events (signups / leads) for the affiliate."""
+    user = db.query(User).filter(User.auth_id == auth_user.auth_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    profile = affiliate_service.get_profile_by_user_id(db, user.id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Not an affiliate")
+
+    events = (
+        db.query(AffiliateEvent)
+        .filter(AffiliateEvent.affiliate_id == profile.id)
+        .order_by(AffiliateEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        RecentEventOut(
+            created_at=e.created_at.isoformat(),
+            event_type=e.event_type,
+            detail=e.detail,
+        )
+        for e in events
     ]
 
 

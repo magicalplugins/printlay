@@ -1,6 +1,7 @@
 from backend.models.affiliate import (
     AffiliateClick,
     AffiliateConversion,
+    AffiliateEvent,
     AffiliatePayout,
     AffiliateProfile,
 )
@@ -25,6 +26,11 @@ from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
 
 __all__ = [
+    "AffiliateClick",
+    "AffiliateConversion",
+    "AffiliateEvent",
+    "AffiliatePayout",
+    "AffiliateProfile",
     "AppSetting",
     "Asset",
     "AssetCategory",

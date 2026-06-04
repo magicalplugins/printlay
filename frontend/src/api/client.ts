@@ -7,6 +7,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Pull a human-readable message out of a thrown API error. FastAPI puts
+ *  the reason in `detail`; ApiError carries the parsed body. */
+export function apiErrMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    const b = e.body;
+    if (b && typeof b === "object" && "detail" in b) {
+      return String((b as { detail: unknown }).detail);
+    }
+    if (typeof b === "string" && b) return b;
+    return `Request failed (${e.status})`;
+  }
+  return e instanceof Error ? e.message : String(e);
+}
+
 /** HTTP statuses that almost always reflect a transient outage rather
  *  than a real client/server bug: a backend rolling restart, a load-
  *  balancer reconnecting, a single Fly machine briefly out of capacity.

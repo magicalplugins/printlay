@@ -22,7 +22,13 @@ import httpx
 from sqlalchemy.orm import Session
 
 from backend.config import get_settings
-from backend.models.affiliate import AffiliateProfile
+from backend.models.affiliate import (
+    AffiliateClick,
+    AffiliateConversion,
+    AffiliateEvent,
+    AffiliatePayout,
+    AffiliateProfile,
+)
 from backend.models.user import User
 from backend.services import affiliate_service
 
@@ -58,9 +64,22 @@ def supabase_delete_auth_user(auth_id) -> tuple[bool, str | None]:
 
 
 def delete_affiliate_records(db: Session, profile: AffiliateProfile) -> None:
-    """Delete an affiliate profile and everything that cascades from it
-    (clicks, conversions, payouts, events). Invites the affiliate sent have
-    their affiliate_id set NULL (kept for invite history). Caller commits."""
+    """Delete an affiliate profile and all its child rows (clicks,
+    conversions, payouts, events). We delete the children explicitly first:
+    the DB has ON DELETE CASCADE, but the ORM relationships would otherwise
+    try to NULL the (NOT NULL) affiliate_id columns and fail. Invites the
+    affiliate sent keep their history (affiliate_id is SET NULL via the DB).
+    Caller commits."""
+    aid = profile.id
+    for model in (
+        AffiliateClick,
+        AffiliateConversion,
+        AffiliatePayout,
+        AffiliateEvent,
+    ):
+        db.query(model).filter(model.affiliate_id == aid).delete(
+            synchronize_session=False
+        )
     db.delete(profile)
     db.flush()
 
@@ -82,8 +101,7 @@ def delete_user_completely(
     profile = affiliate_service.get_profile_by_user_id(db, user.id)
     had_affiliate = profile is not None
     if profile is not None:
-        db.delete(profile)
-        db.flush()
+        delete_affiliate_records(db, profile)
 
     db.delete(user)
     db.commit()

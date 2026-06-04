@@ -10,7 +10,7 @@ import {
   getUserDetail,
   patchAdminUser,
 } from "../api/admin";
-import { api } from "../api/client";
+import { api, apiErrMessage } from "../api/client";
 import { startImpersonation } from "../auth/impersonation";
 import UserWorldMap from "../components/admin/UserWorldMap";
 
@@ -218,11 +218,7 @@ export default function AdminUsers() {
       }
       loadRows();
     } catch (e2: unknown) {
-      const detail =
-        e2 && typeof e2 === "object" && "detail" in e2
-          ? String((e2 as { detail: unknown }).detail)
-          : String(e2);
-      setErr(`Delete failed: ${detail}`);
+      setErr(`Delete failed: ${apiErrMessage(e2)}`);
     } finally {
       setDeletingId(null);
     }

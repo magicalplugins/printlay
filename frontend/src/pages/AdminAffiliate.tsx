@@ -14,6 +14,7 @@ import {
   runPayouts,
   updateAffiliate,
 } from "../api/affiliate";
+import { apiErrMessage } from "../api/client";
 
 function pence(amount: number): string {
   return `£${(amount / 100).toFixed(2)}`;
@@ -105,11 +106,7 @@ export default function AdminAffiliate() {
       setPayoutResult(res.message);
       await load();
     } catch (e: unknown) {
-      const detail =
-        e && typeof e === "object" && "detail" in e
-          ? String((e as { detail: unknown }).detail)
-          : String(e);
-      setPayoutResult(`Delete failed: ${detail}`);
+      setPayoutResult(`Delete failed: ${apiErrMessage(e)}`);
     }
   }
 

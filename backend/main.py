@@ -145,6 +145,12 @@ def _serve_spa(full_path: str) -> FileResponse | JSONResponse:
         if candidate.suffix in {".html", ".json", ".webmanifest"}:
             return _no_cache_file(candidate)
         return FileResponse(candidate)
+    # Prerendered marketing routes (e.g. /pricing) are emitted at build time as
+    # <route>/index.html so crawlers get real HTML. Serve those when present.
+    if full_path:
+        route_index = STATIC_DIR / full_path / "index.html"
+        if route_index.is_file():
+            return _no_cache_file(route_index)
     index = STATIC_DIR / "index.html"
     if index.exists():
         return _no_cache_file(index)

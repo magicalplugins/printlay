@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import LandingNav from "../components/landing/LandingNav";
 import LandingFooter from "../components/landing/LandingFooter";
+import Seo from "../components/Seo";
 
 /**
  * Terms & Conditions.
@@ -20,6 +21,11 @@ const LAST_UPDATED = "26 April 2026";
 export default function Terms() {
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
+      <Seo
+        title="Terms & Conditions — Printlay"
+        description="Printlay's terms of service, including the Founder Offer discount clause. Plain-English terms for our gang sheet and print imposition software."
+        path="/terms"
+      />
       <LandingNav />
 
       <article className="mx-auto max-w-3xl px-6 py-20 sm:py-28">

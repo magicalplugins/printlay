@@ -1,0 +1,14 @@
+User-agent: *
+Allow: /$
+Allow: /pricing
+Allow: /terms
+Allow: /privacy
+
+# The authenticated app and auth pages carry no public SEO value.
+Disallow: /app/
+Disallow: /login
+Disallow: /register
+Disallow: /profile-setup
+Disallow: /billing/
+
+Sitemap: https://printlay.co.uk/sitemap.xml

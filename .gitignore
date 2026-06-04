@@ -14,6 +14,7 @@ venv/
 # Node / Vite
 node_modules/
 frontend/dist/
+frontend/dist-ssr/
 frontend/.vite/
 *.log
 npm-debug.log*

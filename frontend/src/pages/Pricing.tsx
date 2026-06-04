@@ -11,6 +11,7 @@ import {
 import { useAuth } from "../auth/AuthProvider";
 import { useMe } from "../auth/MeProvider";
 import { formatErr } from "../utils/apiError";
+import Seo from "../components/Seo";
 
 type Cadence = "monthly" | "annual";
 
@@ -116,6 +117,11 @@ export default function Pricing() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100">
+      <Seo
+        title="Pricing — Printlay Gang Sheet & Imposition Software"
+        description="Simple plans for print shops. Every plan starts with a 7-day full-access trial, no card required. Build gang sheets and export print-ready PDFs."
+        path="/pricing"
+      />
       {/* Top bar — minimal back link */}
       <div className="border-b border-neutral-900">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">

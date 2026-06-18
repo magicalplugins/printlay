@@ -939,6 +939,11 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
             all_asset_ids.add(uuid.UUID(aid))
     accessible = _accessible_assets(db, user, all_asset_ids) if all_asset_ids else {}
 
+    from concurrent.futures import ThreadPoolExecutor
+
+    mm_to_pt = 72.0 / 25.4
+    # Deduplicate downloads: map asset_id -> list of slot_keys
+    asset_id_to_slots: dict[str, list[str]] = {}
     for slot_key, assignment in (job.assignments or {}).items():
         asset_id = assignment.get("asset_id")
         if not asset_id:
@@ -946,19 +951,7 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
         asset = accessible.get(uuid.UUID(asset_id))
         if asset is None:
             continue
-        try:
-            asset_pdfs[int(slot_key)] = storage.get_bytes(asset.r2_key)
-        except Exception as exc:
-            log.error(
-                "Failed to load asset %s (r2_key=%s) for job %s slot %s: %s",
-                asset_id, asset.r2_key, job.id, slot_key, exc,
-            )
-            raise HTTPException(500, detail={
-                "code": "asset_load_failed",
-                "message": f"Could not load artwork '{asset.name}'. It may have been deleted or is temporarily unavailable.",
-                "ref": f"asset:{asset_id}",
-            })
-        mm_to_pt = 72.0 / 25.4
+        asset_id_to_slots.setdefault(asset_id, []).append(slot_key)
         slot_transforms[int(slot_key)] = pdf_compositor.SlotTransform(
             rotation_deg=int(assignment.get("rotation_deg") or 0),
             fit_mode=str(assignment.get("fit_mode") or "contain"),
@@ -970,6 +963,27 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
             safe_crop=bool(assignment.get("safe_crop")),
             page_index=int(assignment.get("page_index") or 0),
         )
+
+    # Parallel download unique assets from R2
+    def _fetch_asset(asset_id: str) -> tuple[str, bytes]:
+        asset = accessible[uuid.UUID(asset_id)]
+        return asset_id, storage.get_bytes(asset.r2_key)
+
+    unique_ids = list(asset_id_to_slots.keys())
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            fetched = dict(pool.map(_fetch_asset, unique_ids))
+    except Exception as exc:
+        log.error("Failed to load assets for job %s: %s", job.id, exc)
+        raise HTTPException(500, detail={
+            "code": "asset_load_failed",
+            "message": "Could not load one or more artworks. They may have been deleted or are temporarily unavailable.",
+        })
+
+    for asset_id, slot_keys in asset_id_to_slots.items():
+        pdf_bytes = fetched[asset_id]
+        for sk in slot_keys:
+            asset_pdfs[int(sk)] = pdf_bytes
 
     mm_to_pt = 72.0 / 25.4
     bleed_pt = float(tpl.bleed_mm or 0.0) * mm_to_pt
@@ -1156,17 +1170,22 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
     def _bg_generate():
         bg_db = get_session_factory()()
         try:
+            from concurrent.futures import ThreadPoolExecutor
+
             template_bytes = storage.get_bytes(tpl_r2_key)
 
             asset_pdfs: dict[int, bytes] = {}
             slot_transforms: dict[int, pdf_compositor.SlotTransform] = {}
 
             mm_to_pt = 72.0 / 25.4
+
+            # Deduplicate: group slots by asset_id so each file is fetched once
+            asset_id_to_slots: dict[str, list[str]] = {}
             for slot_key, assignment in assignments.items():
                 asset_id = assignment.get("asset_id")
                 if not asset_id or asset_id not in asset_r2_keys:
                     continue
-                asset_pdfs[int(slot_key)] = storage.get_bytes(asset_r2_keys[asset_id])
+                asset_id_to_slots.setdefault(asset_id, []).append(slot_key)
                 slot_transforms[int(slot_key)] = pdf_compositor.SlotTransform(
                     rotation_deg=int(assignment.get("rotation_deg") or 0),
                     fit_mode=str(assignment.get("fit_mode") or "contain"),
@@ -1178,6 +1197,21 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
                     safe_crop=bool(assignment.get("safe_crop")),
                     page_index=int(assignment.get("page_index") or 0),
                 )
+
+            # Parallel download unique assets from R2
+            unique_ids = list(asset_id_to_slots.keys())
+
+            def _fetch(aid: str) -> tuple[str, bytes]:
+                return aid, storage.get_bytes(asset_r2_keys[aid])
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                fetched = dict(pool.map(_fetch, unique_ids))
+
+            # Map fetched bytes to all slots that use each asset
+            for asset_id, slot_keys in asset_id_to_slots.items():
+                pdf_bytes = fetched[asset_id]
+                for sk in slot_keys:
+                    asset_pdfs[int(sk)] = pdf_bytes
 
             bleed_pt = tpl_bleed_mm * mm_to_pt
             safe_pt = tpl_safe_mm * mm_to_pt

@@ -851,7 +851,7 @@ export default function JobFiller() {
       if (out.status === "processing") {
         // Heavy job — poll until ready
         const pollInterval = 3000;
-        const maxAttempts = 120; // 6 minutes max
+        const maxAttempts = 200; // 10 minutes max
         let attempts = 0;
         const poll = async (): Promise<typeof out> => {
           attempts++;

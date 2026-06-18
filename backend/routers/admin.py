@@ -822,12 +822,27 @@ def clone_job_to_admin(
         generation_params=source_tpl.generation_params,
     )
     db.add(new_tpl)
+    db.flush()
 
     # 2) Pre-allocate the new job id so we can attach cloned assets to it
     # before commit. Without this, JobFiller's listJobUploads filter
     # (`Asset.job_id == job.id`) returns empty - the same bug the in-repo
     # `duplicate_job` works around.
     new_job_id = _uuid.uuid4()
+
+    # Insert a placeholder Job row first so the FK on assets.job_id is
+    # satisfied when SQLAlchemy flushes Asset inserts.
+    new_job = Job(
+        id=new_job_id,
+        user_id=admin.id,
+        template_id=new_tpl_id,
+        name=f"[Import] {source_job.name}",
+        slot_order=list(source_job.slot_order or []),
+        assignments={},
+        color_profile_id=None,
+    )
+    db.add(new_job)
+    db.flush()
 
     # 3) Clone assets referenced by the source job's assignments.
     all_asset_ids: set[_uuid.UUID] = set()
@@ -862,12 +877,19 @@ def clone_job_to_admin(
                 asset_copy_failures.append(sa.name)
                 continue
 
+            new_thumb_r2_key = None
+            if sa.thumbnail_r2_key:
+                new_thumb_r2_key = f"users/{admin.id}/assets/{new_asset_id}/thumb.jpg"
+                try:
+                    thumb_bytes = storage.get_bytes(sa.thumbnail_r2_key)
+                    storage.put_bytes(new_thumb_r2_key, thumb_bytes, content_type="image/jpeg")
+                except Exception:
+                    new_thumb_r2_key = None
+
             new_asset = Asset(
                 id=new_asset_id,
                 user_id=admin.id,
                 category_id=None,
-                # Attach to the new job upfront so JobFiller's per-job
-                # upload listing sees these assets.
                 job_id=new_job_id,
                 name=f"[Import] {sa.name}",
                 kind=sa.kind,
@@ -876,15 +898,13 @@ def clone_job_to_admin(
                 height_pt=sa.height_pt,
                 file_size=sa.file_size,
                 page_count=sa.page_count,
-                # Skip thumbnail bytes - regenerated lazily on first view -
-                # and skip `r2_key_original` (only needed for re-export of
-                # the source format, which doesn't apply to imports).
+                thumbnail_r2_key=new_thumb_r2_key,
                 cut_contour_json=sa.cut_contour_json,
             )
             db.add(new_asset)
             asset_id_map[str(sa.id)] = str(new_asset_id)
 
-    # 4) Clone the job with remapped asset ids.
+    # 4) Update the job's assignments with remapped asset ids.
     new_assignments: dict[str, dict] = {}
     for slot_key, assignment in (source_job.assignments or {}).items():
         new_a = dict(assignment)
@@ -893,19 +913,7 @@ def clone_job_to_admin(
             new_a["asset_id"] = asset_id_map[old_aid]
         new_assignments[slot_key] = new_a
 
-    new_job = Job(
-        id=new_job_id,
-        user_id=admin.id,
-        template_id=new_tpl_id,
-        name=f"[Import] {source_job.name}",
-        slot_order=list(source_job.slot_order or []),
-        assignments=new_assignments,
-        # Source colour profile is owned by the source user - skip it.
-        # Draft swaps are job-local data, safe to copy.
-        color_profile_id=None,
-        color_swaps_draft=list(source_job.color_swaps_draft or []) or None,
-    )
-    db.add(new_job)
+    new_job.assignments = new_assignments
     db.commit()
 
     msg = (

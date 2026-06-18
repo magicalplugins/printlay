@@ -46,5 +46,5 @@ primary_region = "lhr"
     timeout = "10s"
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2gb"
+  size = "performance-2x"
+  memory = "4gb"

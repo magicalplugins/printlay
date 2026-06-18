@@ -76,6 +76,22 @@ def get_bytes(r2_key: str) -> bytes:
     return data
 
 
+def put(r2_key: str, data: bytes) -> None:
+    """Write bytes directly to cache (e.g. at upload time when bytes are already in memory)."""
+    global _total_bytes
+    with _lock:
+        _ensure_dir()
+        _evict_if_needed(len(data))
+        fname = _key_to_filename(r2_key)
+        path = _CACHE_DIR / fname
+        try:
+            path.write_bytes(data)
+            _index[r2_key] = (path, len(data), time.time())
+            _total_bytes += len(data)
+        except OSError:
+            pass
+
+
 def get_bytes_uncached(r2_key: str) -> bytes:
     """Bypass cache — direct R2 fetch."""
     return storage.get_bytes(r2_key)

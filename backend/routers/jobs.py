@@ -360,6 +360,9 @@ async def upload_job_asset(
     except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
+    # Pre-warm local disk cache so generation doesn't need to re-download
+    r2_cache.put(key_pdf, norm.pdf_bytes)
+
     # Generate placement-optimised PDF (300 DPI) for faster composition
     key_placement = None
     placement_bytes = asset_pipeline.generate_placement_pdf(norm.pdf_bytes)
@@ -511,6 +514,26 @@ def apply_queue(
             f"Consider using a larger template or splitting into multiple jobs."
         )
         return JSONResponse(content=job_data)
+
+    # Pre-warm cache in background for any assets not already cached
+    asset_ids_to_warm = {a.get("asset_id") for a in assignments.values() if a.get("asset_id")}
+    if asset_ids_to_warm:
+        warm_assets = db.query(Asset).filter(Asset.id.in_(asset_ids_to_warm)).all()
+        warm_keys = [a.r2_key for a in warm_assets if a.r2_key]
+        if warm_keys:
+            import threading
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _warm(keys):
+                def _fetch(k):
+                    try:
+                        r2_cache.get_bytes(k)
+                    except Exception:
+                        pass
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    pool.map(_fetch, keys)
+
+            threading.Thread(target=_warm, args=(warm_keys,), daemon=True).start()
 
     return job
 

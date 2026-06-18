@@ -30,6 +30,7 @@ import {
   deleteJobUpload,
   exportJobSvg,
   generateOutput,
+  getGenerationInfo,
   getJob,
   Job,
   listJobUploads,
@@ -836,8 +837,37 @@ export default function JobFiller() {
     }
   }
 
+  // Compression modal state
+  const [showCompressModal, setShowCompressModal] = useState(false);
+  const [compressInfo, setCompressInfo] = useState<{
+    totalMB: number;
+    thresholdMB: number;
+  } | null>(null);
+
   async function onGenerate() {
     if (!job) return;
+
+    // Pre-flight: check if compression should be offered
+    try {
+      const info = await getGenerationInfo(job.id);
+      if (info.compression_recommended) {
+        setCompressInfo({
+          totalMB: Math.round(info.total_asset_bytes / (1024 * 1024)),
+          thresholdMB: Math.round(info.threshold_bytes / (1024 * 1024)),
+        });
+        setShowCompressModal(true);
+        return;
+      }
+    } catch {
+      // If the check fails, just proceed normally
+    }
+
+    doGenerate(false);
+  }
+
+  async function doGenerate(compress: boolean) {
+    if (!job) return;
+    setShowCompressModal(false);
     setGenerating(true);
     setErr(null);
     try {
@@ -846,6 +876,7 @@ export default function JobFiller() {
         include_cut_lines: includeCutLines,
         cut_line_spot_color: includeCutLines ? cutLineSpot : null,
         mark_spot_color: markSpot,
+        compress,
       });
 
       if (out.status === "processing") {
@@ -975,12 +1006,49 @@ export default function JobFiller() {
   );
 
   return (
-    // overflow-x-hidden + max-w-full are defensive: if any descendant is
-    // momentarily wider than the viewport (canvas before measurement, a
-    // long asset name, dnd-kit ghost, etc.) the page itself stays inside
-    // the viewport so iOS Safari never triggers shrink-to-fit. Scoped to
-    // this wrapper (NOT html/body) so pinch-zoom still works as an
-    // escape valve.
+    <>
+      {/* ─── Compression choice modal ─────────────────────────────── */}
+      {showCompressModal && compressInfo && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 max-w-md w-full mx-4 shadow-2xl">
+            <h3 className="text-lg font-semibold text-white mb-2">
+              Large job detected ({compressInfo.totalMB} MB)
+            </h3>
+            <p className="text-sm text-neutral-400 mb-5">
+              This job's artwork totals {compressInfo.totalMB} MB (threshold: {compressInfo.thresholdMB} MB).
+              Large files take longer to generate. You can compress raster-heavy artwork to 600 DPI for faster output.
+            </p>
+            <div className="space-y-2">
+              <button
+                onClick={() => doGenerate(false)}
+                className="w-full rounded-lg border border-neutral-600 bg-neutral-800 px-4 py-3 text-left hover:border-neutral-500 hover:bg-neutral-750 transition"
+              >
+                <div className="text-sm font-medium text-white">Full Quality</div>
+                <div className="text-xs text-neutral-500 mt-0.5">
+                  Original vectors &amp; images — slower but pixel-perfect
+                </div>
+              </button>
+              <button
+                onClick={() => doGenerate(true)}
+                className="w-full rounded-lg border border-emerald-600/50 bg-emerald-900/20 px-4 py-3 text-left hover:border-emerald-500 hover:bg-emerald-900/30 transition"
+              >
+                <div className="text-sm font-medium text-emerald-300">Optimised (600 DPI)</div>
+                <div className="text-xs text-neutral-400 mt-0.5">
+                  Raster images compressed — faster, still print-quality
+                </div>
+              </button>
+            </div>
+            <button
+              onClick={() => setShowCompressModal(false)}
+              className="mt-4 w-full text-center text-xs text-neutral-500 hover:text-neutral-300"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+    {/* ─── Main content ────────────────────────────────────────── */}
     <div className="max-w-[1600px] mx-auto px-2 sm:px-6 py-3 sm:py-8 pb-40 sm:pb-8 overflow-x-hidden">
       <div className="flex items-start justify-between mb-4 sm:mb-6 gap-3 sm:gap-6 flex-wrap min-w-0">
         <div className="min-w-0">
@@ -1462,6 +1530,7 @@ export default function JobFiller() {
         );
       })()}
     </div>
+    </>
   );
 }
 

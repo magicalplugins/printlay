@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -869,6 +870,50 @@ def update_job_colors(
     return job
 
 
+# ---------------------------------------------------------------------------
+# Generation info (pre-flight size check)
+# ---------------------------------------------------------------------------
+
+class GenerationInfo(BaseModel):
+    total_asset_bytes: int
+    threshold_bytes: int
+    compression_recommended: bool
+
+
+@router.get("/{job_id}/generation-info", response_model=GenerationInfo)
+def get_generation_info(
+    job_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> GenerationInfo:
+    from backend.services import generation_settings
+
+    user = _resolve_user(auth, db)
+    job = db.query(Job).filter(Job.id == job_id, Job.user_id == user.id).one_or_none()
+    if job is None:
+        raise HTTPException(404, "Job not found")
+
+    all_asset_ids = set()
+    for assignment in (job.assignments or {}).values():
+        aid = assignment.get("asset_id")
+        if aid:
+            all_asset_ids.add(uuid.UUID(aid))
+
+    total_bytes = 0
+    if all_asset_ids:
+        assets = db.query(Asset).filter(Asset.id.in_(all_asset_ids)).all()
+        total_bytes = sum(a.file_size or 0 for a in assets)
+
+    threshold_mb = generation_settings.get_compression_threshold_mb()
+    threshold_bytes = threshold_mb * 1024 * 1024
+
+    return GenerationInfo(
+        total_asset_bytes=total_bytes,
+        threshold_bytes=threshold_bytes,
+        compression_recommended=total_bytes > threshold_bytes,
+    )
+
+
 @router.post("/{job_id}/generate", response_model=OutputOut, status_code=status.HTTP_201_CREATED)
 @limiter.limit(generate_burst_limit())
 @limiter.limit(generate_limit())
@@ -976,10 +1021,22 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
             page_index=int(assignment.get("page_index") or 0),
         )
 
-    # Parallel download unique assets from R2 (prefer placement-optimised version)
+    # Parallel download unique assets from R2
+    # Skip placement PDFs if colour swaps are active (swaps need vector data)
+    active_swaps = _resolve_active_swaps(db, job)
+    has_color_swaps = bool(active_swaps)
+    should_compress = opts.compress and not has_color_swaps
+
     def _fetch_asset(asset_id: str) -> tuple[str, bytes]:
         asset = accessible[uuid.UUID(asset_id)]
-        r2_key = asset.placement_r2_key or asset.r2_key
+        if has_color_swaps:
+            r2_key = asset.r2_key
+        else:
+            r2_key = asset.placement_r2_key or asset.r2_key
+        if should_compress:
+            return asset_id, r2_cache.get_compressed(
+                r2_key, asset_pipeline.compress_for_generation
+            )
         return asset_id, r2_cache.get_bytes(r2_key)
 
     unique_ids = list(asset_id_to_slots.keys())
@@ -1005,7 +1062,6 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
         {**s, "bleed_pt": bleed_pt, "safe_pt": safe_pt} for s in tpl.shapes
     ]
 
-    active_swaps = _resolve_active_swaps(db, job)
     cut_line_spec = _resolve_cut_line_spec(db, user, opts) if opts.include_cut_lines else None
 
     try:
@@ -1168,6 +1224,7 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
     include_cut_lines = opts.include_cut_lines
     cut_spot = opts.cut_line_spot_color
     mark_spot = opts.mark_spot_color
+    do_compress = opts.compress
 
     # Resolve accessible assets before we leave the request scope.
     all_asset_ids = set()
@@ -1176,9 +1233,17 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
         if aid:
             all_asset_ids.add(uuid.UUID(aid))
     accessible = _accessible_assets(db, user, all_asset_ids) if all_asset_ids else {}
+
+    # If colour swaps are active, we MUST use full-res originals so that
+    # vector colour commands remain intact for the swap engine.
+    has_color_swaps = bool(_resolve_active_swaps(db, job))
+
     asset_r2_keys: dict[str, str] = {}
     for aid_uuid, asset_obj in accessible.items():
-        asset_r2_keys[str(aid_uuid)] = asset_obj.placement_r2_key or asset_obj.r2_key
+        if has_color_swaps:
+            asset_r2_keys[str(aid_uuid)] = asset_obj.r2_key
+        else:
+            asset_r2_keys[str(aid_uuid)] = asset_obj.placement_r2_key or asset_obj.r2_key
 
     def _bg_generate():
         bg_db = get_session_factory()()
@@ -1213,8 +1278,13 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
 
             # Parallel download unique assets from R2
             unique_ids = list(asset_id_to_slots.keys())
+            should_compress = do_compress and not has_color_swaps
 
             def _fetch(aid: str) -> tuple[str, bytes]:
+                if should_compress:
+                    return aid, r2_cache.get_compressed(
+                        asset_r2_keys[aid], asset_pipeline.compress_for_generation
+                    )
                 return aid, r2_cache.get_bytes(asset_r2_keys[aid])
 
             with ThreadPoolExecutor(max_workers=8) as pool:

@@ -434,3 +434,18 @@ export const cloneJobToAdmin = (userId: string, jobId: string) =>
   api<CloneJobResult>(`/api/admin/users/${userId}/jobs/${jobId}/clone`, {
     method: "POST",
   });
+
+// ---- Generation settings ----
+
+export type GenerationSettings = {
+  compression_threshold_mb: number;
+};
+
+export const getGenerationSettings = () =>
+  api<GenerationSettings>("/api/admin/generation-settings");
+
+export const updateGenerationSettings = (settings: GenerationSettings) =>
+  api<GenerationSettings>("/api/admin/generation-settings", {
+    method: "PATCH",
+    body: JSON.stringify(settings),
+  });

@@ -111,6 +111,11 @@ class GenerateOptions(BaseModel):
     form as ``cut_line_spot_color``. None = black. The registration mark
     *type* itself lives on the template (baked in at creation)."""
 
+    compress: bool = False
+    """When True, raster-heavy assets over 2MB are rasterised to 600 DPI
+    lossless PNG before composition. Vector PDFs pass through unchanged.
+    Speeds up generation for jobs with very large raster artwork."""
+
     # Back-compat: older callers may still send a preset id. Accepted but
     # ignored in favour of `cut_line_spot_color`.
     cut_line_spot_color_id: uuid.UUID | None = None

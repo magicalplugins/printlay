@@ -5,6 +5,8 @@ import {
   IntegrationsResponse,
   IntegrationTestResult,
   getIntegrations,
+  getGenerationSettings,
+  updateGenerationSettings,
   setIntegration,
   testIntegration,
 } from "../api/admin";
@@ -190,6 +192,8 @@ export default function AdminIntegrations() {
         canEdit={data.encryption_available}
         onReload={load}
       />
+
+      <GenerationSettingsCard />
     </div>
   );
 }
@@ -526,6 +530,77 @@ function CredentialField({
           </code>{" "}
           (storage is read-only until the master key is set).
         </p>
+      )}
+    </div>
+  );
+}
+
+function GenerationSettingsCard() {
+  const [threshold, setThreshold] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getGenerationSettings()
+      .then((s) => setThreshold(s.compression_threshold_mb))
+      .catch(() => setThreshold(75));
+  }, []);
+
+  async function handleSave(e: FormEvent) {
+    e.preventDefault();
+    if (threshold == null) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await updateGenerationSettings({ compression_threshold_mb: threshold });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-base font-semibold text-white">Generation</h3>
+          <p className="text-xs text-neutral-500 mt-0.5">
+            Controls when the compression prompt appears during PDF generation.
+          </p>
+        </div>
+      </div>
+      <form onSubmit={handleSave} className="flex items-end gap-3">
+        <div className="flex-1 max-w-xs">
+          <label className="text-xs text-neutral-400 block mb-1">
+            Compression threshold (MB)
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={10000}
+            value={threshold ?? ""}
+            onChange={(e) => setThreshold(Number(e.target.value))}
+            className="w-full h-9 rounded-md border border-neutral-700 bg-neutral-900 px-3 text-sm text-neutral-200 focus:border-violet-500 focus:outline-none"
+          />
+          <p className="text-[11px] text-neutral-600 mt-1">
+            Jobs with combined asset size above this will prompt the user to choose full quality or optimised.
+          </p>
+        </div>
+        <button
+          type="submit"
+          disabled={saving || threshold == null}
+          className="h-9 px-4 rounded-md bg-violet-600 text-white text-xs font-medium hover:bg-violet-500 disabled:opacity-40"
+        >
+          {saving ? "Saving…" : saved ? "Saved" : "Save"}
+        </button>
+      </form>
+      {error && (
+        <div className="mt-2 text-xs text-rose-300">{error}</div>
       )}
     </div>
   );

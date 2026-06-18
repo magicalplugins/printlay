@@ -81,6 +81,45 @@ def get_bytes_uncached(r2_key: str) -> bytes:
     return storage.get_bytes(r2_key)
 
 
+def get_compressed(r2_key: str, compress_fn) -> bytes:
+    """Fetch bytes, apply compress_fn, and cache the result separately.
+
+    The compressed version is cached under a `:compressed600` suffix key
+    so it doesn't conflict with the original cache entry. Subsequent calls
+    return the cached compressed version without re-downloading or
+    re-compressing.
+    """
+    global _total_bytes
+    compressed_cache_key = r2_key + ":compressed600"
+
+    with _lock:
+        if compressed_cache_key in _index:
+            path, size, _ = _index[compressed_cache_key]
+            if path.exists():
+                _index[compressed_cache_key] = (path, size, time.time())
+                return path.read_bytes()
+            else:
+                _total_bytes -= size
+                del _index[compressed_cache_key]
+
+    raw = get_bytes(r2_key)
+    compressed = compress_fn(raw)
+
+    with _lock:
+        _ensure_dir()
+        _evict_if_needed(len(compressed))
+        fname = _key_to_filename(compressed_cache_key)
+        path = _CACHE_DIR / fname
+        try:
+            path.write_bytes(compressed)
+            _index[compressed_cache_key] = (path, len(compressed), time.time())
+            _total_bytes += len(compressed)
+        except OSError:
+            pass
+
+    return compressed
+
+
 def invalidate(r2_key: str) -> None:
     """Remove a specific key from the cache (e.g. after asset deletion)."""
     global _total_bytes

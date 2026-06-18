@@ -2042,3 +2042,42 @@ def backfill_placement_pdfs(
 
     db.commit()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Generation settings
+# ---------------------------------------------------------------------------
+
+class GenerationSettingsResponse(BaseModel):
+    compression_threshold_mb: int
+
+
+class GenerationSettingsUpdate(BaseModel):
+    compression_threshold_mb: int
+
+
+@router.get("/generation-settings", response_model=GenerationSettingsResponse)
+def get_generation_settings(
+    _admin=Depends(require_admin),
+) -> GenerationSettingsResponse:
+    from backend.services import generation_settings
+    return GenerationSettingsResponse(
+        compression_threshold_mb=generation_settings.get_compression_threshold_mb(),
+    )
+
+
+@router.patch("/generation-settings", response_model=GenerationSettingsResponse)
+def update_generation_settings(
+    payload: GenerationSettingsUpdate,
+    admin=Depends(require_admin),
+) -> GenerationSettingsResponse:
+    from backend.services import generation_settings
+    if payload.compression_threshold_mb < 1 or payload.compression_threshold_mb > 10000:
+        raise HTTPException(422, "Threshold must be between 1 and 10000 MB")
+    generation_settings.set_compression_threshold_mb(
+        payload.compression_threshold_mb,
+        actor_user_id=admin.id,
+    )
+    return GenerationSettingsResponse(
+        compression_threshold_mb=payload.compression_threshold_mb,
+    )

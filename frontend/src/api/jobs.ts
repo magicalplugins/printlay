@@ -152,6 +152,8 @@ export type GenerateOptions = {
   /** Registration-mark spot colour (name or `#hex`). The mark *type* is
    *  baked into the template. */
   mark_spot_color?: string | null;
+  /** When true, raster-heavy assets are compressed to 600 DPI for speed. */
+  compress?: boolean;
 };
 
 export async function exportJobSvg(
@@ -180,13 +182,11 @@ export async function exportJobSvg(
 }
 
 export function generateOutput(id: string, options: GenerateOptions = {}) {
-  // Backwards-compatible: an empty options object means "no body", which
-  // the FastAPI route treats as the default behaviour (no cut lines,
-  // existing colour-swap pipeline only).
   const hasAny =
     options.include_cut_lines === true ||
     options.cut_line_spot_color != null ||
-    options.mark_spot_color != null;
+    options.mark_spot_color != null ||
+    options.compress === true;
   return api<GenerateResponse>(`/api/jobs/${id}/generate`, {
     method: "POST",
     body: hasAny
@@ -194,9 +194,20 @@ export function generateOutput(id: string, options: GenerateOptions = {}) {
           include_cut_lines: !!options.include_cut_lines,
           cut_line_spot_color: options.cut_line_spot_color ?? null,
           mark_spot_color: options.mark_spot_color ?? null,
+          compress: !!options.compress,
         })
       : undefined,
   });
+}
+
+export type GenerationInfo = {
+  total_asset_bytes: number;
+  threshold_bytes: number;
+  compression_recommended: boolean;
+};
+
+export function getGenerationInfo(id: string) {
+  return api<GenerationInfo>(`/api/jobs/${id}/generation-info`);
 }
 
 export function pollOutputStatus(outputId: string) {

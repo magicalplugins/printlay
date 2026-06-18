@@ -273,20 +273,51 @@ def normalise(
 
 
 # Maximum dimension (in points) for placement-optimised PDFs.
-# At 300 DPI, a 200mm card is ~567pt. We cap at 800pt (~282mm) to cover
+# At 600 DPI, a 200mm card is ~567pt. We cap at 800pt (~282mm) to cover
 # all practical sticker/card sizes while keeping file sizes small.
 _PLACEMENT_MAX_DIM_PT = 800.0
-_PLACEMENT_DPI = 300
+_PLACEMENT_DPI = 600
+_PLACEMENT_MIN_SOURCE_BYTES = 2_000_000  # 2MB threshold
+
+
+def _is_raster_heavy(doc: "pymupdf.Document", page_index: int = 0) -> bool:
+    """Check if a PDF page is dominated by raster images rather than vectors.
+
+    Returns True if the page contains image XObjects whose total decoded
+    size exceeds 1MB — indicating photo/raster artwork that benefits from
+    controlled downscaling. Pure vector PDFs (text, paths, gradients) return
+    False and should be kept as-is.
+    """
+    try:
+        page = doc[page_index]
+        image_list = page.get_images(full=True)
+        if not image_list:
+            return False
+        total_image_bytes = 0
+        for img_info in image_list:
+            w = img_info[2]
+            h = img_info[3]
+            bpc = img_info[4] or 8
+            cs_components = img_info[5] or 3
+            total_image_bytes += w * h * (bpc // 8) * cs_components
+        return total_image_bytes > 1_000_000
+    except Exception:
+        return False
 
 
 def generate_placement_pdf(source_pdf_bytes: bytes, page_index: int = 0) -> bytes | None:
-    """Create a 300 DPI rasterised version of a single page for fast composition.
+    """Create a 600 DPI lossless placement version for raster-heavy PDFs.
 
-    Returns None if the source is already small enough (under 500KB) or if
-    rasterisation fails. The caller should store the result alongside the
-    full-resolution source and prefer it during PDF generation.
+    Only generates a placement version if:
+    - Source is over 2MB (small files don't benefit)
+    - The PDF page is raster-heavy (contains large embedded images)
+
+    Vector PDFs (text, paths, gradients) are left untouched since they are
+    already compact and must remain as vectors for colour swap support.
+
+    Returns None if the source doesn't need a placement version.
     """
-    if len(source_pdf_bytes) < 512_000:
+    if len(source_pdf_bytes) < _PLACEMENT_MIN_SOURCE_BYTES:
         return None
 
     try:
@@ -294,8 +325,11 @@ def generate_placement_pdf(source_pdf_bytes: bytes, page_index: int = 0) -> byte
         if doc.page_count == 0:
             return None
         pidx = min(page_index, doc.page_count - 1)
-        page = doc[pidx]
 
+        if not _is_raster_heavy(doc, pidx):
+            return None
+
+        page = doc[pidx]
         pw = float(page.rect.width)
         ph = float(page.rect.height)
         if pw <= 0 or ph <= 0:
@@ -308,18 +342,65 @@ def generate_placement_pdf(source_pdf_bytes: bytes, page_index: int = 0) -> byte
         dpi_scale = _PLACEMENT_DPI / 72.0
         mat = pymupdf.Matrix(dpi_scale * scale, dpi_scale * scale)
         pix = page.get_pixmap(matrix=mat, alpha=False)
-        img_bytes = pix.tobytes("jpeg", jpg_quality=92)
+        img_bytes = pix.tobytes("png")
 
         img = Image.open(io.BytesIO(img_bytes))
         out_pdf = io.BytesIO()
-        img_w_mm = target_w / 72.0 * 25.4
-        img_h_mm = target_h / 72.0 * 25.4
         img.save(out_pdf, "PDF", resolution=_PLACEMENT_DPI)
         result = out_pdf.getvalue()
 
-        if len(result) >= len(source_pdf_bytes) * 0.8:
+        if len(result) >= len(source_pdf_bytes) * 0.7:
             return None
 
         return result
     except Exception:
         return None
+
+
+_COMPRESS_DPI = 600
+_COMPRESS_MIN_BYTES = 2_000_000  # Only compress assets over 2MB
+
+
+def compress_for_generation(pdf_bytes: bytes, page_index: int = 0) -> bytes:
+    """Compress a raster-heavy PDF to 600 DPI lossless PNG for faster generation.
+
+    Vector PDFs pass through UNCHANGED — they must remain as vectors for
+    colour swap support and infinite sharpness. Only raster-heavy PDFs
+    (containing large embedded images) get rasterised.
+
+    Returns the original bytes if compression isn't applicable or fails.
+    """
+    if len(pdf_bytes) < _COMPRESS_MIN_BYTES:
+        return pdf_bytes
+
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        if doc.page_count == 0:
+            return pdf_bytes
+        pidx = min(page_index, doc.page_count - 1)
+
+        if not _is_raster_heavy(doc, pidx):
+            return pdf_bytes
+
+        page = doc[pidx]
+        pw = float(page.rect.width)
+        ph = float(page.rect.height)
+        if pw <= 0 or ph <= 0:
+            return pdf_bytes
+
+        dpi_scale = _COMPRESS_DPI / 72.0
+        mat = pymupdf.Matrix(dpi_scale, dpi_scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img_bytes = pix.tobytes("png")
+
+        img = Image.open(io.BytesIO(img_bytes))
+        out_pdf = io.BytesIO()
+        img.save(out_pdf, "PDF", resolution=_COMPRESS_DPI)
+        result = out_pdf.getvalue()
+
+        if len(result) >= len(pdf_bytes) * 0.9:
+            return pdf_bytes
+
+        return result
+    except Exception:
+        return pdf_bytes

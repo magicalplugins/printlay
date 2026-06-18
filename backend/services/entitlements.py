@@ -117,6 +117,7 @@ PLAN_FEATURES: dict[Plan, set[str]] = {
         "priority_support",
         "white_label_pdf",
         "api_access",
+        "widget_access",
         "advanced_layouts",
         "sticker_editor",
     },
@@ -199,6 +200,23 @@ def for_user(user: User) -> Entitlement:
             limits=dict(PLAN_LIMITS[plan]),
             features=set(PLAN_FEATURES[plan]),
         )
+
+    # 1b. Past-due grace period — keep access for 24 h after period end
+    #     so a temporary card decline doesn't instantly lock the user out.
+    if user.stripe_subscription_status == "past_due":
+        from datetime import timedelta
+        period_end = user.stripe_current_period_end
+        if period_end is not None:
+            if period_end.tzinfo is None:
+                period_end = period_end.replace(tzinfo=timezone.utc)
+            if now < period_end + timedelta(days=1):
+                plan = _plan_from_stripe_price(user.stripe_price_id)
+                return Entitlement(
+                    plan=plan,
+                    is_trialing=False,
+                    limits=dict(PLAN_LIMITS[plan]),
+                    features=set(PLAN_FEATURES[plan]),
+                )
 
     # 2. Enterprise — set manually by admin for invoiced/enterprise deals
     if user.tier == "enterprise":

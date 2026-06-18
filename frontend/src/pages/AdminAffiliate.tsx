@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AdminOverview,
   AffiliateDetail,
+  AffiliateEnquiry,
   AffiliateListItem,
   PayoutItem,
   createGhostAffiliate,
@@ -213,7 +214,13 @@ export default function AdminAffiliate() {
                   </td>
                   <td className="px-3 py-2 text-right text-gray-300">{a.total_clicks}</td>
                   <td className="px-3 py-2 text-right text-gray-300">{a.total_signups}</td>
-                  <td className="px-3 py-2 text-right text-gray-300">{a.total_leads}</td>
+                  <td className="px-3 py-2 text-right text-gray-300">
+                    {a.total_leads > 0 ? (
+                      <EnqPopover affiliateId={a.id} count={a.total_leads} />
+                    ) : (
+                      0
+                    )}
+                  </td>
                   <td className="px-3 py-2 text-right text-gray-300">{a.total_conversions}</td>
                   <td className="px-3 py-2 text-right text-gray-300">{pence(a.total_earned_pence)}</td>
                   <td className="px-3 py-2 text-right text-gray-300">{pence(a.total_paid_pence)}</td>
@@ -637,5 +644,93 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
     >
       {children}
     </button>
+  );
+}
+
+function EnqPopover({ affiliateId, count }: { affiliateId: string; count: number }) {
+  const [open, setOpen] = useState(false);
+  const [enquiries, setEnquiries] = useState<AffiliateEnquiry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  function handleEnter() {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.right });
+    }
+    setOpen(true);
+    if (!enquiries && !loading) {
+      setLoading(true);
+      getAffiliateReferrals(affiliateId)
+        .then((detail) => setEnquiries(detail.enquiries))
+        .catch(() => setEnquiries([]))
+        .finally(() => setLoading(false));
+    }
+  }
+
+  function handleLeave() {
+    timeoutRef.current = setTimeout(() => setOpen(false), 200);
+  }
+
+  return (
+    <>
+      <span
+        ref={triggerRef}
+        className="cursor-pointer underline decoration-dotted underline-offset-2 text-violet-300 hover:text-violet-200 tabular-nums"
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
+      >
+        {count}
+      </span>
+      {open && pos && (
+        <div
+          className="fixed z-[9999] w-72 max-h-64 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl"
+          style={{ top: pos.top, left: pos.left, transform: "translateX(-100%)" }}
+          onMouseEnter={() => { if (timeoutRef.current) clearTimeout(timeoutRef.current); }}
+          onMouseLeave={handleLeave}
+        >
+          {loading && (
+            <div className="flex items-center justify-center py-4">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-violet-500 border-t-transparent" />
+            </div>
+          )}
+          {enquiries && enquiries.length === 0 && (
+            <p className="text-xs text-gray-500 p-3">No enquiries found.</p>
+          )}
+          {enquiries && enquiries.length > 0 && (
+            <ul className="divide-y divide-gray-800">
+              {enquiries.map((e, i) => (
+                <li key={i} className="px-3 py-2 hover:bg-gray-800/60 transition-colors">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-gray-200 truncate font-medium">
+                      {e.name || e.email || "Anonymous"}
+                    </span>
+                    <span className="text-[10px] text-gray-500 shrink-0">
+                      {e.submitted_at ? new Date(e.submitted_at).toLocaleDateString() : ""}
+                    </span>
+                  </div>
+                  {e.message && (
+                    <p className="text-[11px] text-gray-400 truncate mt-0.5">{e.message}</p>
+                  )}
+                  {e.exists && e.lead_id ? (
+                    <Link
+                      to={`/app/admin/leads?focus=${e.lead_id}`}
+                      className="text-[11px] text-violet-400 hover:text-violet-300 mt-0.5 inline-block"
+                    >
+                      Open enquiry →
+                    </Link>
+                  ) : !e.exists ? (
+                    <span className="text-[10px] text-gray-600 italic">Deleted</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </>
   );
 }

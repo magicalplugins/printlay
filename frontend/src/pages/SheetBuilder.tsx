@@ -13,13 +13,19 @@ import {
   exportSheetSvg,
   listPresets,
   listSheets,
+  packSheet,
   updateSheet,
 } from "../api/sheets";
-import { Asset, listAssets } from "../api/catalogue";
+import { Asset, listAssets, uploadAsset } from "../api/catalogue";
 import { listCategories } from "../api/catalogue";
 import { api } from "../api/client";
 import { SpotColour, listSpotColours } from "../api/spotColours";
 import SpotColourRow, { spotDisplayColor } from "../components/app/SpotColourRow";
+import DtfCanvas, {
+  DtfItem,
+  dtfItemsToplacements,
+  placementsToDtfItems,
+} from "../components/app/DtfCanvas";
 
 const MM_TO_PX = 2; // scale factor for canvas rendering at default zoom
 
@@ -34,11 +40,31 @@ export default function SheetBuilder() {
   const [userSpots, setUserSpots] = useState<SpotColour[]>([]);
   const [searchParams] = useSearchParams();
   const presetAssetId = searchParams.get("asset");
+  // Optional order context passed from a widget order / catalogue: how many to
+  // gang (qty) and the ordered sticker size in mm (w × h).
+  const presetQty = searchParams.get("qty");
+  const presetW = searchParams.get("w");
+  const presetH = searchParams.get("h");
+  const presetName = searchParams.get("name");
+  const presetSizeApplied = useRef(false);
+  // Deep link from an order's "Open on sheet": auto-open a fresh sheet + fill it
+  // once, so the merchant lands on the ganged design rather than the sheet list.
+  const autoOpenedRef = useRef(false);
+  const autoLaidRef = useRef(false);
 
   // Sheet creation form
-  const [showNewSheet, setShowNewSheet] = useState(false);
+  const [showNewSheet, setShowNewSheet] = useState(
+    searchParams.get("type") === "dtf" && !searchParams.get("asset")
+  );
   const [newName, setNewName] = useState("Untitled");
   const [newWidth, setNewWidth] = useState(700);
+  const [newSheetType, setNewSheetType] = useState<"sticker" | "dtf">(
+    searchParams.get("type") === "dtf" ? "dtf" : "sticker"
+  );
+
+  // DTF mode state
+  const [dtfItems, setDtfItems] = useState<DtfItem[]>([]);
+  const [dtfSelectedId, setDtfSelectedId] = useState<string | null>(null);
 
   // Auto-layout form
   const [layoutAssetId, setLayoutAssetId] = useState<string>("");
@@ -90,8 +116,185 @@ export default function SheetBuilder() {
   useEffect(() => {
     if (presetAssetId && assets.some((a) => a.id === presetAssetId)) {
       setLayoutAssetId(presetAssetId);
+      const q = presetQty ? parseInt(presetQty, 10) : NaN;
+      if (Number.isFinite(q) && q > 0) setLayoutQty(q);
     }
-  }, [presetAssetId, assets]);
+  }, [presetAssetId, presetQty, assets]);
+
+  // Arriving from an order's "Open on sheet" deep link (?asset=…): create and
+  // open a fresh sheet with the ordered sticker pre-loaded, so the merchant
+  // lands straight in the builder instead of the sheet list.
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!presetAssetId || sheets === null) return;
+    const asset = assets.find((a) => a.id === presetAssetId);
+    if (!asset) return;
+    autoOpenedRef.current = true;
+    (async () => {
+      try {
+        const s = await createSheet({
+          name: presetName || asset.name || "Widget order",
+          media_width_mm: 700,
+          media_height_mm: 300,
+          mode: "roll",
+        });
+        setSheets((prev) => (prev ? [s, ...prev] : [s]));
+        setActiveSheet(s);
+      } catch (e) {
+        setErr(String(e));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presetAssetId, assets, sheets]);
+
+  // Sync DTF items from active sheet placements
+  useEffect(() => {
+    if (activeSheet?.sheet_type === "dtf" && activeSheet.placements && assets.length > 0) {
+      setDtfItems(placementsToDtfItems(activeSheet.placements, assets));
+    } else if (activeSheet?.sheet_type === "dtf") {
+      setDtfItems([]);
+    }
+  }, [activeSheet?.id, activeSheet?.sheet_type, assets]);
+
+  // DTF handlers
+  const dtfHandleMove = useCallback((id: string, x: number, y: number) => {
+    setDtfItems((prev) => prev.map((i) => (i.id === id ? { ...i, x_mm: x, y_mm: y } : i)));
+  }, []);
+
+  const dtfHandleResize = useCallback((id: string, w: number, h: number) => {
+    setDtfItems((prev) => prev.map((i) => (i.id === id ? { ...i, w_mm: w, h_mm: h } : i)));
+  }, []);
+
+  const dtfHandleRotate = useCallback((id: string, deg: number) => {
+    setDtfItems((prev) =>
+      prev.map((i) => {
+        if (i.id !== id) return i;
+        return { ...i, rotation_deg: deg, w_mm: i.h_mm, h_mm: i.w_mm };
+      })
+    );
+  }, []);
+
+  const dtfAddArtwork = useCallback(
+    (asset: Asset, qty: number = 1) => {
+      if (!activeSheet) return;
+      const MM_PER = 25.4 / 72;
+      const w = asset.width_pt * MM_PER;
+      const h = asset.height_pt * MM_PER;
+      const newItems: DtfItem[] = [];
+      for (let i = 0; i < qty; i++) {
+        newItems.push({
+          id: `${asset.id}-${Date.now()}-${i}`,
+          asset,
+          x_mm: 5 + (i % 5) * (w + 3),
+          y_mm: 5 + Math.floor(i / 5) * (h + 3),
+          w_mm: w,
+          h_mm: h,
+          rotation_deg: 0,
+        });
+      }
+      setDtfItems((prev) => [...prev, ...newItems]);
+    },
+    [activeSheet]
+  );
+
+  const dtfRemoveSelected = useCallback(() => {
+    if (!dtfSelectedId) return;
+    setDtfItems((prev) => prev.filter((i) => i.id !== dtfSelectedId));
+    setDtfSelectedId(null);
+  }, [dtfSelectedId]);
+
+  const [dtfDragOver, setDtfDragOver] = useState(false);
+  const [dtfUploading, setDtfUploading] = useState(false);
+
+  const dtfHandleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDtfDragOver(false);
+      if (!activeSheet) return;
+
+      const files = Array.from(e.dataTransfer.files).filter((f) =>
+        f.type.startsWith("image/") || f.name.endsWith(".pdf")
+      );
+      if (files.length === 0) return;
+
+      setDtfUploading(true);
+      try {
+        // Find or create a category for DTF uploads
+        const cats = await listCategories();
+        let dtfCat = cats.find((c) => c.name === "DTF Uploads");
+        if (!dtfCat) {
+          const { createCategory } = await import("../api/catalogue");
+          dtfCat = await createCategory("DTF Uploads");
+        }
+
+        for (const file of files) {
+          const asset = await uploadAsset(dtfCat.id, file, file.name);
+          // Reload assets so we have the new one
+          setAssets((prev) => [...prev, asset]);
+          dtfAddArtwork(asset, 1);
+        }
+      } catch (err) {
+        setErr(String(err));
+      } finally {
+        setDtfUploading(false);
+      }
+    },
+    [activeSheet, dtfAddArtwork]
+  );
+
+  const dtfDuplicateItem = useCallback(
+    (id: string, qty: number) => {
+      const item = dtfItems.find((i) => i.id === id);
+      if (!item) return;
+      const newItems: DtfItem[] = [];
+      for (let i = 0; i < qty; i++) {
+        newItems.push({
+          ...item,
+          id: `${item.asset.id}-${Date.now()}-${i}`,
+          x_mm: item.x_mm + (i + 1) * 3,
+          y_mm: item.y_mm + (i + 1) * 3,
+        });
+      }
+      setDtfItems((prev) => [...prev, ...newItems]);
+    },
+    [dtfItems]
+  );
+
+  const dtfSave = useCallback(async () => {
+    if (!activeSheet) return;
+    const placements = dtfItemsToplacements(dtfItems);
+    try {
+      const updated = await updateSheet(activeSheet.id, { ...activeSheet, placements });
+      setActiveSheet(updated);
+    } catch (e) {
+      setErr(String(e));
+    }
+  }, [activeSheet, dtfItems]);
+
+  const [packing, setPacking] = useState(false);
+
+  const dtfAutoPack = useCallback(async () => {
+    if (!activeSheet) return;
+    setPacking(true);
+    try {
+      // Save current state first so pack sees the latest placements
+      const placements = dtfItemsToplacements(dtfItems);
+      await updateSheet(activeSheet.id, { ...activeSheet, placements });
+      const result = await packSheet(activeSheet.id);
+      // Animate items to new positions
+      const newItems = placementsToDtfItems(result.placements, assets);
+      setDtfItems(newItems);
+      // Update sheet height
+      setActiveSheet((prev) =>
+        prev ? { ...prev, media_height_mm: result.total_height_mm, placements: result.placements } : prev
+      );
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setPacking(false);
+    }
+  }, [activeSheet, dtfItems, assets]);
 
   // Native (designed) size of the selected sticker, in mm.
   const MM_PER_PT = 25.4 / 72;
@@ -108,8 +311,25 @@ export default function SheetBuilder() {
   // sticker changes, so the user starts from its designed dimensions.
   useEffect(() => {
     if (selectedAsset && nativeWmm > 0 && nativeHmm > 0) {
-      setLayoutWidthMm(nativeWmm.toFixed(1));
-      setLayoutHeightMm(nativeHmm.toFixed(1));
+      // If the deep link carried an ordered size (qty/size from a widget order),
+      // honour it once for the preset asset; otherwise start from native size.
+      const w = presetW ? parseFloat(presetW) : NaN;
+      const h = presetH ? parseFloat(presetH) : NaN;
+      if (
+        !presetSizeApplied.current &&
+        layoutAssetId === presetAssetId &&
+        Number.isFinite(w) &&
+        w > 0 &&
+        Number.isFinite(h) &&
+        h > 0
+      ) {
+        setLayoutWidthMm(w.toFixed(1));
+        setLayoutHeightMm(h.toFixed(1));
+        presetSizeApplied.current = true;
+      } else {
+        setLayoutWidthMm(nativeWmm.toFixed(1));
+        setLayoutHeightMm(nativeHmm.toFixed(1));
+      }
     } else {
       setLayoutWidthMm("");
       setLayoutHeightMm("");
@@ -365,6 +585,7 @@ export default function SheetBuilder() {
         media_width_mm: newWidth,
         media_height_mm: 300,
         mode: "roll",
+        sheet_type: newSheetType,
       });
       setSheets((prev) => (prev ? [s, ...prev] : [s]));
       setActiveSheet(s);
@@ -402,6 +623,17 @@ export default function SheetBuilder() {
       setErr(String(e));
     }
   }
+
+  // Once the deep-linked sheet is open and the ordered asset + size have been
+  // seeded, fill it automatically so the ganged design is shown right away.
+  useEffect(() => {
+    if (!autoOpenedRef.current || autoLaidRef.current) return;
+    if (!activeSheet || !layoutAssetId || !layoutWidthMm) return;
+    if (layoutAssetId !== presetAssetId) return;
+    autoLaidRef.current = true;
+    void handleAutoLayout();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSheet, layoutAssetId, layoutWidthMm]);
 
   async function handleExport() {
     if (!activeSheet) return;
@@ -587,6 +819,31 @@ export default function SheetBuilder() {
             <h2 className="text-lg font-semibold text-white mb-4">
               Create Sheet
             </h2>
+
+            {/* Sheet type toggle */}
+            <div className="flex rounded-lg border border-neutral-700 overflow-hidden mb-4">
+              <button
+                onClick={() => setNewSheetType("sticker")}
+                className={`flex-1 px-4 py-2.5 text-sm font-medium transition ${
+                  newSheetType === "sticker"
+                    ? "bg-violet-600 text-white"
+                    : "text-neutral-400 hover:bg-neutral-800"
+                }`}
+              >
+                Sticker Sheet
+              </button>
+              <button
+                onClick={() => setNewSheetType("dtf")}
+                className={`flex-1 px-4 py-2.5 text-sm font-medium transition ${
+                  newSheetType === "dtf"
+                    ? "bg-emerald-600 text-white"
+                    : "text-neutral-400 hover:bg-neutral-800"
+                }`}
+              >
+                DTF Sheet
+              </button>
+            </div>
+
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-xs text-neutral-400 mb-1">
@@ -834,11 +1091,88 @@ export default function SheetBuilder() {
           ref={scrollRef}
           className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-3 sm:p-6"
         >
-          <canvas
-            ref={canvasRef}
-            className="rounded-lg"
-            style={{ imageRendering: "crisp-edges" }}
-          />
+          {activeSheet?.sheet_type === "dtf" ? (
+            <div
+              className={`w-full max-w-4xl relative ${dtfDragOver ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-neutral-950" : ""}`}
+              onDragOver={(e) => { e.preventDefault(); setDtfDragOver(true); }}
+              onDragLeave={() => setDtfDragOver(false)}
+              onDrop={dtfHandleDrop}
+            >
+              {/* Drop overlay */}
+              {dtfDragOver && (
+                <div className="absolute inset-0 z-10 rounded-xl bg-emerald-500/10 border-2 border-dashed border-emerald-400 flex items-center justify-center pointer-events-none">
+                  <span className="text-emerald-300 text-lg font-semibold">Drop artwork here</span>
+                </div>
+              )}
+              {dtfUploading && (
+                <div className="absolute inset-0 z-10 rounded-xl bg-neutral-900/80 flex items-center justify-center">
+                  <span className="text-white text-sm animate-pulse">Uploading…</span>
+                </div>
+              )}
+              {dtfItems.length === 0 && !dtfDragOver && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[1]">
+                  <div className="text-center">
+                    <p className="text-neutral-400 text-sm">Drag and drop image files here</p>
+                    <p className="text-neutral-500 text-xs mt-1">PNG, JPG, or PDF</p>
+                  </div>
+                </div>
+              )}
+              <DtfCanvas
+                items={dtfItems}
+                sheetWidthMm={activeSheet.media_width_mm}
+                sheetHeightMm={activeSheet.media_height_mm || 300}
+                onMove={dtfHandleMove}
+                onResize={dtfHandleResize}
+                onRotate={dtfHandleRotate}
+                onSelect={setDtfSelectedId}
+                selectedId={dtfSelectedId}
+                mirrorPreview={activeSheet.mirror_output}
+              />
+              {/* DTF toolbar */}
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={dtfSave}
+                  className="rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-sm font-medium transition"
+                >
+                  Save layout
+                </button>
+                <button
+                  onClick={dtfAutoPack}
+                  disabled={packing || dtfItems.length === 0}
+                  className="rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 text-sm font-medium transition"
+                >
+                  {packing ? "Packing…" : "Auto-pack"}
+                </button>
+                {dtfSelectedId && (
+                  <button
+                    onClick={dtfRemoveSelected}
+                    className="rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white px-3 py-2 text-sm transition"
+                  >
+                    Remove selected
+                  </button>
+                )}
+                <label className="flex items-center gap-2 ml-auto text-xs text-neutral-400">
+                  <input
+                    type="checkbox"
+                    checked={activeSheet.mirror_output}
+                    onChange={async (e) => {
+                      const updated = { ...activeSheet, mirror_output: e.target.checked };
+                      setActiveSheet(updated);
+                      await updateSheet(activeSheet.id, { mirror_output: e.target.checked }).catch(() => {});
+                    }}
+                    className="accent-emerald-500"
+                  />
+                  Mirror output (DTF)
+                </label>
+              </div>
+            </div>
+          ) : (
+            <canvas
+              ref={canvasRef}
+              className="rounded-lg"
+              style={{ imageRendering: "crisp-edges" }}
+            />
+          )}
         </div>
 
         {/* Floating zoom controls (mobile-friendly) */}
@@ -887,6 +1221,19 @@ export default function SheetBuilder() {
             panelOpen ? "translate-x-0" : "translate-x-full"
           } lg:static lg:z-auto lg:translate-x-0 lg:w-80 lg:max-w-none lg:transition-none`}
         >
+          {/* DTF layers panel — shows placed items with qty controls */}
+          {activeSheet?.sheet_type === "dtf" && (
+            <DtfLayersPanel
+              items={dtfItems}
+              selectedId={dtfSelectedId}
+              onSelect={setDtfSelectedId}
+              onRemove={(id) => {
+                setDtfItems((prev) => prev.filter((i) => i.id !== id));
+                if (dtfSelectedId === id) setDtfSelectedId(null);
+              }}
+              onDuplicate={dtfDuplicateItem}
+            />
+          )}
           {/* Mobile close header */}
           <div className="lg:hidden flex items-center justify-between mb-2 -mt-1">
             <span className="text-sm font-semibold text-white">Sheet Tools</span>
@@ -2092,4 +2439,103 @@ function _drawRegMarksPreview(
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// DTF Layers Panel — shows placed items with duplicate/remove controls
+// ---------------------------------------------------------------------------
+
+function DtfLayersPanel({
+  items,
+  selectedId,
+  onSelect,
+  onRemove,
+  onDuplicate,
+}: {
+  items: DtfItem[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onRemove: (id: string) => void;
+  onDuplicate: (id: string, qty: number) => void;
+}) {
+  // Group by asset to show unique artworks with counts
+  const grouped = useMemo(() => {
+    const map = new Map<string, { asset: Asset; ids: string[]; item: DtfItem }>();
+    for (const item of items) {
+      const existing = map.get(item.asset.id);
+      if (existing) {
+        existing.ids.push(item.id);
+      } else {
+        map.set(item.asset.id, { asset: item.asset, ids: [item.id], item });
+      }
+    }
+    return Array.from(map.values());
+  }, [items]);
+
+  return (
+    <div className="space-y-3 pb-4 border-b border-neutral-800 mb-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs uppercase tracking-widest text-emerald-400 font-semibold">
+          Layers
+        </h3>
+        <span className="text-[10px] text-neutral-500">
+          {items.length} item{items.length !== 1 ? "s" : ""} on sheet
+        </span>
+      </div>
+
+      <p className="text-[11px] text-neutral-500 leading-relaxed">
+        Drag files onto the canvas to add artwork
+      </p>
+
+      {grouped.length === 0 && (
+        <div className="text-xs text-neutral-500 text-center py-6 border border-dashed border-neutral-700 rounded-lg">
+          No artwork yet — drop files on the canvas
+        </div>
+      )}
+
+      <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
+        {grouped.map(({ asset, ids, item }) => (
+          <div
+            key={asset.id}
+            className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition cursor-pointer ${
+              ids.includes(selectedId || "")
+                ? "border-emerald-500/60 bg-emerald-500/5"
+                : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
+            }`}
+            onClick={() => onSelect(ids[0])}
+          >
+            {asset.thumbnail_url && (
+              <img
+                src={asset.thumbnail_url}
+                alt=""
+                className="w-9 h-9 rounded object-cover shrink-0 bg-neutral-800"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-neutral-200 truncate">{asset.name}</div>
+              <div className="text-[10px] text-neutral-500 mt-0.5">
+                {Math.round(item.w_mm)}×{Math.round(item.h_mm)} mm · ×{ids.length}
+              </div>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={(e) => { e.stopPropagation(); onDuplicate(ids[0], 1); }}
+                className="w-6 h-6 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs flex items-center justify-center"
+                title="Add another"
+              >
+                +
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRemove(ids[ids.length - 1]); }}
+                className="w-6 h-6 rounded bg-neutral-800 hover:bg-rose-900/60 text-neutral-300 hover:text-rose-300 text-xs flex items-center justify-center"
+                title="Remove one"
+              >
+                −
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

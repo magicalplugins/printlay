@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from shapely.geometry import Polygon
 from skimage.measure import find_contours
 
-CutlineMode = Literal["contour", "rectangle", "face"]
+CutlineMode = Literal["contour", "rectangle", "face", "circle", "ellipse"]
 CutlinePrecision = Literal["tight", "medium"]
 
 
@@ -52,6 +52,7 @@ def generate_cutline(
     mode: CutlineMode = "contour",
     precision: CutlinePrecision = "medium",
     corner_radius_mm: float = 3.0,
+    corner_radius_frac: float | None = None,
     bleed_mm: float = 3.0,
 ) -> CutlineResult:
     """Generate a smooth cutline from an image.
@@ -78,8 +79,18 @@ def generate_cutline(
     bleed_px = int(bleed_mm * dpi / 25.4)
 
     if mode == "rectangle":
+        # When a fraction (0..1) is supplied, derive the corner radius from the
+        # image's shorter side (half of it = a fully rounded end), matching the
+        # shaped-designer convention. Otherwise fall back to the fixed mm value.
+        if corner_radius_frac is not None:
+            short_mm = min(img.size) * 25.4 / dpi
+            corner_radius_mm = max(0.0, min(1.0, corner_radius_frac)) * short_mm / 2.0
         return _generate_rectangle_cutline(
             img, cut_offset_px, bleed_px, border_color, dpi, corner_radius_mm
+        )
+    elif mode in ("circle", "ellipse"):
+        return _generate_ellipse_cutline(
+            img, cut_offset_px, bleed_px, border_color, dpi, force_circle=mode == "circle"
         )
     elif mode == "face":
         # Restrict the subject alpha to the head region (chin → hair) so the
@@ -265,26 +276,134 @@ def _generate_rectangle_cutline(
 ) -> CutlineResult:
     """Generate a rounded-rectangle cutline around the entire image.
 
-    Image → cut_offset_px gap → cut line → bleed_px gap → edge of canvas.
+    The canvas is kept at a FIXED size (accommodating the loosest possible
+    tighten setting) so that changing cut_offset_px only moves the cut-line
+    polygon without rescaling the canvas.  This keeps the normalised polygon
+    shift proportional to mm, matching the client-side live preview offset.
     """
     w, h = img.size
     corner_px = int(corner_radius_mm * dpi / 25.4)
 
-    total_pad = cut_offset_px + bleed_px
+    # Fixed reference: the loosest possible border is 5 mm (slider range
+    # covers up to ~4 mm loose; 5 mm gives a safety buffer).
+    fixed_border_px = int(5.0 * dpi / 25.4)
+    total_pad = fixed_border_px + bleed_px
     new_w = w + 2 * total_pad
     new_h = h + 2 * total_pad
 
     border_img = Image.new("RGBA", (new_w, new_h), (*border_color, 255))
     border_img.paste(img, (total_pad, total_pad), mask=img.split()[3])
 
-    cut_x1 = bleed_px
-    cut_y1 = bleed_px
-    cut_x2 = new_w - bleed_px
-    cut_y2 = new_h - bleed_px
-    cut_corner_px = corner_px + cut_offset_px
+    # Cut line position: image is at total_pad from the edge; the cut sits
+    # cut_offset_px away from the image boundary (outward when positive).
+    cut_inset = total_pad - cut_offset_px
+    cut_x1 = max(0, cut_inset)
+    cut_y1 = max(0, cut_inset)
+    cut_x2 = min(new_w, new_w - cut_inset)
+    cut_y2 = min(new_h, new_h - cut_inset)
+    cut_corner_px = max(0, corner_px + cut_offset_px)
     points_px = _rounded_rect_points(
         cut_x1, cut_y1, cut_x2, cut_y2, cut_corner_px,
     )
+
+    px_to_pt = 72.0 / dpi
+    points_pt = [(x * px_to_pt, y * px_to_pt) for x, y in points_px]
+
+    buf = io.BytesIO()
+    border_img.save(buf, format="PNG")
+
+    return CutlineResult(
+        points_px=points_px,
+        points_pt=points_pt,
+        width_px=new_w,
+        height_px=new_h,
+        width_pt=new_w * px_to_pt,
+        height_pt=new_h * px_to_pt,
+        border_image=buf.getvalue(),
+    )
+
+
+def _ellipse_points(
+    cx: float, cy: float, rx: float, ry: float, segments: int = 96,
+) -> list[tuple[float, float]]:
+    """Even-angle points around an axis-aligned ellipse (closed, no repeat).
+
+    A high segment count keeps the downstream Catmull-Rom/Bezier smoothing
+    faithful to a true ellipse so the cut reads as a clean circle/oval.
+    """
+    return [
+        (
+            cx + rx * math.cos(2.0 * math.pi * i / segments),
+            cy + ry * math.sin(2.0 * math.pi * i / segments),
+        )
+        for i in range(segments)
+    ]
+
+
+def _generate_ellipse_cutline(
+    img: Image.Image,
+    cut_offset_px: int,
+    bleed_px: int,
+    border_color: tuple[int, int, int],
+    dpi: int,
+    force_circle: bool = False,
+) -> CutlineResult:
+    """Geometric circle/oval die-cut that circumscribes the subject.
+
+    The background-removed subject is centred inside a clean ellipse (or a
+    true circle when ``force_circle``). The cut ellipse is sized so the
+    subject's alpha bounding box sits fully inside it, plus ``cut_offset_px``
+    of breathing room. White fills the ellipse interior up to the bleed; the
+    corners outside the bleed ellipse stay transparent so the sticker reads
+    as a round/oval shape (not a white square).
+
+    Subject → cut_offset gap → cut ellipse → bleed_px gap → transparent.
+    """
+    cut_offset_px = max(0, cut_offset_px)
+
+    alpha = np.array(img.split()[3])
+    ys, xs = np.where(alpha > 20)
+    if len(xs) == 0:
+        bx0, by0, bx1, by1 = 0, 0, img.size[0], img.size[1]
+    else:
+        bx0, by0 = int(xs.min()), int(ys.min())
+        bx1, by1 = int(xs.max()) + 1, int(ys.max()) + 1
+    bw = max(1, bx1 - bx0)
+    bh = max(1, by1 - by0)
+    bcx = bx0 + bw / 2.0
+    bcy = by0 + bh / 2.0
+
+    if force_circle:
+        # Smallest circle that encloses the bbox = half its diagonal.
+        r = math.hypot(bw / 2.0, bh / 2.0) + cut_offset_px
+        rx = ry = r
+    else:
+        # Axis-aligned ellipse with the bbox aspect whose corners touch it.
+        sqrt2 = math.sqrt(2.0)
+        rx = (bw / 2.0) * sqrt2 + cut_offset_px
+        ry = (bh / 2.0) * sqrt2 + cut_offset_px
+
+    half_w = rx + bleed_px
+    half_h = ry + bleed_px
+    new_w = int(math.ceil(half_w * 2.0))
+    new_h = int(math.ceil(half_h * 2.0))
+    cx = new_w / 2.0
+    cy = new_h / 2.0
+
+    border_img = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+    bleed_layer = Image.new("RGBA", (new_w, new_h), (0, 0, 0, 0))
+    ImageDraw.Draw(bleed_layer).ellipse(
+        [cx - (rx + bleed_px), cy - (ry + bleed_px),
+         cx + (rx + bleed_px), cy + (ry + bleed_px)],
+        fill=(*border_color, 255),
+    )
+    border_img = Image.alpha_composite(border_img, bleed_layer)
+
+    paste_x = int(round(cx - bcx))
+    paste_y = int(round(cy - bcy))
+    border_img.paste(img, (paste_x, paste_y), mask=img.split()[3])
+
+    points_px = _ellipse_points(cx, cy, rx, ry)
 
     px_to_pt = 72.0 / dpi
     points_pt = [(x * px_to_pt, y * px_to_pt) for x, y in points_px]

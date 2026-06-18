@@ -169,3 +169,13 @@ class StickerSheet(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         String(40), nullable=True, default="#000000"
     )
     """Colour for registration marks and crop marks."""
+
+    sheet_type: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="sticker", server_default="sticker"
+    )
+    """'sticker' (default — includes cut lines) or 'dtf' (no cut lines, optional mirror)."""
+
+    mirror_output: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """When True, the exported PDF is horizontally flipped (for DTF film printing)."""

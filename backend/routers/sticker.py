@@ -256,7 +256,7 @@ def process_sticker(
                 removal_method=removal_method,
                 border_width_mm=border_width_mm,
                 bleed_mm=bleed_mm,
-                cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle", "face") else "contour",
+                cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour",
                 cutline_precision=cutline_precision if cutline_precision in ("tight", "medium") else "medium",
                 filter_id=filter_id,
                 beautify_smooth=max(0.0, min(1.0, beautify_smooth)),
@@ -541,7 +541,7 @@ def regenerate_sticker(
     except Exception:
         work_dpi = 300.0
 
-    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face") else "contour"
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour"
     precision = body.cutline_precision if body.cutline_precision in ("tight", "medium") else "medium"
 
     from backend.services.cutline_generator import FaceNotFoundError
@@ -707,7 +707,7 @@ def ai_style_sticker(
     # Replace the session cutout so later edits build on the stylized art.
     storage.put_bytes(f"{prefix}/cutout.png", new_cutout, "image/png")
 
-    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face") else "contour"
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour"
 
     from backend.services.cutline_generator import FaceNotFoundError
     from backend.services.sticker_processor import regenerate_cutline
@@ -939,27 +939,60 @@ def resume_sticker(
     prefix = asset.sticker_session_prefix
     import json
 
-    # Load cutline metadata
+    # Load cutline metadata — try the session file first, then fall back
+    # to reconstructing from the asset's embedded cut_contour_json (for
+    # stickers created by the widget before session files were persisted).
+    cutline_payload = None
     try:
         cutline_raw = storage.get_bytes(f"{prefix}/cutline.json")
         cutline_payload = json.loads(cutline_raw.decode("utf-8"))
     except Exception:
-        raise HTTPException(
-            404,
-            "Sticker session data is missing. The sticker may need to be re-created.",
-        )
+        pass
 
-    # Verify the cutout still exists
+    if cutline_payload is None:
+        if asset.cut_contour_json:
+            norm_pts = json.loads(asset.cut_contour_json)
+            w_pt = asset.width_pt
+            h_pt = asset.height_pt
+            w_px = int(w_pt * 300 / 72)
+            h_px = int(h_pt * 300 / 72)
+            points_px = [(p[0] * w_px, p[1] * h_px) for p in norm_pts]
+            points_pt = [(p[0] * w_pt, p[1] * h_pt) for p in norm_pts]
+            w_mm = w_pt * 25.4 / 72
+            h_mm = h_pt * 25.4 / 72
+            cutline_payload = {
+                "points_px": points_px,
+                "points_pt": points_pt,
+                "width_px": w_px,
+                "height_px": h_px,
+                "width_pt": w_pt,
+                "height_pt": h_pt,
+                "width_mm": w_mm,
+                "height_mm": h_mm,
+                "work_dpi": 300.0,
+            }
+        else:
+            raise HTTPException(
+                404,
+                "Sticker session data is missing. The sticker may need to be re-created.",
+            )
+
+    # Verify the cutout still exists; fall back to border if not available
+    # (e.g. keep-bg/canvas stickers don't produce a separate cutout).
+    has_cutout = True
     try:
         storage.get_bytes(f"{prefix}/cutout.png")
     except Exception:
-        raise HTTPException(
-            404, "Cutout image is missing from storage. The sticker cannot be resumed."
-        )
+        has_cutout = False
 
     # Source image may not exist for stickers created before we started
     # persisting it — that's fine, the user just can't change bg removal method.
     source_url = _safe_presigned(f"{prefix}/source.png")
+
+    # Border URL: try session prefix, then fall back to asset thumbnail
+    border_url = _safe_presigned(f"{prefix}/border.png")
+    if not border_url and asset.thumbnail_r2_key:
+        border_url = _safe_presigned(asset.thumbnail_r2_key)
 
     cutline_points = _normalised_points(
         [tuple(p) for p in cutline_payload["points_px"]],
@@ -972,11 +1005,19 @@ def resume_sticker(
     parts = prefix.rstrip("/").split("/")
     session_id = parts[-1] if len(parts) >= 3 else str(uuid.uuid4())
 
+    cutout_url = ""
+    if has_cutout:
+        cutout_url = _safe_presigned(f"{prefix}/cutout.png")
+    if not cutout_url:
+        cutout_url = border_url
+
+    preview_url = _safe_presigned(f"{prefix}/preview.png") or border_url
+
     return ResumeResponse(
         session_id=session_id,
-        cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
-        border_url=_safe_presigned(f"{prefix}/border.png"),
-        preview_url=_safe_presigned(f"{prefix}/preview.png"),
+        cutout_url=cutout_url,
+        border_url=border_url,
+        preview_url=preview_url,
         source_url=source_url,
         cutline_points=cutline_points,
         img_w_px=int(cutline_payload["width_px"]),
@@ -995,12 +1036,19 @@ class SaveRequest(BaseModel):
     overwrite_asset_id: str | None = None
 
 
-def _resolve_sticker_category(db: Session, user_id: uuid.UUID, category_id: str | None):
+def _resolve_sticker_category(
+    db: Session,
+    user_id: uuid.UUID,
+    category_id: str | None,
+    default_name: str = "Stickers",
+):
     """Resolve the catalogue category to save a sticker into.
 
     - If `category_id` is given, validate it belongs to the user.
-    - Otherwise find-or-create a "Stickers" category so the asset always
-      satisfies the `ck_assets_category_or_job` constraint.
+    - Otherwise find-or-create a category named `default_name` so the asset
+      always satisfies the `ck_assets_category_or_job` constraint. The widget
+      routes its designs into a dedicated "Plugin orders" category so merchants
+      can find incoming sticker orders quickly, separate from their own stickers.
     """
     from backend.models import AssetCategory
 
@@ -1020,11 +1068,11 @@ def _resolve_sticker_category(db: Session, user_id: uuid.UUID, category_id: str 
 
     cat = (
         db.query(AssetCategory)
-        .filter(AssetCategory.user_id == user_id, AssetCategory.name == "Stickers")
+        .filter(AssetCategory.user_id == user_id, AssetCategory.name == default_name)
         .first()
     )
     if cat is None:
-        cat = AssetCategory(user_id=user_id, name="Stickers")
+        cat = AssetCategory(user_id=user_id, name=default_name)
         db.add(cat)
         db.flush()
     return cat

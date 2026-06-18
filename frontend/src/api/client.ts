@@ -13,7 +13,11 @@ export function apiErrMessage(e: unknown): string {
   if (e instanceof ApiError) {
     const b = e.body;
     if (b && typeof b === "object" && "detail" in b) {
-      return String((b as { detail: unknown }).detail);
+      const detail = (b as { detail: unknown }).detail;
+      if (detail && typeof detail === "object" && "message" in detail) {
+        return String((detail as { message: string }).message);
+      }
+      return String(detail);
     }
     if (typeof b === "string" && b) return b;
     return `Request failed (${e.status})`;

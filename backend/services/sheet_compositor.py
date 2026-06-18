@@ -57,6 +57,10 @@ class SheetConfig:
     spot_color_marks: str | None = None
     """Colour for registration + crop marks (hex like '#000000' or a spot
     name). Drawn in this colour on the printed PDF."""
+    sheet_type: str = "sticker"
+    """'sticker' (includes cut lines) or 'dtf' (no cut lines)."""
+    mirror_output: bool = False
+    """When True, the final PDF is horizontally flipped for DTF film."""
 
 
 SUB_SHEET_SIZES: dict[str, tuple[float, float]] = {
@@ -331,10 +335,14 @@ def compose_pdf(
     """Compose a print-ready PDF with stickers placed at given positions.
 
     Each sticker asset PDF is placed using show_pdf_page, which preserves
-    embedded CutContour spot colour paths automatically.
+    embedded CutContour spot colour paths automatically (sticker mode).
+
+    In DTF mode, cut-contour paths are stripped from each source page before
+    placement, and registration/crop marks are skipped by default.
     """
     page_w_pt = config.media_width_mm * PT_PER_MM
     page_h_pt = total_height_mm * PT_PER_MM
+    is_dtf = config.sheet_type == "dtf"
 
     doc = pymupdf.open()
     try:
@@ -342,7 +350,10 @@ def compose_pdf(
 
         asset_docs: dict[str, pymupdf.Document] = {}
         for aid, pdf_bytes in asset_pdfs.items():
-            asset_docs[aid] = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            src = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            if is_dtf and src.page_count > 0:
+                _strip_cut_contour(src)
+            asset_docs[aid] = src
 
         for p in placements:
             src_doc = asset_docs.get(p.asset_id)
@@ -380,11 +391,14 @@ def compose_pdf(
         for d in asset_docs.values():
             d.close()
 
-        if config.show_crop_marks:
-            _draw_crop_marks(page, config, total_height_mm)
+        if not is_dtf:
+            if config.show_crop_marks:
+                _draw_crop_marks(page, config, total_height_mm)
+            if config.registration_type:
+                _draw_registration_marks(page, config, placements, total_height_mm)
 
-        if config.registration_type:
-            _draw_registration_marks(page, config, placements, total_height_mm)
+        if config.mirror_output:
+            _mirror_page(page)
 
         return doc.tobytes(deflate=True)
     finally:
@@ -588,3 +602,51 @@ def _draw_generic_marks(
             color=mark_color,
             width=0.2,
         )
+
+
+def _strip_cut_contour(doc: pymupdf.Document) -> None:
+    """Remove CutContour separation paths from all pages in a PDF.
+
+    For DTF output the cut contour is meaningless; stripping it produces a
+    clean flat artwork PDF. This uses a simple heuristic: remove any path
+    drawn with a colour space containing 'CutContour' or 'Thru-Cut' in its
+    name. If the document uses only device RGB/CMYK (no separations), this
+    is a no-op.
+    """
+    for page_idx in range(doc.page_count):
+        page = doc[page_idx]
+        paths = page.get_drawings()
+        redact_rects: list[pymupdf.Rect] = []
+        for path in paths:
+            color_str = str(path.get("color", "")) + str(path.get("fill", ""))
+            if "CutContour" in color_str or "Thru-Cut" in color_str:
+                if "rect" in path:
+                    redact_rects.append(pymupdf.Rect(path["rect"]))
+        if redact_rects:
+            for r in redact_rects:
+                page.add_redact_annot(r)
+            page.apply_redactions()
+
+
+def _mirror_page(page: pymupdf.Page) -> None:
+    """Horizontally flip the entire page content for DTF film printing.
+
+    Renders the current page to a high-res pixmap, mirrors the resulting
+    image with PIL, clears the page, then re-inserts the flipped image.
+    """
+    import PIL.Image as _PILImage
+
+    dpi = 300
+    pix = page.get_pixmap(dpi=dpi)
+    img_bytes = pix.tobytes("png")
+    page_rect = page.rect
+
+    buf = io.BytesIO(img_bytes)
+    pil_img = _PILImage.open(buf)
+    pil_img = pil_img.transpose(_PILImage.FLIP_LEFT_RIGHT)
+    out_buf = io.BytesIO()
+    pil_img.save(out_buf, format="PNG")
+    mirrored_bytes = out_buf.getvalue()
+
+    page._cleanContents()
+    page.insert_image(page_rect, stream=mirrored_bytes)

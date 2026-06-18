@@ -31,6 +31,22 @@ def list_outputs(
     )
 
 
+@router.get("/{output_id}/status", response_model=OutputOut)
+def get_output_status(
+    output_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Output:
+    """Poll endpoint for async-generated outputs."""
+    user = _resolve_user(db, auth)
+    out = db.query(Output).filter(
+        Output.id == output_id, Output.user_id == user.id
+    ).one_or_none()
+    if out is None:
+        raise HTTPException(404, "Output not found")
+    return out
+
+
 @router.get("/{output_id}/download")
 def download_output(
     output_id: uuid.UUID,

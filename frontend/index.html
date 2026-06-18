@@ -30,20 +30,24 @@
     <meta name="twitter:description" content="Build gang sheets, set slot order, fill from your catalogue, and export print-ready PDFs with bleed & cut lines — in four moves." />
     <meta name="twitter:image" content="https://printlay.co.uk/og-image.png" />
 
-    <!-- Structured data: helps Google understand this is a SaaS product -->
+    <!-- Sitewide structured data: brand + site search. Per-page Article /
+         FAQ / Breadcrumb / SoftwareApplication schema is injected per route. -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
+        "@type": "Organization",
         "name": "Printlay",
-        "applicationCategory": "BusinessApplication",
-        "operatingSystem": "Web",
-        "description": "Gang sheet builder and print imposition software for print shops. Upload or generate a template, program slot order, fill from your asset catalogue, and export a print-ready PDF with bleed and cut lines.",
         "url": "https://printlay.co.uk/",
-        "offers": {
-          "@type": "Offer",
-          "category": "subscription"
-        }
+        "logo": "https://printlay.co.uk/og-image.png",
+        "description": "Gang sheet builder and print imposition software for print shops."
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Printlay",
+        "url": "https://printlay.co.uk/"
       }
     </script>
   </head>

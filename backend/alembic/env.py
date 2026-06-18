@@ -3,7 +3,7 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from backend.config import get_settings
 from backend.models import Base  # noqa: F401  - imports register models on metadata
@@ -46,6 +46,10 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # Override any restrictive statement_timeout set on the database role
+        # so DDL migrations don't get killed prematurely.
+        connection.execute(text("SET statement_timeout = '300s'"))
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

@@ -197,7 +197,15 @@ export const getBillingHealth = () =>
 
 // ---- Per-user detail ----
 
-export type UserDetailJob = { id: string; name: string; created_at: string };
+export type UserDetailJob = {
+  id: string;
+  name: string;
+  created_at: string;
+  template_id: string;
+  slots_filled: number;
+  slots_total: number;
+  unique_assets: number;
+};
 export type UserDetailOutput = {
   id: string;
   name: string;
@@ -413,4 +421,16 @@ export const testIntegration = (
   api<IntegrationTestResult>("/api/admin/integrations/test", {
     method: "POST",
     body: JSON.stringify({ channel, recipient }),
+  });
+
+export type CloneJobResult = {
+  job_id: string;
+  template_id: string;
+  assets_cloned: number;
+  message: string;
+};
+
+export const cloneJobToAdmin = (userId: string, jobId: string) =>
+  api<CloneJobResult>(`/api/admin/users/${userId}/jobs/${jobId}/clone`, {
+    method: "POST",
   });

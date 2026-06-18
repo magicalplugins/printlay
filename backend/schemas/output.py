@@ -14,6 +14,7 @@ class OutputOut(BaseModel):
     file_size: int
     slots_filled: int
     slots_total: int
+    status: str = "ready"
     created_at: datetime
     # Populated only on the response from POST /jobs/{id}/generate, so
     # the UI can show the user how many colour swaps actually fired,

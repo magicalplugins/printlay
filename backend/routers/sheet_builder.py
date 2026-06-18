@@ -96,6 +96,8 @@ class SheetIn(BaseModel):
     spot_color_cutlines: str | None = "CutContour"
     spot_color_subsheets: str | None = "#00FF00"
     spot_color_marks: str | None = "#000000"
+    sheet_type: str = "sticker"
+    mirror_output: bool = False
 
 
 class SheetOut(BaseModel):
@@ -132,6 +134,8 @@ class SheetOut(BaseModel):
     spot_color_cutlines: str | None = None
     spot_color_subsheets: str | None = None
     spot_color_marks: str | None = None
+    sheet_type: str = "sticker"
+    mirror_output: bool = False
     output_url: str | None = None
 
 
@@ -298,6 +302,8 @@ def create_sheet(
         spot_color_cutlines=payload.spot_color_cutlines,
         spot_color_subsheets=payload.spot_color_subsheets,
         spot_color_marks=payload.spot_color_marks,
+        sheet_type=payload.sheet_type,
+        mirror_output=payload.mirror_output,
     )
     db.add(sheet)
     db.commit()
@@ -349,6 +355,8 @@ def update_sheet(
     sheet.spot_color_cutlines = payload.spot_color_cutlines
     sheet.spot_color_subsheets = payload.spot_color_subsheets
     sheet.spot_color_marks = payload.spot_color_marks
+    sheet.sheet_type = payload.sheet_type
+    sheet.mirror_output = payload.mirror_output
     db.commit()
     db.refresh(sheet)
     return _sheet_to_out(sheet)
@@ -454,6 +462,8 @@ def run_auto_layout(
         sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
         sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
         spot_color_marks=getattr(sheet, "spot_color_marks", None),
+        sheet_type=getattr(sheet, "sheet_type", "sticker"),
+        mirror_output=getattr(sheet, "mirror_output", False),
     )
 
     result = auto_layout(
@@ -486,6 +496,89 @@ def run_auto_layout(
         cols=result.cols,
         rows=result.rows,
         zones=result.zones,
+    )
+
+
+# ---------- DTF Auto-Pack ----------
+
+
+class PackResult(BaseModel):
+    placements: list[dict]
+    total_height_mm: float
+
+
+@router.post("/{sheet_id}/pack", response_model=PackResult)
+def pack_sheet(
+    sheet_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Auto-pack existing placements into optimal positions without overlap.
+
+    Uses a simple bottom-left shelf algorithm that respects item sizes.
+    Returns new placements without saving, so the frontend can animate.
+    """
+    sheet = db.query(StickerSheet).filter_by(
+        id=sheet_id, user_id=auth.user_id
+    ).first()
+    if not sheet:
+        raise HTTPException(404, "Sheet not found")
+
+    placements = sheet.placements or []
+    if not placements:
+        return PackResult(placements=[], total_height_mm=sheet.media_height_mm)
+
+    gap = sheet.gap_mm
+    margin = sheet.edge_margin_mm
+    media_w = sheet.media_width_mm
+
+    # Build items with their sizes from placements
+    items = []
+    for p in placements:
+        asset = db.query(Asset).filter_by(id=p["asset_id"]).first()
+        if not asset:
+            continue
+        mm_per_pt = 25.4 / 72
+        native_w = asset.width_pt * mm_per_pt
+        native_h = asset.height_pt * mm_per_pt
+        scale = p.get("scale", 1.0)
+        rot = p.get("rotation_deg", 0)
+        w = native_w * scale
+        h = native_h * scale
+        if rot == 90 or rot == 270:
+            w, h = h, w
+        items.append({"p": p, "w": w, "h": h})
+
+    # Sort by height descending for better shelf packing
+    items.sort(key=lambda x: -x["h"])
+
+    # Bottom-left shelf algorithm
+    packed = []
+    x_cursor = margin
+    y_cursor = margin
+    row_height = 0.0
+
+    for item in items:
+        w, h = item["w"], item["h"]
+        if x_cursor + w > media_w - margin:
+            # Next row
+            x_cursor = margin
+            y_cursor += row_height + gap
+            row_height = 0.0
+
+        packed.append({
+            **item["p"],
+            "x_mm": round(x_cursor, 2),
+            "y_mm": round(y_cursor, 2),
+        })
+        x_cursor += w + gap
+        row_height = max(row_height, h)
+
+    total_height = y_cursor + row_height + margin
+
+    return PackResult(
+        placements=packed,
+        total_height_mm=round(total_height, 2),
     )
 
 
@@ -540,6 +633,8 @@ def export_sheet_pdf(
         sub_sheet_title=getattr(sheet, "sub_sheet_title", None),
         sub_sheet_title_size_mm=getattr(sheet, "sub_sheet_title_size_mm", 5.0) or 5.0,
         spot_color_marks=getattr(sheet, "spot_color_marks", None),
+        sheet_type=getattr(sheet, "sheet_type", "sticker"),
+        mirror_output=getattr(sheet, "mirror_output", False),
     )
 
     placements_typed = [
@@ -955,6 +1050,8 @@ def _sheet_to_out(s: StickerSheet) -> SheetOut:
         spot_color_cutlines=getattr(s, "spot_color_cutlines", "CutContour"),
         spot_color_subsheets=getattr(s, "spot_color_subsheets", "#00FF00"),
         spot_color_marks=getattr(s, "spot_color_marks", "#000000"),
+        sheet_type=getattr(s, "sheet_type", "sticker"),
+        mirror_output=getattr(s, "mirror_output", False),
         output_url=output_url,
     )
 

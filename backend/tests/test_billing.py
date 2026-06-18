@@ -41,7 +41,7 @@ def test_active_trial_gets_pro_entitlements():
     assert ent.is_trialing is True
     assert ent.allows("pdf_export")
     assert ent.allows("colour_swap")
-    assert ent.quota("templates_max") is None  # unlimited on pro
+    assert ent.quota("templates_max") == 20  # pro template cap
 
 
 def test_expired_trial_drops_to_locked():
@@ -110,12 +110,12 @@ def test_starter_has_correct_limits(monkeypatch):
     user = _make_user(stripe_subscription_status="active", stripe_price_id="price_starter_monthly")
     ent = entitlements.for_user(user)
     assert ent.plan == "starter"
-    assert ent.quota("templates_max") == 5
-    assert ent.quota("exports_per_month") == 200
+    assert ent.quota("templates_max") == 10
+    assert ent.quota("exports_per_month") == 50
     assert ent.quota("color_profiles_max") == 2
     assert ent.quota("categories_max") == 10
     assert ent.quota("asset_size_mb_max") == 50
-    assert ent.quota("storage_mb_max") == 5 * 1024
+    assert ent.quota("storage_mb_max") == 20 * 1024
     assert ent.allows("pdf_export")
     assert not ent.allows("api_access")
     assert not ent.allows("white_label_pdf")
@@ -127,8 +127,8 @@ def test_pro_has_correct_storage_and_asset_caps(monkeypatch):
     user = _make_user(stripe_subscription_status="active", stripe_price_id="price_pro_monthly")
     ent = entitlements.for_user(user)
     assert ent.plan == "pro"
-    assert ent.quota("templates_max") is None
-    assert ent.quota("exports_per_month") is None
+    assert ent.quota("templates_max") == 20
+    assert ent.quota("exports_per_month") == 200
     assert ent.quota("asset_size_mb_max") == 100
     assert ent.quota("storage_mb_max") == 50 * 1024
 
@@ -153,22 +153,24 @@ def test_enterprise_storage_is_unlimited():
     assert ent.quota("asset_size_mb_max") == 1024
 
 
-def test_trial_storage_is_capped_to_1gb_even_though_features_are_pro():
-    """Trial users get the full Pro feature set, but only 1 GB of storage."""
+def test_trial_storage_is_capped_even_though_features_are_pro():
+    """Trial users get the full Pro feature set, but a tighter storage cap."""
     user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=7))
     ent = entitlements.for_user(user)
     assert ent.plan == "pro"
     assert ent.is_trialing is True
-    assert ent.quota("storage_mb_max") == 1024
-    assert ent.quota("templates_max") is None
+    assert ent.quota("storage_mb_max") == 3 * 1024
+    assert ent.quota("templates_max") == 20
     assert ent.allows("priority_support")
 
 
 # ---- under_quota helper ----
 
 def test_under_quota_returns_true_when_unlimited():
-    user = _make_user(trial_ends_at=datetime.now(timezone.utc) + timedelta(days=1))
+    # Enterprise has an unlimited (None) template cap.
+    user = _make_user(tier="enterprise")
     ent = entitlements.for_user(user)
+    assert ent.quota("templates_max") is None
     assert ent.under_quota("templates_max", 9999) is True
 
 
@@ -177,9 +179,9 @@ def test_under_quota_returns_false_when_at_cap(monkeypatch):
     monkeypatch.setattr(ent_mod, "_plan_from_stripe_price", lambda _: "starter")
     user = _make_user(stripe_subscription_status="active", stripe_price_id="x")
     ent = entitlements.for_user(user)
-    assert ent.quota("templates_max") == 5
-    assert ent.under_quota("templates_max", 5) is False
-    assert ent.under_quota("templates_max", 4) is True
+    assert ent.quota("templates_max") == 10
+    assert ent.under_quota("templates_max", 10) is False
+    assert ent.under_quota("templates_max", 9) is True
 
 
 # ---- to_public_dict ----

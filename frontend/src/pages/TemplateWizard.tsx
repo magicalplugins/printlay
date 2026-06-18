@@ -37,6 +37,7 @@ export default function TemplateWizard() {
 function Choose({ onPick, onSticker }: { onPick: (p: Path) => void; onSticker: () => void }) {
   const { me } = useMe();
   const showSticker = !!me?.is_admin;
+  const navigate = useNavigate();
 
   return (
     <div className="space-y-5">
@@ -52,6 +53,17 @@ function Choose({ onPick, onSticker }: { onPick: (p: Path) => void; onSticker: (
           body="Specify the artboard, the shape (rectangle, circle, or oval), and the gap. We auto-fit and centre the grid for you."
           cta="Build a template"
           onClick={() => onPick("generate")}
+        />
+      </div>
+
+      {/* DTF Sheet Builder — always visible */}
+      <div className="pt-2">
+        <Card
+          title="DTF Sheet Builder"
+          body="Drag and drop artwork onto a sheet. No cut lines — perfect for DTF film printing. Auto-pack, resize, and mirror for transfer."
+          cta="Build DTF sheet"
+          onClick={() => navigate("/app/sheets?type=dtf")}
+          accent
         />
       </div>
 

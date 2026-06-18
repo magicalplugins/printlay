@@ -56,6 +56,8 @@ export interface StickerSheet {
   spot_color_cutlines: string | null;
   spot_color_subsheets: string | null;
   spot_color_marks: string | null;
+  sheet_type: "sticker" | "dtf";
+  mirror_output: boolean;
   output_url: string | null;
 }
 
@@ -132,6 +134,15 @@ export function autoLayout(
       height_mm: sizeMm?.height_mm ?? null,
     }),
   });
+}
+
+export interface PackResult {
+  placements: Placement[];
+  total_height_mm: number;
+}
+
+export function packSheet(sheetId: string) {
+  return api<PackResult>(`/api/sheets/${sheetId}/pack`, { method: "POST" });
 }
 
 export async function exportSheetPdf(sheetId: string): Promise<Blob> {

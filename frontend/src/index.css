@@ -9,3 +9,119 @@
     height: 100%;
   }
 }
+
+/*
+ * Article typography for rendered Markdown (marketing content engine).
+ * Scoped to .article-content so it never leaks into the app UI. No Tailwind
+ * typography plugin needed — these are deliberately restrained, dark-theme
+ * print-shop reading styles.
+ */
+.article-content {
+  color: rgb(212 212 212);
+  font-size: 1.0625rem;
+  line-height: 1.75;
+}
+.article-content > * + * {
+  margin-top: 1.15rem;
+}
+.article-content h2 {
+  color: rgb(245 245 245);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin-top: 2.5rem;
+  scroll-margin-top: 6rem;
+}
+.article-content h3 {
+  color: rgb(245 245 245);
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  scroll-margin-top: 6rem;
+}
+.article-content h4 {
+  color: rgb(229 229 229);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+}
+.article-content a {
+  color: rgb(192 132 252);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.article-content a:hover {
+  color: rgb(216 180 254);
+}
+.article-content strong {
+  color: rgb(245 245 245);
+  font-weight: 600;
+}
+.article-content ul,
+.article-content ol {
+  padding-left: 1.4rem;
+}
+.article-content ul {
+  list-style: disc;
+}
+.article-content ol {
+  list-style: decimal;
+}
+.article-content li + li {
+  margin-top: 0.4rem;
+}
+.article-content li::marker {
+  color: rgb(115 115 115);
+}
+.article-content blockquote {
+  border-left: 3px solid rgb(124 58 237);
+  padding-left: 1rem;
+  color: rgb(163 163 163);
+  font-style: italic;
+}
+.article-content code {
+  background: rgb(38 38 38);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.35rem;
+  font-size: 0.9em;
+  color: rgb(232 232 232);
+}
+.article-content pre {
+  background: rgb(23 23 23);
+  border: 1px solid rgb(38 38 38);
+  border-radius: 0.6rem;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+}
+.article-content pre code {
+  background: transparent;
+  padding: 0;
+}
+.article-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  display: block;
+  overflow-x: auto;
+}
+.article-content th,
+.article-content td {
+  border: 1px solid rgb(38 38 38);
+  padding: 0.55rem 0.8rem;
+  text-align: left;
+}
+.article-content th {
+  background: rgb(23 23 23);
+  color: rgb(245 245 245);
+  font-weight: 600;
+}
+.article-content hr {
+  border: 0;
+  border-top: 1px solid rgb(38 38 38);
+  margin: 2rem 0;
+}
+.article-content h2 + p,
+.article-content h3 + p {
+  margin-top: 0.65rem;
+}

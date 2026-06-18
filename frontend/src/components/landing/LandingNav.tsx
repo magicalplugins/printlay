@@ -42,6 +42,12 @@ export default function LandingNav() {
 
         <nav className="flex items-center gap-1 sm:gap-2">
           <Link
+            to="/resources"
+            className="hidden sm:inline-flex rounded-lg px-3 sm:px-4 h-9 items-center text-sm text-neutral-300 hover:text-white transition"
+          >
+            Resources
+          </Link>
+          <Link
             to="/pricing"
             className="rounded-lg px-3 sm:px-4 h-9 inline-flex items-center text-sm text-neutral-300 hover:text-white transition"
           >

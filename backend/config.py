@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     Get one at https://replicate.com/account/api-tokens.
     Set via `fly secrets set REPLICATE_API_TOKEN=...`."""
 
+    # ---- Embeddable widget ----
+    widget_signing_secret: str | None = None
+    """HMAC secret Printlay uses to sign its own short-lived widget session
+    tokens and price quotes (server-side only; never shared with merchants).
+    If unset, falls back to APP_SECRETS_MASTER_KEY, then SUPABASE_JWT_SECRET.
+    Set a dedicated value in production via `fly secrets set WIDGET_SIGNING_SECRET=...`."""
+
     @property
     def admin_email_set(self) -> set[str]:
         """Lower-cased set of admin emails for O(1) membership checks."""

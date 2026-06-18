@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -10,6 +11,8 @@ from backend.auth import AuthenticatedUser, get_current_user
 from backend.database import get_db
 from backend.models import Asset, CatalogueSubscription, AssetCategory, ColorProfile, Job, Output, Template, User
 from backend.rate_limit import generate_burst_limit, generate_limit, limiter
+
+log = logging.getLogger(__name__)
 from backend.routers.templates import _resolve_user
 from backend.schemas.asset import AssetOut
 from backend.schemas.color_profile import (
@@ -424,6 +427,7 @@ def apply_queue(
     else:
         owned = {}
 
+    total_requested = sum(item.quantity for item in payload.queue)
     assignments: dict[str, dict] = {}
     cursor = 0
     slot_order = list(job.slot_order or [])
@@ -459,9 +463,42 @@ def apply_queue(
         if cursor >= len(slot_order):
             break
 
+    dropped = total_requested - cursor
+    if dropped > 0:
+        log.warning(
+            "Queue overflow: job %s (user %s) tried to place %d items but template only has %d slots — %d dropped",
+            job.id, user.id, total_requested, len(slot_order), dropped,
+        )
+
     job.assignments = assignments
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.error(
+            "Failed to save queue for job %s (user %s, %d assignments): %s",
+            job.id, user.id, len(assignments), exc,
+        )
+        raise HTTPException(500, detail={
+            "code": "save_failed",
+            "message": (
+                f"Failed to save your layout ({len(assignments)} placements). "
+                "This has been logged — please try again or contact support."
+            ),
+        })
     db.refresh(job)
+
+    if dropped > 0:
+        from fastapi.responses import JSONResponse
+        from backend.schemas.job import JobOut as _JobOut
+        job_data = _JobOut.model_validate(job).model_dump(mode="json")
+        job_data["_warning"] = (
+            f"Only {len(slot_order)} slots available on this template — "
+            f"{dropped} item(s) could not be placed. "
+            f"Consider using a larger template or splitting into multiple jobs."
+        )
+        return JSONResponse(content=job_data)
+
     return job
 
 
@@ -498,7 +535,18 @@ def fill_job(
         placed += 1
 
     job.assignments = assignments
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.error(
+            "Failed to save fill for job %s (user %s, asset %s, placed %d): %s",
+            job.id, user.id, payload.asset_id, placed, exc,
+        )
+        raise HTTPException(500, detail={
+            "code": "save_failed",
+            "message": "Failed to save your placement. This has been logged — please try again.",
+        })
     db.refresh(job)
     return job
 
@@ -861,6 +909,21 @@ def generate_output(
     job = _own_job(db, user, job_id)
     tpl = db.query(Template).filter(Template.id == job.template_id).one()
 
+    # Count unique assets to decide if we should run async
+    all_asset_ids = set()
+    for assignment in (job.assignments or {}).values():
+        aid = assignment.get("asset_id")
+        if aid:
+            all_asset_ids.add(uuid.UUID(aid))
+
+    ASYNC_THRESHOLD = 20
+    if len(all_asset_ids) > ASYNC_THRESHOLD:
+        return _generate_async(db, user, job, tpl, opts)
+
+    return _generate_sync(db, user, job, tpl, opts)
+
+def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Output:
+    """Synchronous PDF generation for small jobs (under ASYNC_THRESHOLD unique assets)."""
     try:
         template_bytes = storage.get_bytes(tpl.r2_key)
     except storage.StorageNotConfigured as exc:
@@ -886,8 +949,15 @@ def generate_output(
         try:
             asset_pdfs[int(slot_key)] = storage.get_bytes(asset.r2_key)
         except Exception as exc:
-            raise HTTPException(500, f"Failed to load asset {asset_id}: {exc}")
-        # Manual mm placements arrive in mm; convert to PDF points (1mm = 2.83465pt).
+            log.error(
+                "Failed to load asset %s (r2_key=%s) for job %s slot %s: %s",
+                asset_id, asset.r2_key, job.id, slot_key, exc,
+            )
+            raise HTTPException(500, detail={
+                "code": "asset_load_failed",
+                "message": f"Could not load artwork '{asset.name}'. It may have been deleted or is temporarily unavailable.",
+                "ref": f"asset:{asset_id}",
+            })
         mm_to_pt = 72.0 / 25.4
         slot_transforms[int(slot_key)] = pdf_compositor.SlotTransform(
             rotation_deg=int(assignment.get("rotation_deg") or 0),
@@ -901,11 +971,6 @@ def generate_output(
             page_index=int(assignment.get("page_index") or 0),
         )
 
-    # Inject per-template bleed AND safe insets (in PDF points) onto each
-    # shape so the compositor can resolve both the default print clip
-    # (slot+bleed) and the optional safe-crop clip (slot-safe). Neither
-    # ever grows the artboard - they're just hints for how far a placed
-    # asset can extend or how tightly it should be framed at print.
     mm_to_pt = 72.0 / 25.4
     bleed_pt = float(tpl.bleed_mm or 0.0) * mm_to_pt
     safe_pt = float(tpl.safe_mm or 0.0) * mm_to_pt
@@ -914,7 +979,6 @@ def generate_output(
     ]
 
     active_swaps = _resolve_active_swaps(db, job)
-
     cut_line_spec = _resolve_cut_line_spec(db, user, opts) if opts.include_cut_lines else None
 
     try:
@@ -928,13 +992,39 @@ def generate_output(
             cut_line_spec=cut_line_spec,
         )
     except pdf_compositor.CompositorError as exc:
-        raise HTTPException(500, str(exc))
+        log.error(
+            "PDF composition failed for job %s (user %s, template %s, %d assets): %s",
+            job.id, user.id, tpl.id, len(asset_pdfs), exc,
+        )
+        raise HTTPException(500, detail={
+            "code": "composition_failed",
+            "message": "Something went wrong generating your PDF. This has been logged and we'll look into it.",
+            "detail": str(exc),
+        })
+    except MemoryError:
+        log.error(
+            "Out of memory compositing job %s (user %s, %d unique assets, template %s)",
+            job.id, user.id, len(asset_pdfs), tpl.id,
+        )
+        raise HTTPException(500, detail={
+            "code": "too_many_assets",
+            "message": (
+                f"This job has {len(asset_pdfs)} unique artworks which is too heavy to process in one go. "
+                "Try splitting into smaller batches (e.g. two sheets of 27 instead of one sheet of 54)."
+            ),
+        })
+    except Exception as exc:
+        log.exception(
+            "Unexpected error compositing job %s (user %s, %d assets, template %s)",
+            job.id, user.id, len(asset_pdfs), tpl.id,
+        )
+        raise HTTPException(500, detail={
+            "code": "generation_error",
+            "message": "PDF generation failed unexpectedly. This has been logged and we'll investigate.",
+            "ref": f"job:{job.id}",
+        })
 
     output_bytes = sheet.pdf_bytes
-    # Cutter registration marks are baked into the TEMPLATE (set on the
-    # template page), so every job generated from it reads identically on
-    # the cutter. The marks colour comes from the job's Spot Colours panel
-    # (defaults to black) so it can match the chosen cut/mark separation.
     if tpl.registration_type:
         from backend.services import job_registration
 
@@ -948,8 +1038,16 @@ def generate_output(
                 max_zone_length_mm=tpl.max_zone_length_mm,
                 mark_rgb=mark_rgb,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            raise HTTPException(500, f"Failed to add registration marks: {exc}")
+        except Exception as exc:
+            log.error(
+                "Registration marks failed for job %s (type=%s): %s",
+                job.id, tpl.registration_type, exc,
+            )
+            raise HTTPException(500, detail={
+                "code": "registration_marks_failed",
+                "message": "Failed to add registration marks to your PDF. The export has been cancelled. This has been logged.",
+                "ref": f"job:{job.id}",
+            })
 
     output_id = uuid.uuid4()
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -966,6 +1064,7 @@ def generate_output(
         file_size=len(output_bytes),
         slots_filled=sheet.slots_filled,
         slots_total=sheet.slots_total,
+        status="ready",
     )
     db.add(out)
     db.commit()
@@ -997,6 +1096,159 @@ def generate_output(
     response = OutputOut.model_validate(out)
     response.color_swap_report = sheet.color_swap_report
     return response
+
+
+def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Output:
+    """For heavy jobs (many unique assets), create a 'processing' output and
+    run the PDF composition in a background thread to avoid Cloudflare 524 timeouts."""
+    import threading
+    from backend.database import get_session_factory
+
+    output_id = uuid.uuid4()
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    name = f"{job.name} — {timestamp}.pdf"
+    r2_key = f"users/{user.id}/outputs/{output_id}.pdf"
+
+    out = Output(
+        id=output_id,
+        user_id=user.id,
+        job_id=job.id,
+        name=name,
+        r2_key=r2_key,
+        file_size=0,
+        slots_filled=0,
+        slots_total=len(tpl.shapes),
+        status="processing",
+    )
+    db.add(out)
+    db.commit()
+    db.refresh(out)
+
+    # Gather everything the background thread needs (all DB-bound values
+    # resolved now since the session will close).
+    job_id = job.id
+    user_id = user.id
+    tpl_id = tpl.id
+    tpl_r2_key = tpl.r2_key
+    tpl_shapes = list(tpl.shapes)
+    tpl_bleed_mm = float(tpl.bleed_mm or 0.0)
+    tpl_safe_mm = float(tpl.safe_mm or 0.0)
+    tpl_positions_layer = tpl.positions_layer
+    tpl_registration_type = tpl.registration_type
+    tpl_mark_offset_mm = float(tpl.mark_offset_mm or 5.0)
+    tpl_max_zone_length_mm = tpl.max_zone_length_mm
+    assignments = dict(job.assignments or {})
+    include_cut_lines = opts.include_cut_lines
+    cut_spot = opts.cut_line_spot_color
+    mark_spot = opts.mark_spot_color
+
+    # Resolve accessible assets before we leave the request scope.
+    all_asset_ids = set()
+    for assignment in assignments.values():
+        aid = assignment.get("asset_id")
+        if aid:
+            all_asset_ids.add(uuid.UUID(aid))
+    accessible = _accessible_assets(db, user, all_asset_ids) if all_asset_ids else {}
+    asset_r2_keys: dict[str, str] = {}
+    for aid_uuid, asset_obj in accessible.items():
+        asset_r2_keys[str(aid_uuid)] = asset_obj.r2_key
+
+    def _bg_generate():
+        bg_db = get_session_factory()()
+        try:
+            template_bytes = storage.get_bytes(tpl_r2_key)
+
+            asset_pdfs: dict[int, bytes] = {}
+            slot_transforms: dict[int, pdf_compositor.SlotTransform] = {}
+
+            mm_to_pt = 72.0 / 25.4
+            for slot_key, assignment in assignments.items():
+                asset_id = assignment.get("asset_id")
+                if not asset_id or asset_id not in asset_r2_keys:
+                    continue
+                asset_pdfs[int(slot_key)] = storage.get_bytes(asset_r2_keys[asset_id])
+                slot_transforms[int(slot_key)] = pdf_compositor.SlotTransform(
+                    rotation_deg=int(assignment.get("rotation_deg") or 0),
+                    fit_mode=str(assignment.get("fit_mode") or "contain"),
+                    x_pt=float(assignment.get("x_mm") or 0.0) * mm_to_pt,
+                    y_pt=float(assignment.get("y_mm") or 0.0) * mm_to_pt,
+                    w_pt=(float(assignment["w_mm"]) * mm_to_pt) if assignment.get("w_mm") else None,
+                    h_pt=(float(assignment["h_mm"]) * mm_to_pt) if assignment.get("h_mm") else None,
+                    filter_id=str(assignment.get("filter_id") or "none"),
+                    safe_crop=bool(assignment.get("safe_crop")),
+                    page_index=int(assignment.get("page_index") or 0),
+                )
+
+            bleed_pt = tpl_bleed_mm * mm_to_pt
+            safe_pt = tpl_safe_mm * mm_to_pt
+            enriched_shapes = [
+                {**s, "bleed_pt": bleed_pt, "safe_pt": safe_pt} for s in tpl_shapes
+            ]
+
+            # Color swaps need a fresh query
+            bg_job = bg_db.query(Job).filter(Job.id == job_id).one()
+            active_swaps = _resolve_active_swaps(bg_db, bg_job)
+
+            cut_line_spec = None
+            if include_cut_lines:
+                bg_user = bg_db.query(User).filter(User.id == user_id).one()
+                cut_line_spec = _resolve_cut_line_spec(bg_db, bg_user, opts)
+
+            sheet = pdf_compositor.composite(
+                template_pdf=template_bytes,
+                slot_shapes=enriched_shapes,
+                asset_pdfs=asset_pdfs,
+                slot_transforms=slot_transforms,
+                positions_layer=tpl_positions_layer,
+                color_swaps=active_swaps,
+                cut_line_spec=cut_line_spec,
+            )
+
+            output_bytes = sheet.pdf_bytes
+            if tpl_registration_type:
+                from backend.services import job_registration
+                bg_user = bg_db.query(User).filter(User.id == user_id).one()
+                _, mark_rgb255 = _resolve_spot(bg_db, bg_user, mark_spot)
+                mark_rgb = tuple(c / 255.0 for c in mark_rgb255)
+                output_bytes = job_registration.add_registration_marks(
+                    output_bytes,
+                    tpl_registration_type,
+                    mark_offset_mm=tpl_mark_offset_mm,
+                    max_zone_length_mm=tpl_max_zone_length_mm,
+                    mark_rgb=mark_rgb,
+                )
+
+            storage.put_bytes(r2_key, output_bytes, content_type="application/pdf")
+
+            bg_out = bg_db.query(Output).filter(Output.id == output_id).one()
+            bg_out.file_size = len(output_bytes)
+            bg_out.slots_filled = sheet.slots_filled
+            bg_out.slots_total = sheet.slots_total
+            bg_out.status = "ready"
+            bg_db.commit()
+
+            log.info(
+                "Async generation complete: output %s for job %s (%d assets, %d bytes)",
+                output_id, job_id, len(asset_pdfs), len(output_bytes),
+            )
+        except Exception as exc:
+            log.exception(
+                "Background generation failed for output %s (job %s, user %s): %s",
+                output_id, job_id, user_id, exc,
+            )
+            try:
+                bg_out = bg_db.query(Output).filter(Output.id == output_id).one()
+                bg_out.status = "failed"
+                bg_db.commit()
+            except Exception:
+                pass
+        finally:
+            bg_db.close()
+
+    thread = threading.Thread(target=_bg_generate, daemon=True)
+    thread.start()
+
+    return out
 
 
 def _spot_hex(db: Session, user: User, value: str | None, fallback: str) -> str:

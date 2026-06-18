@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   DndContext,
@@ -33,6 +33,7 @@ import {
   getJob,
   Job,
   listJobUploads,
+  pollOutputStatus,
   QueueItem,
   updateJob,
   uploadJobAsset,
@@ -364,6 +365,59 @@ export default function JobFiller() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [designerForKey, setDesignerForKey] = useState<string | null>(null);
+
+  // Track unsaved changes so we can warn before navigation and auto-save.
+  const [dirty, setDirty] = useState(false);
+  const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Warn user before closing/navigating away with unsaved changes.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
+  // Auto-save 5 seconds after last change (debounced).
+  const triggerAutoSave = useCallback(() => {
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(async () => {
+      if (!job) return;
+      try {
+        const queue: QueueItem[] = rows.map((r) => ({
+          asset_id: r.asset.id,
+          quantity: r.qty,
+          rotation_deg: r.rotationDeg,
+          fit_mode: r.fitMode,
+          x_mm: r.xMm,
+          y_mm: r.yMm,
+          w_mm: r.wMm,
+          h_mm: r.hMm,
+          filter_id: r.filterId || "none",
+          safe_crop: r.safeCrop,
+          page_index: r.pageIndex || 0,
+        }));
+        const result = await applyJobQueue(job.id, queue);
+        if (result._warning) {
+          setErr({ message: result._warning, suggestsUpgrade: false });
+        }
+        setJob(result);
+        setDirty(false);
+      } catch {
+        // Silent fail for auto-save — user can still manually save.
+      }
+    }, 5000);
+  }, [job, rows]);
+
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    };
+  }, []);
   // Bidirectional "find me" link between the layout preview (left) and
   // the queue rows (right). When set, the matching queue row gets a
   // violet ring + scrolls into view, AND the matching slot in the
@@ -627,12 +681,16 @@ export default function JobFiller() {
         },
       ];
     });
+    setDirty(true);
+    triggerAutoSave();
   }
 
   function updateQty(key: string, qty: number) {
     setRows((prev) =>
       prev.map((r) => (r.key === key ? { ...r, qty: Math.max(1, qty) } : r))
     );
+    setDirty(true);
+    triggerAutoSave();
   }
 
   function rotateRow(key: string) {
@@ -641,6 +699,8 @@ export default function JobFiller() {
         r.key === key ? { ...r, rotationDeg: (r.rotationDeg + 90) % 360 } : r
       )
     );
+    setDirty(true);
+    triggerAutoSave();
   }
 
   function setRowPage(key: string, pageIndex: number) {
@@ -649,6 +709,8 @@ export default function JobFiller() {
         r.key === key ? { ...r, pageIndex: Math.max(0, pageIndex) } : r
       )
     );
+    setDirty(true);
+    triggerAutoSave();
   }
 
   function applyDesignerToRow(key: string, p: DesignerPlacement) {
@@ -669,10 +731,14 @@ export default function JobFiller() {
           : r
       )
     );
+    setDirty(true);
+    triggerAutoSave();
   }
 
   function removeRow(key: string) {
     setRows((prev) => prev.filter((r) => r.key !== key));
+    setDirty(true);
+    triggerAutoSave();
   }
 
   async function removeRowAndAsset(row: QueueRow) {
@@ -705,6 +771,8 @@ export default function JobFiller() {
       if (from < 0 || to < 0) return items;
       return arrayMove(items, from, to);
     });
+    setDirty(true);
+    triggerAutoSave();
   }
 
   async function onFiles(files: FileList | File[]) {
@@ -728,6 +796,7 @@ export default function JobFiller() {
 
   async function saveQueue(): Promise<Job | null> {
     if (!job) return null;
+    if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     const queue: QueueItem[] = rows.map((r) => ({
       asset_id: r.asset.id,
       quantity: r.qty,
@@ -741,9 +810,16 @@ export default function JobFiller() {
       safe_crop: r.safeCrop,
       page_index: r.pageIndex || 0,
     }));
-    const updated = await applyJobQueue(job.id, queue);
-    setJob(updated);
-    return updated;
+    const result = await applyJobQueue(job.id, queue);
+    if (result._warning) {
+      setErr({
+        message: result._warning,
+        suggestsUpgrade: false,
+      });
+    }
+    setJob(result);
+    setDirty(false);
+    return result;
   }
 
   async function onSaveDraft() {
@@ -772,6 +848,29 @@ export default function JobFiller() {
         mark_spot_color: markSpot,
       });
 
+      if (out.status === "processing") {
+        // Heavy job — poll until ready
+        const pollInterval = 3000;
+        const maxAttempts = 120; // 6 minutes max
+        let attempts = 0;
+        const poll = async (): Promise<typeof out> => {
+          attempts++;
+          if (attempts > maxAttempts) {
+            throw new Error("PDF generation is taking longer than expected. Check your outputs page in a few minutes.");
+          }
+          await new Promise((r) => setTimeout(r, pollInterval));
+          const status = await pollOutputStatus(out.id);
+          if (status.status === "processing") return poll();
+          if (status.status === "failed") {
+            throw new Error("PDF generation failed. This has been logged and we'll investigate.");
+          }
+          return status;
+        };
+        const finalOut = await poll();
+        navigate(`/app/outputs?highlight=${finalOut.id}`);
+        return;
+      }
+
       // Surface colour-swap results so the user knows whether their
       // configured swaps actually fired. Quiet success (no swaps, or
       // some applied) just navigates. The interesting case is "swaps
@@ -795,8 +894,6 @@ export default function JobFiller() {
           return;
         }
       } else if (rep && rep.swaps_applied > 0) {
-        // Brief, non-blocking confirmation. Console too so power users
-        // can see the breakdown without us inventing a toast component.
         console.info("Colour swap report", rep);
       }
 
@@ -911,7 +1008,7 @@ export default function JobFiller() {
             disabled={busy}
             className="rounded-lg border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600 disabled:opacity-40"
           >
-            {savedHint ? "Saved ✓" : "Save draft"}
+            {savedHint ? "Saved ✓" : dirty ? "Save draft •" : "Save draft"}
           </button>
           <button
             onClick={onExportCutLines}

@@ -5,6 +5,7 @@ import { MeProvider } from "./auth/MeProvider";
 import { RequireAdmin } from "./auth/RequireAdmin";
 import { RequireAuth } from "./auth/RequireAuth";
 import { RequireProfile } from "./auth/RequireProfile";
+import { RequireWidget } from "./auth/RequireWidget";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import LeadChatWidget from "./components/LeadChatWidget";
 import { RouteFallback } from "./components/RouteFallback";
@@ -42,9 +43,34 @@ const Pricing = lazyWithRetry(() => import("./pages/Pricing"));
 const Terms = lazyWithRetry(() => import("./pages/Terms"));
 const BillingSuccess = lazyWithRetry(() => import("./pages/BillingSuccess"));
 const AffiliateSignup = lazyWithRetry(() => import("./pages/AffiliateSignup"));
+// Public marketing content surface (SEO). Lazy-loaded so the content registry
+// and rendered pages never ship in the authenticated app bundle. The SSR
+// prerender (entry-ssr.tsx) imports the same pages eagerly at build time.
+const Resources = lazyWithRetry(() => import("./pages/Resources"));
+const CollectionIndex = lazyWithRetry(() => import("./pages/CollectionIndex"));
+const DocPage = lazyWithRetry(() => import("./pages/DocPage"));
+const ToolsIndex = lazyWithRetry(() => import("./pages/tools/ToolsIndex"));
+const GangSheetCalculator = lazyWithRetry(
+  () => import("./pages/tools/GangSheetCalculator")
+);
+const BleedDpiCalculator = lazyWithRetry(
+  () => import("./pages/tools/BleedDpiCalculator")
+);
 const AffiliateDashboard = lazyWithRetry(() => import("./pages/AffiliateDashboard"));
 const AdminAffiliate = lazyWithRetry(() => import("./pages/AdminAffiliate"));
 const AdminCatalogues = lazyWithRetry(() => import("./pages/AdminCatalogues"));
+// Sticker-widget merchant admin (Studio feature). Its own chunk; guarded by
+// RequireWidget so only entitled merchants load it.
+const WidgetHub = lazyWithRetry(() => import("./pages/widget/WidgetHub"));
+const WidgetProducts = lazyWithRetry(() => import("./pages/widget/WidgetProducts"));
+const WidgetPricing = lazyWithRetry(() => import("./pages/widget/WidgetPricing"));
+const WidgetKeys = lazyWithRetry(() => import("./pages/widget/WidgetKeys"));
+const WidgetSettingsPage = lazyWithRetry(() => import("./pages/widget/WidgetSettingsPage"));
+const WidgetOrders = lazyWithRetry(() => import("./pages/widget/WidgetOrders"));
+const WidgetPreview = lazyWithRetry(() => import("./pages/widget/WidgetPreview"));
+// Standalone embeddable widget — no app shell or auth guard; authenticates with
+// a widget session token from the URL. Loaded in an iframe by stores + preview.
+const EmbedSticker = lazyWithRetry(() => import("./embed/EmbedSticker"));
 
 export default function App() {
   return (
@@ -59,6 +85,33 @@ export default function App() {
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/terms" element={<Terms />} />
               <Route path="/affiliate" element={<AffiliateSignup />} />
+
+              {/* Public content surface (SEO). Crawlable; served as static
+                  prerendered HTML and hydrated client-side. */}
+              <Route path="/resources" element={<Resources />} />
+              <Route path="/guides" element={<CollectionIndex collection="guides" />} />
+              <Route path="/guides/:slug" element={<DocPage collection="guides" />} />
+              <Route path="/blog" element={<CollectionIndex collection="blog" />} />
+              <Route path="/blog/:slug" element={<DocPage collection="blog" />} />
+              <Route path="/glossary" element={<CollectionIndex collection="glossary" />} />
+              <Route path="/glossary/:slug" element={<DocPage collection="glossary" />} />
+              <Route path="/compare" element={<CollectionIndex collection="compare" />} />
+              <Route path="/compare/:slug" element={<DocPage collection="compare" />} />
+              <Route path="/features/:slug" element={<DocPage collection="features" />} />
+              <Route path="/tools" element={<ToolsIndex />} />
+              <Route
+                path="/tools/gang-sheet-calculator"
+                element={<GangSheetCalculator />}
+              />
+              <Route
+                path="/tools/bleed-dpi-calculator"
+                element={<BleedDpiCalculator />}
+              />
+              {/* Embeddable sticker designer. No auth/profile guard and no app
+                  shell — it runs inside an iframe and authenticates purely with
+                  the widget session token in its URL. */}
+              <Route path="/embed/sticker" element={<EmbedSticker />} />
+
               <Route
                 path="/billing/success"
                 element={
@@ -111,6 +164,62 @@ export default function App() {
                 <Route path="settings" element={<Settings />} />
                 <Route path="affiliate" element={<AffiliateDashboard />} />
                 <Route path="help" element={<Help />} />
+                <Route
+                  path="widget"
+                  element={
+                    <RequireWidget>
+                      <WidgetHub />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/products"
+                  element={
+                    <RequireWidget>
+                      <WidgetProducts />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/pricing"
+                  element={
+                    <RequireWidget>
+                      <WidgetPricing />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/orders"
+                  element={
+                    <RequireWidget>
+                      <WidgetOrders />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/keys"
+                  element={
+                    <RequireWidget>
+                      <WidgetKeys />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/settings"
+                  element={
+                    <RequireWidget>
+                      <WidgetSettingsPage />
+                    </RequireWidget>
+                  }
+                />
+                <Route
+                  path="widget/preview"
+                  element={
+                    <RequireWidget>
+                      <WidgetPreview />
+                    </RequireWidget>
+                  }
+                />
                 <Route
                   path="admin"
                   element={

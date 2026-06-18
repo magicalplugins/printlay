@@ -14,7 +14,9 @@ from backend.models.color_profile import ColorProfile
 from backend.models.cutter_preset import CutterPreset
 from backend.models.job import Job
 from backend.models.lead import Lead
+from backend.models.merchant_api_key import MerchantApiKey
 from backend.models.output import Output
+from backend.models.print_order import PrintOrder
 from backend.models.spot_color import SpotColor
 from backend.models.spot_colour import SpotColour
 from backend.models.sticker_sheet import StickerSheet
@@ -24,6 +26,13 @@ from backend.models.support_grant import SupportGrant
 from backend.models.template import Template
 from backend.models.trial_invite import TrialInvite
 from backend.models.user import User
+from backend.models.webhook_event import WebhookEvent
+from backend.models.widget import (
+    PricingProfile,
+    Product,
+    WidgetSession,
+    WidgetSettings,
+)
 
 __all__ = [
     "AffiliateClick",
@@ -42,7 +51,11 @@ __all__ = [
     "CutterPreset",
     "Job",
     "Lead",
+    "MerchantApiKey",
     "Output",
+    "PricingProfile",
+    "PrintOrder",
+    "Product",
     "SpotColor",
     "SpotColour",
     "StickerSheet",
@@ -52,4 +65,7 @@ __all__ = [
     "Template",
     "TrialInvite",
     "User",
+    "WebhookEvent",
+    "WidgetSession",
+    "WidgetSettings",
 ]

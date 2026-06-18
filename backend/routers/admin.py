@@ -725,7 +725,17 @@ def get_user_detail(
         "last_pdf_at": last_pdf_at.isoformat() if last_pdf_at else None,
         "last_job_at": last_job_at.isoformat() if last_job_at else None,
         "recent_jobs": [
-            {"id": str(j.id), "name": j.name, "created_at": j.created_at.isoformat()}
+            {
+                "id": str(j.id),
+                "name": j.name,
+                "created_at": j.created_at.isoformat(),
+                "template_id": str(j.template_id),
+                "slots_filled": len(j.assignments or {}),
+                "slots_total": len(j.slot_order or []),
+                "unique_assets": len(set(
+                    a.get("asset_id") for a in (j.assignments or {}).values() if a.get("asset_id")
+                )),
+            }
             for j in recent_jobs
         ],
         "recent_outputs": [
@@ -740,6 +750,195 @@ def get_user_detail(
             for o in recent_outputs
         ],
         "catalogue_subscriptions": sub_cats,
+    }
+
+
+@router.post("/users/{user_id}/jobs/{job_id}/clone", response_model=dict)
+def clone_job_to_admin(
+    user_id: str,
+    job_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Clone a user's job (template + assets + assignments) into the admin's
+    own account so they can test/debug it locally.
+
+    Bytes are physically copied (not key-shared) so the admin's deletion of
+    the imported job never reaches into the source user's storage.
+    """
+    import logging
+    import uuid as _uuid
+    from backend.services import storage
+
+    log = logging.getLogger(__name__)
+
+    try:
+        src_user_uuid = _uuid.UUID(user_id)
+        src_job_uuid = _uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid user_id or job_id")
+
+    source_job = db.query(Job).filter(
+        Job.id == src_job_uuid,
+        Job.user_id == src_user_uuid,
+    ).one_or_none()
+    if source_job is None:
+        raise HTTPException(404, "Job not found")
+
+    source_tpl = db.query(Template).filter(
+        Template.id == source_job.template_id
+    ).one_or_none()
+    if source_tpl is None:
+        raise HTTPException(404, "Template not found")
+
+    # 1) Clone template (file + row).
+    new_tpl_id = _uuid.uuid4()
+    new_tpl_r2_key = f"users/{admin.id}/templates/{new_tpl_id}/source.pdf"
+    try:
+        tpl_bytes = storage.get_bytes(source_tpl.r2_key)
+        storage.put_bytes(new_tpl_r2_key, tpl_bytes, content_type="application/pdf")
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to copy template file: {exc}")
+
+    new_tpl = Template(
+        id=new_tpl_id,
+        user_id=admin.id,
+        name=f"[Import] {source_tpl.name}",
+        # `source` is NOT NULL on the Template table - mirror the original
+        # so generated-vs-uploaded distinctions are preserved end-to-end.
+        source=source_tpl.source,
+        units=source_tpl.units,
+        r2_key=new_tpl_r2_key,
+        page_width=source_tpl.page_width,
+        page_height=source_tpl.page_height,
+        shapes=source_tpl.shapes,
+        has_ocg=source_tpl.has_ocg,
+        positions_layer=source_tpl.positions_layer,
+        bleed_mm=source_tpl.bleed_mm,
+        safe_mm=source_tpl.safe_mm,
+        registration_type=source_tpl.registration_type,
+        mark_offset_mm=source_tpl.mark_offset_mm,
+        max_zone_length_mm=source_tpl.max_zone_length_mm,
+        generation_params=source_tpl.generation_params,
+    )
+    db.add(new_tpl)
+
+    # 2) Pre-allocate the new job id so we can attach cloned assets to it
+    # before commit. Without this, JobFiller's listJobUploads filter
+    # (`Asset.job_id == job.id`) returns empty - the same bug the in-repo
+    # `duplicate_job` works around.
+    new_job_id = _uuid.uuid4()
+
+    # 3) Clone assets referenced by the source job's assignments.
+    all_asset_ids: set[_uuid.UUID] = set()
+    for assignment in (source_job.assignments or {}).values():
+        aid = assignment.get("asset_id")
+        if not aid:
+            continue
+        try:
+            all_asset_ids.add(_uuid.UUID(aid))
+        except (ValueError, TypeError):
+            log.warning("Skipping malformed asset_id %r on job %s", aid, src_job_uuid)
+
+    asset_id_map: dict[str, str] = {}
+    asset_copy_failures: list[str] = []
+    if all_asset_ids:
+        # Defense-in-depth: filter by the source user too so a forged
+        # assignment can't drag bytes out of an unrelated user via this
+        # admin endpoint.
+        source_assets = (
+            db.query(Asset)
+            .filter(Asset.id.in_(all_asset_ids), Asset.user_id == src_user_uuid)
+            .all()
+        )
+        for sa in source_assets:
+            new_asset_id = _uuid.uuid4()
+            new_asset_r2_key = f"users/{admin.id}/assets/{new_asset_id}/source.pdf"
+            try:
+                asset_bytes = storage.get_bytes(sa.r2_key)
+                storage.put_bytes(new_asset_r2_key, asset_bytes, content_type="application/pdf")
+            except Exception as exc:
+                log.warning("Failed to copy asset %s bytes: %s", sa.id, exc)
+                asset_copy_failures.append(sa.name)
+                continue
+
+            new_asset = Asset(
+                id=new_asset_id,
+                user_id=admin.id,
+                category_id=None,
+                # Attach to the new job upfront so JobFiller's per-job
+                # upload listing sees these assets.
+                job_id=new_job_id,
+                name=f"[Import] {sa.name}",
+                kind=sa.kind,
+                r2_key=new_asset_r2_key,
+                width_pt=sa.width_pt,
+                height_pt=sa.height_pt,
+                file_size=sa.file_size,
+                page_count=sa.page_count,
+                # Skip thumbnail bytes - regenerated lazily on first view -
+                # and skip `r2_key_original` (only needed for re-export of
+                # the source format, which doesn't apply to imports).
+                cut_contour_json=sa.cut_contour_json,
+            )
+            db.add(new_asset)
+            asset_id_map[str(sa.id)] = str(new_asset_id)
+
+    # 4) Clone the job with remapped asset ids.
+    new_assignments: dict[str, dict] = {}
+    for slot_key, assignment in (source_job.assignments or {}).items():
+        new_a = dict(assignment)
+        old_aid = new_a.get("asset_id")
+        if old_aid and old_aid in asset_id_map:
+            new_a["asset_id"] = asset_id_map[old_aid]
+        new_assignments[slot_key] = new_a
+
+    new_job = Job(
+        id=new_job_id,
+        user_id=admin.id,
+        template_id=new_tpl_id,
+        name=f"[Import] {source_job.name}",
+        slot_order=list(source_job.slot_order or []),
+        assignments=new_assignments,
+        # Source colour profile is owned by the source user - skip it.
+        # Draft swaps are job-local data, safe to copy.
+        color_profile_id=None,
+        color_swaps_draft=list(source_job.color_swaps_draft or []) or None,
+    )
+    db.add(new_job)
+    db.commit()
+
+    msg = (
+        f"Job '{source_job.name}' imported with "
+        f"{len(asset_id_map)} asset{'s' if len(asset_id_map) != 1 else ''}."
+    )
+    if asset_copy_failures:
+        head = ", ".join(asset_copy_failures[:3])
+        msg += (
+            f" {len(asset_copy_failures)} asset(s) failed to copy"
+            f"{': ' + head if asset_copy_failures else ''}."
+        )
+
+    record(
+        db,
+        admin,
+        "admin.job_cloned",
+        target_type="job",
+        target_id=new_job_id,
+        payload={
+            "src_user_id": str(src_user_uuid),
+            "src_job_id": str(src_job_uuid),
+            "assets_cloned": len(asset_id_map),
+            "assets_failed": len(asset_copy_failures),
+        },
+    )
+
+    return {
+        "job_id": str(new_job_id),
+        "template_id": str(new_tpl_id),
+        "assets_cloned": len(asset_id_map),
+        "assets_failed": len(asset_copy_failures),
+        "message": msg,
     }
 
 

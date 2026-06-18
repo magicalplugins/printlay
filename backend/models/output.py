@@ -27,3 +27,7 @@ class Output(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     slots_filled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     slots_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="ready", server_default="ready"
+    )
+    """'processing' while background generation runs, 'ready' when downloadable, 'failed' on error."""

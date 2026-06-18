@@ -8,6 +8,7 @@ import {
 } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
 import { useMe } from "../auth/MeProvider";
+import { getBillingStatus } from "../api/billing";
 import ImpersonationBanner from "./app/ImpersonationBanner";
 import SupportAccessModal from "./app/SupportAccessModal";
 import TrialBanner from "./app/TrialBanner";
@@ -20,7 +21,6 @@ const NAV = [
   { to: "/app/catalogue", label: "Catalogue" },
   { to: "/app/sheets", label: "Sheets" },
   { to: "/app/outputs", label: "Outputs" },
-  { to: "/app/affiliate", label: "Affiliate" },
   { to: "/app/settings", label: "Settings" },
   { to: "/app/help", label: "Help" },
 ];
@@ -31,6 +31,20 @@ export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Whether to surface the Sticker Widget area (Studio feature). Fetched once;
+  // admins always have it. Failure is silent — the link just stays hidden.
+  const [hasWidget, setHasWidget] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getBillingStatus()
+      .then((s) => !cancelled && setHasWidget(s.features.includes("widget_access")))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const showWidget = hasWidget || !!me?.is_admin;
 
   // Auto-close on route change so navigating from inside the drawer
   // doesn't leave the overlay sitting on top of the destination page.
@@ -87,6 +101,20 @@ export default function Layout() {
                 {n.label}
               </NavLink>
             ))}
+            {showWidget && (
+              <NavLink
+                to="/app/widget"
+                className={({ isActive }) =>
+                  `rounded-md px-3 py-1.5 transition ${
+                    isActive
+                      ? "bg-neutral-800 text-white"
+                      : "text-neutral-400 hover:text-white"
+                  }`
+                }
+              >
+                Widget
+              </NavLink>
+            )}
             {me?.is_admin && (
               <NavLink
                 to="/app/admin"
@@ -159,6 +187,7 @@ export default function Layout() {
         onSignOut={onSignOut}
         email={session?.user.email ?? null}
         isAdmin={me?.is_admin ?? false}
+        showWidget={showWidget}
       />
 
       <SupportAccessModal />
@@ -168,6 +197,20 @@ export default function Layout() {
       <main className="flex-1">
         <Outlet />
       </main>
+
+      <footer className="border-t border-neutral-900 mt-auto">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
+          <span>© {new Date().getFullYear()} Printlay</span>
+          <NavLink
+            to="/app/affiliate"
+            className={({ isActive }) =>
+              `transition ${isActive ? "text-neutral-300" : "hover:text-neutral-300"}`
+            }
+          >
+            Affiliate programme →
+          </NavLink>
+        </div>
+      </footer>
     </div>
   );
 }
@@ -222,12 +265,14 @@ function MobileMenu({
   onSignOut,
   email,
   isAdmin,
+  showWidget,
 }: {
   open: boolean;
   onClose: () => void;
   onSignOut: () => void;
   email: string | null;
   isAdmin: boolean;
+  showWidget: boolean;
 }) {
   return (
     <>
@@ -288,6 +333,32 @@ function MobileMenu({
               </svg>
             </NavLink>
           ))}
+
+          {showWidget && (
+            <NavLink
+              to="/app/widget"
+              onClick={onClose}
+              className={({ isActive }) =>
+                `flex items-center justify-between rounded-xl px-4 py-3.5 text-base transition ${
+                  isActive
+                    ? "bg-neutral-900 text-white border border-neutral-800"
+                    : "text-neutral-300 hover:bg-neutral-900 hover:text-white"
+                }`
+              }
+            >
+              <span>Widget</span>
+              <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden className="text-neutral-600">
+                <path
+                  d="M5 3l4 4-4 4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </NavLink>
+          )}
 
           {isAdmin && (
             <>

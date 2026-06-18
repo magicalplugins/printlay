@@ -95,8 +95,12 @@ export type QueueItem = {
   page_index?: number;
 };
 
+export interface QueueResult extends Job {
+  _warning?: string;
+}
+
 export function applyJobQueue(id: string, queue: QueueItem[]) {
-  return api<Job>(`/api/jobs/${id}/queue`, {
+  return api<QueueResult>(`/api/jobs/${id}/queue`, {
     method: "POST",
     body: JSON.stringify({ queue }),
   });
@@ -136,6 +140,7 @@ export type GenerateResponse = {
   file_size: number;
   slots_filled: number;
   slots_total: number;
+  status: "ready" | "processing" | "failed";
   created_at: string;
   color_swap_report: ColorSwapReport | null;
 };
@@ -192,4 +197,8 @@ export function generateOutput(id: string, options: GenerateOptions = {}) {
         })
       : undefined,
   });
+}
+
+export function pollOutputStatus(outputId: string) {
+  return api<GenerateResponse>(`/api/outputs/${outputId}/status`);
 }

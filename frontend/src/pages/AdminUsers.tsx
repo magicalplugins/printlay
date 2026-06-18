@@ -1,10 +1,12 @@
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AdminUserRow,
   UserDetail,
+  UserDetailJob,
   UserPatch,
+  cloneJobToAdmin,
   deleteAdminUser,
   getAdminUsers,
   getUserDetail,
@@ -752,11 +754,7 @@ function UserDrawer({
               ) : (
                 <ul className="space-y-1 text-sm">
                   {data.recent_jobs.map((j) => (
-                    <li key={j.id}
-                      className="flex items-center justify-between border-b border-neutral-900 py-1.5">
-                      <span className="truncate">{j.name}</span>
-                      <span className="text-xs text-neutral-500">{formatRelative(j.created_at)}</span>
-                    </li>
+                    <JobRow key={j.id} job={j} userId={data.id} />
                   ))}
                 </ul>
               )}
@@ -956,5 +954,90 @@ function SupportAccessSection({
         </div>
       )}
     </section>
+  );
+}
+
+function JobRow({ job, userId }: { job: UserDetailJob; userId: string }) {
+  const [hover, setHover] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLLIElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const timeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleEnter() {
+    if (timeout.current) clearTimeout(timeout.current);
+    if (triggerRef.current) {
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setHover(true);
+  }
+
+  function handleLeave() {
+    if (importing) return;
+    timeout.current = setTimeout(() => setHover(false), 200);
+  }
+
+  async function handleImport() {
+    setImporting(true);
+    try {
+      const res = await cloneJobToAdmin(userId, job.id);
+      setResult(res.message);
+    } catch (e) {
+      setResult(`Import failed: ${apiErrMessage(e)}`);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <li
+      ref={triggerRef}
+      className="flex items-center justify-between border-b border-neutral-900 py-1.5 cursor-default"
+      onMouseEnter={handleEnter}
+      onMouseLeave={handleLeave}
+    >
+      <span className="truncate">{job.name}</span>
+      <span className="text-xs text-neutral-500">{formatRelative(job.created_at)}</span>
+
+      {hover && pos && (
+        <div
+          className="fixed z-[9999] w-64 rounded-lg border border-neutral-700 bg-neutral-900 shadow-xl p-3 space-y-2"
+          style={{ top: pos.top, left: pos.left }}
+          onMouseEnter={() => { if (timeout.current) clearTimeout(timeout.current); }}
+          onMouseLeave={handleLeave}
+        >
+          <div className="text-xs text-neutral-300 font-medium truncate">{job.name}</div>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div>
+              <div className="text-lg font-semibold text-white">{job.slots_filled}</div>
+              <div className="text-[10px] text-neutral-500 uppercase">Filled</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold text-white">{job.slots_total}</div>
+              <div className="text-[10px] text-neutral-500 uppercase">Slots</div>
+            </div>
+            <div>
+              <div className="text-lg font-semibold text-white">{job.unique_assets}</div>
+              <div className="text-[10px] text-neutral-500 uppercase">Assets</div>
+            </div>
+          </div>
+          {result ? (
+            <div className="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 rounded px-2 py-1">
+              {result}
+            </div>
+          ) : (
+            <button
+              onClick={handleImport}
+              disabled={importing}
+              className="w-full rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white text-xs font-medium py-1.5 transition-colors"
+            >
+              {importing ? "Importing…" : "Import to my account"}
+            </button>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

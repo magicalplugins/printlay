@@ -24,9 +24,11 @@ const root = resolve(__dirname, "..");
 const distDir = join(root, "dist");
 const ssrEntry = join(root, "dist-ssr", "entry-ssr.js");
 
-const { render, routes } = await import(ssrEntry);
+const { render, routes, sitemap } = await import(ssrEntry);
 
 const template = readFileSync(join(distDir, "index.html"), "utf-8");
+
+const SITE = "https://printlay.co.uk";
 
 /** Remove the template's default SEO tags so per-route tags don't duplicate. */
 function stripDefaultHead(html) {
@@ -62,3 +64,16 @@ for (const route of routes) {
 }
 
 console.log(`Prerender complete: ${count} route(s).`);
+
+// Generate sitemap.xml from the same route set (overwrites the static copy
+// from public/). robots.txt points crawlers here.
+const entries = sitemap();
+const urls = entries
+  .map(
+    (e) =>
+      `  <url>\n    <loc>${SITE}${e.path}</loc>\n    <lastmod>${e.lastmod}</lastmod>\n    <changefreq>${e.changefreq}</changefreq>\n    <priority>${e.priority.toFixed(1)}</priority>\n  </url>`
+  )
+  .join("\n");
+const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`;
+writeFileSync(join(distDir, "sitemap.xml"), sitemapXml, "utf-8");
+console.log(`sitemap.xml written: ${entries.length} URL(s).`);

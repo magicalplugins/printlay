@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from backend.routers import spot_colours as spot_colours_router
 from backend.routers import sticker as sticker_router
 from backend.routers import support_access as support_access_router
 from backend.routers import templates as templates_router
+from backend.routers import widget as widget_router
+from backend.routers import widget_admin as widget_admin_router
 
 settings = get_settings()
 
@@ -42,6 +45,27 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_log = logging.getLogger("printlay.unhandled")
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all for unhandled exceptions — return a clean JSON error instead
+    of a raw traceback, and log full details for debugging."""
+    _log.exception("Unhandled %s on %s %s", type(exc).__name__, request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_error",
+                "message": (
+                    "Something went wrong on our end. This has been logged "
+                    "and we'll look into it. Please try again."
+                ),
+            }
+        },
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -50,6 +74,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---- Per-merchant CORS for the embeddable widget ----
+# Merchant shop domains are added at runtime (widget_settings.allowed_origins),
+# so the static CORS list above can't cover them. This scoped middleware only
+# touches /api/v1/widget/* and /embed/* requests: if the Origin is in any
+# merchant's allow-list (cached), it reflects the CORS headers (incl. preflight).
+# Other paths are untouched and handled by the global CORSMiddleware above.
+from starlette.responses import Response as _Response  # noqa: E402
+
+from backend.services import widget_origins as _widget_origins  # noqa: E402
+
+_WIDGET_CORS_PREFIXES = ("/api/v1/widget", "/embed")
+
+
+@app.middleware("http")
+async def widget_cors_middleware(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith(_WIDGET_CORS_PREFIXES):
+        return await call_next(request)
+
+    origin = request.headers.get("origin")
+    allowed = _widget_origins.is_allowed(origin)
+
+    if request.method == "OPTIONS" and origin is not None:
+        # Answer the CORS preflight ourselves so the global middleware doesn't
+        # reject an origin it doesn't know about.
+        resp = _Response(status_code=200 if allowed else 403)
+    else:
+        resp = await call_next(request)
+
+    if allowed and origin is not None:
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+        resp.headers["Vary"] = "Origin"
+    return resp
 
 app.include_router(auth_router.router)
 app.include_router(billing_router.router)
@@ -63,6 +125,8 @@ app.include_router(outputs_router.router)
 app.include_router(leads_router.router)
 app.include_router(invites_router.router)
 app.include_router(sticker_router.router)
+app.include_router(widget_router.router)
+app.include_router(widget_admin_router.router)
 app.include_router(sheet_builder_router.router)
 app.include_router(support_access_router.admin_router)
 app.include_router(support_access_router.user_router)

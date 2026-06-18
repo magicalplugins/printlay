@@ -1,8 +1,5 @@
 User-agent: *
-Allow: /$
-Allow: /pricing
-Allow: /terms
-Allow: /privacy
+Allow: /
 
 # The authenticated app and auth pages carry no public SEO value.
 Disallow: /app/

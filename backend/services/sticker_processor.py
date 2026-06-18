@@ -89,6 +89,7 @@ def process_sticker(
     beautify_smooth: float = 0.0,
     beautify_eyes: float = 0.0,
     beautify_tone: float = 0.0,
+    corner_radius_frac: float | None = None,
 ) -> StickerProcessResult:
     """Process an uploaded image into a sticker with cutline.
 
@@ -137,6 +138,7 @@ def process_sticker(
         dpi=work_dpi,
         mode=cutline_mode,
         precision=cutline_precision,
+        corner_radius_frac=corner_radius_frac,
         bleed_mm=bleed_mm,
     )
 
@@ -170,6 +172,7 @@ def regenerate_cutline(
     beautify_smooth: float = 0.0,
     beautify_eyes: float = 0.0,
     beautify_tone: float = 0.0,
+    corner_radius_frac: float | None = None,
 ) -> StickerProcessResult:
     """Re-run the look (filter/beautify) + cut-line step on an already
     background-removed image.
@@ -197,6 +200,7 @@ def regenerate_cutline(
         dpi=dpi,
         mode=cutline_mode,
         precision=cutline_precision,
+        corner_radius_frac=corner_radius_frac,
         bleed_mm=bleed_mm,
     )
     preview_png = _render_preview(cutline)

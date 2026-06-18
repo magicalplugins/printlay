@@ -18,7 +18,7 @@ import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
 import { useMe } from "../auth/MeProvider";
 
 type Step = "upload" | "options" | "canvas" | "processing" | "preview" | "saving" | "done";
-type CutlineMode = "contour" | "rectangle" | "face";
+type CutlineMode = "contour" | "rectangle" | "face" | "ellipse";
 type Precision = "tight" | "medium";
 
 export default function StickerEditor() {
@@ -455,7 +455,7 @@ function OptionsStep({
         <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
           Sticker type
         </legend>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <ModeCard
             active={cutlineMode === "contour"}
             onClick={() => setCutlineMode("contour")}
@@ -464,6 +464,17 @@ function OptionsStep({
             icon={
               <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M16 4c-6 0-10 5-10 12s4 12 10 12 10-5 10-12S22 4 16 4z" strokeDasharray="3 2" />
+              </svg>
+            }
+          />
+          <ModeCard
+            active={cutlineMode === "ellipse"}
+            onClick={() => setCutlineMode("ellipse")}
+            title="Circle / Oval"
+            desc="Remove background and cut a clean circle or oval"
+            icon={
+              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <ellipse cx="16" cy="16" rx="12" ry="9" strokeDasharray="3 2" />
               </svg>
             }
           />
@@ -513,6 +524,8 @@ function OptionsStep({
           ? "Set up canvas →"
           : cutlineMode === "face"
           ? "Create face sticker"
+          : cutlineMode === "ellipse"
+          ? "Cut circle / oval"
           : "Remove background & generate"}
       </button>
     </div>

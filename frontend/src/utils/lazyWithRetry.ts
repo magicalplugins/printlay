@@ -70,7 +70,9 @@ function forceReload(): void {
  * sessionStorage guard prevents reload loops while still letting users
  * recover automatically on the next genuine deploy.
  */
-export function lazyWithRetry<T extends ComponentType<unknown>>(
+// Constraint mirrors React's own lazy() signature (ComponentType<any>) so
+// prop types survive the lazy boundary — e.g. <DocPage collection="guides" />.
+export function lazyWithRetry<T extends ComponentType<any>>(
   factory: () => Promise<{ default: T }>
 ): React.LazyExoticComponent<T> {
   return lazy(async () => {

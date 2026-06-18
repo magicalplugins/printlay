@@ -36,6 +36,7 @@ from backend.services import (
     cut_lines,
     entitlements,
     pdf_compositor,
+    r2_cache,
     storage,
     storage_usage,
     telemetry,
@@ -358,6 +359,16 @@ async def upload_job_asset(
     except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
+    # Generate placement-optimised PDF (300 DPI) for faster composition
+    key_placement = None
+    placement_bytes = asset_pipeline.generate_placement_pdf(norm.pdf_bytes)
+    if placement_bytes:
+        key_placement = f"{base}/placement.pdf"
+        try:
+            storage.put_bytes(key_placement, placement_bytes, content_type="application/pdf")
+        except Exception:
+            key_placement = None
+
     asset = Asset(
         id=asset_id,
         user_id=user.id,
@@ -368,6 +379,7 @@ async def upload_job_asset(
         r2_key=key_pdf,
         r2_key_original=key_orig,
         thumbnail_r2_key=key_thumb if norm.thumbnail_jpg else None,
+        placement_r2_key=key_placement,
         width_pt=norm.width_pt,
         height_pt=norm.height_pt,
         file_size=len(norm.pdf_bytes),
@@ -925,7 +937,7 @@ def generate_output(
 def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Output:
     """Synchronous PDF generation for small jobs (under ASYNC_THRESHOLD unique assets)."""
     try:
-        template_bytes = storage.get_bytes(tpl.r2_key)
+        template_bytes = r2_cache.get_bytes(tpl.r2_key)
     except storage.StorageNotConfigured as exc:
         raise HTTPException(503, str(exc))
 
@@ -964,10 +976,11 @@ def _generate_sync(db: Session, user, job, tpl, opts: "GenerateOptions") -> Outp
             page_index=int(assignment.get("page_index") or 0),
         )
 
-    # Parallel download unique assets from R2
+    # Parallel download unique assets from R2 (prefer placement-optimised version)
     def _fetch_asset(asset_id: str) -> tuple[str, bytes]:
         asset = accessible[uuid.UUID(asset_id)]
-        return asset_id, storage.get_bytes(asset.r2_key)
+        r2_key = asset.placement_r2_key or asset.r2_key
+        return asset_id, r2_cache.get_bytes(r2_key)
 
     unique_ids = list(asset_id_to_slots.keys())
     try:
@@ -1165,14 +1178,14 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
     accessible = _accessible_assets(db, user, all_asset_ids) if all_asset_ids else {}
     asset_r2_keys: dict[str, str] = {}
     for aid_uuid, asset_obj in accessible.items():
-        asset_r2_keys[str(aid_uuid)] = asset_obj.r2_key
+        asset_r2_keys[str(aid_uuid)] = asset_obj.placement_r2_key or asset_obj.r2_key
 
     def _bg_generate():
         bg_db = get_session_factory()()
         try:
             from concurrent.futures import ThreadPoolExecutor
 
-            template_bytes = storage.get_bytes(tpl_r2_key)
+            template_bytes = r2_cache.get_bytes(tpl_r2_key)
 
             asset_pdfs: dict[int, bytes] = {}
             slot_transforms: dict[int, pdf_compositor.SlotTransform] = {}
@@ -1202,7 +1215,7 @@ def _generate_async(db: Session, user, job, tpl, opts: "GenerateOptions") -> Out
             unique_ids = list(asset_id_to_slots.keys())
 
             def _fetch(aid: str) -> tuple[str, bytes]:
-                return aid, storage.get_bytes(asset_r2_keys[aid])
+                return aid, r2_cache.get_bytes(asset_r2_keys[aid])
 
             with ThreadPoolExecutor(max_workers=8) as pool:
                 fetched = dict(pool.map(_fetch, unique_ids))

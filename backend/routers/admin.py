@@ -39,10 +39,12 @@ from backend.models.affiliate import AffiliateProfile
 from backend.models.trial_invite import generate_token
 from backend.services import (
     account_deletion,
+    asset_pipeline,
     entitlements,
     invite_email,
     messaging,
     secrets_store,
+    storage,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -1988,3 +1990,55 @@ def test_integration(
         error=(first.error if first else "No response from Twilio"),
         provider="twilio",
     )
+
+
+# ---------------------------------------------------------------------------
+# Placement PDF backfill
+# ---------------------------------------------------------------------------
+
+class BackfillResult(BaseModel):
+    processed: int = 0
+    generated: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+@router.post("/backfill-placement-pdfs", response_model=BackfillResult)
+def backfill_placement_pdfs(
+    limit: int = Query(100, ge=1, le=500),
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> BackfillResult:
+    """Generate placement PDFs for assets that don't have one yet."""
+    import logging
+    log = logging.getLogger(__name__)
+
+    assets = (
+        db.query(Asset)
+        .filter(Asset.placement_r2_key.is_(None))
+        .filter(Asset.r2_key.isnot(None))
+        .limit(limit)
+        .all()
+    )
+
+    result = BackfillResult()
+    for asset in assets:
+        result.processed += 1
+        try:
+            source_bytes = storage.get_bytes(asset.r2_key)
+            placement = asset_pipeline.generate_placement_pdf(source_bytes)
+            if placement is None:
+                result.skipped += 1
+                continue
+            placement_key = asset.r2_key.replace("/normalised.pdf", "/placement.pdf")
+            if placement_key == asset.r2_key:
+                placement_key = asset.r2_key + ".placement.pdf"
+            storage.put_bytes(placement_key, placement, content_type="application/pdf")
+            asset.placement_r2_key = placement_key
+            result.generated += 1
+        except Exception as e:
+            log.warning(f"Backfill failed for asset {asset.id}: {e}")
+            result.errors += 1
+
+    db.commit()
+    return result

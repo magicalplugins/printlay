@@ -91,6 +91,12 @@ class Asset(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """R2 prefix where the sticker's editable session files live (cutout.png,
     border.png, cutline.json, source.png). Present = sticker is re-editable."""
 
+    placement_r2_key: Mapped[Optional[str]] = mapped_column(
+        String(512), nullable=True
+    )
+    """R2 key for a 300 DPI placement-optimised PDF used during sheet
+    generation. Smaller than the full-res source, speeds up composition."""
+
 
 class CatalogueSubscription(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """A subscriber's opt-in to an official AssetCategory. Read-only access:

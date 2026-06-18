@@ -270,3 +270,56 @@ def normalise(
         page_count=max(1, page_count),
         original_bytes=original_bytes,
     )
+
+
+# Maximum dimension (in points) for placement-optimised PDFs.
+# At 300 DPI, a 200mm card is ~567pt. We cap at 800pt (~282mm) to cover
+# all practical sticker/card sizes while keeping file sizes small.
+_PLACEMENT_MAX_DIM_PT = 800.0
+_PLACEMENT_DPI = 300
+
+
+def generate_placement_pdf(source_pdf_bytes: bytes, page_index: int = 0) -> bytes | None:
+    """Create a 300 DPI rasterised version of a single page for fast composition.
+
+    Returns None if the source is already small enough (under 500KB) or if
+    rasterisation fails. The caller should store the result alongside the
+    full-resolution source and prefer it during PDF generation.
+    """
+    if len(source_pdf_bytes) < 512_000:
+        return None
+
+    try:
+        doc = pymupdf.open(stream=source_pdf_bytes, filetype="pdf")
+        if doc.page_count == 0:
+            return None
+        pidx = min(page_index, doc.page_count - 1)
+        page = doc[pidx]
+
+        pw = float(page.rect.width)
+        ph = float(page.rect.height)
+        if pw <= 0 or ph <= 0:
+            return None
+
+        scale = min(_PLACEMENT_MAX_DIM_PT / max(pw, ph), 1.0)
+        target_w = pw * scale
+        target_h = ph * scale
+
+        dpi_scale = _PLACEMENT_DPI / 72.0
+        mat = pymupdf.Matrix(dpi_scale * scale, dpi_scale * scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img_bytes = pix.tobytes("jpeg", jpg_quality=92)
+
+        img = Image.open(io.BytesIO(img_bytes))
+        out_pdf = io.BytesIO()
+        img_w_mm = target_w / 72.0 * 25.4
+        img_h_mm = target_h / 72.0 * 25.4
+        img.save(out_pdf, "PDF", resolution=_PLACEMENT_DPI)
+        result = out_pdf.getvalue()
+
+        if len(result) >= len(source_pdf_bytes) * 0.8:
+            return None
+
+        return result
+    except Exception:
+        return None

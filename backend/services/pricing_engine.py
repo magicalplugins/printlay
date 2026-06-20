@@ -13,9 +13,9 @@ onto sheets later. The estimate:
        how many fit per row, and the row height.
     2. length = ceil(qty / per_row) * row_height  → linear metres of media.
     3. media_cost = price_per_metre * length_m
-    4. + per-vinyl and per-finish surcharges (fractions of media cost)
+    4. + per-material and per-finish surcharges (flat per-metre values)
     5. + margin (percent markup)
-    6. - the highest matching quantity-break discount
+    6. - the highest matching metre-based volume discount
     7. + a flat handling fee, then clamped to the order minimum.
 
 All money is in the profile's currency. Pure functions — no DB or I/O — so the
@@ -35,8 +35,9 @@ class PriceInputs:
     margin_pct: float
     handling_fee: float
     min_order_price: float
-    vinyl_surcharge: float  # fraction, e.g. 0.15 = +15%
-    finish_surcharge: float  # fraction
+    min_length_m: float  # minimum billable length (0 = pro-rata, 1 = DTF)
+    vinyl_surcharge: float  # flat per-metre value (e.g. 2.0 = +2/m)
+    finish_surcharge: float  # flat per-metre value
 
 
 @dataclass(frozen=True)
@@ -50,8 +51,8 @@ class PriceBreakdown:
     per_row: int
     rows: int
     rotated: bool
-    vinyl_surcharge_pct: float
-    finish_surcharge_pct: float
+    vinyl_surcharge_per_m: float
+    finish_surcharge_per_m: float
     margin_pct: float
     quantity_discount_pct: float
     handling_fee: float
@@ -71,9 +72,6 @@ def _best_fit(
             return 0, 0, math.inf
         per_row = int((sheet_w + gap) // (dw + gap))
         if per_row < 1:
-            # Design is wider than the roll in this orientation — force one per
-            # row so we still return a (large) estimate rather than dividing by
-            # zero. Product max-size limits should normally prevent this.
             per_row = 1
         rows = math.ceil(qty / per_row)
         length = rows * (dh + gap)
@@ -86,19 +84,20 @@ def _best_fit(
     return upright[0], upright[1], upright[2], False
 
 
-def _quantity_discount(quantity_breaks, qty: int) -> float:
-    """Highest matching break's discount percent (0 if none)."""
+def _volume_discount(quantity_breaks, length_m: float) -> float:
+    """Highest matching metre-tier's discount percent (0 if none).
+    Falls back to qty-based matching for legacy profiles."""
     if not quantity_breaks:
         return 0.0
     best = 0.0
-    best_min = -1
+    best_min = -1.0
     for brk in quantity_breaks:
         try:
-            min_qty = int(brk.get("min_qty", 0))
+            min_qty = float(brk.get("min_qty", 0))
             disc = float(brk.get("discount_pct", 0))
         except (AttributeError, TypeError, ValueError):
             continue
-        if qty >= min_qty and min_qty > best_min:
+        if length_m >= min_qty and min_qty > best_min:
             best_min = min_qty
             best = disc
     return max(0.0, min(100.0, best))
@@ -120,14 +119,18 @@ def estimate(
     )
     length_m = length_mm / 1000.0
 
-    media_cost = max(0.0, inputs.price_per_metre) * length_m
+    # Enforce minimum billable length (e.g. 1m for DTF sheets)
+    billable_m = max(length_m, max(0.0, inputs.min_length_m))
 
-    surcharge_frac = max(0.0, inputs.vinyl_surcharge) + max(0.0, inputs.finish_surcharge)
-    after_surcharge = media_cost * (1.0 + surcharge_frac)
+    media_cost = max(0.0, inputs.price_per_metre) * billable_m
+
+    # Surcharges are flat per-metre values added to the media cost
+    surcharge_total = (max(0.0, inputs.vinyl_surcharge) + max(0.0, inputs.finish_surcharge)) * billable_m
+    after_surcharge = media_cost + surcharge_total
 
     after_margin = after_surcharge * (1.0 + max(0.0, inputs.margin_pct) / 100.0)
 
-    discount_pct = _quantity_discount(quantity_breaks, qty)
+    discount_pct = _volume_discount(quantity_breaks, billable_m)
     after_discount = after_margin * (1.0 - discount_pct / 100.0)
 
     total = after_discount + max(0.0, inputs.handling_fee)
@@ -146,8 +149,8 @@ def estimate(
         per_row=per_row,
         rows=rows,
         rotated=rotated,
-        vinyl_surcharge_pct=round(max(0.0, inputs.vinyl_surcharge) * 100.0, 2),
-        finish_surcharge_pct=round(max(0.0, inputs.finish_surcharge) * 100.0, 2),
+        vinyl_surcharge_per_m=round(max(0.0, inputs.vinyl_surcharge), 2),
+        finish_surcharge_per_m=round(max(0.0, inputs.finish_surcharge), 2),
         margin_pct=round(max(0.0, inputs.margin_pct), 2),
         quantity_discount_pct=round(discount_pct, 2),
         handling_fee=round(max(0.0, inputs.handling_fee), 2),
@@ -165,6 +168,7 @@ def inputs_from_profile(profile, *, vinyl: str | None, finish: str | None) -> Pr
         margin_pct=float(profile.margin_pct or 0.0),
         handling_fee=float(profile.handling_fee or 0.0),
         min_order_price=float(profile.min_order_price or 0.0),
+        min_length_m=float(getattr(profile, "min_length_m", 0.0) or 0.0),
         vinyl_surcharge=float(vinyl_map.get(vinyl, 0.0)) if vinyl else 0.0,
         finish_surcharge=float(finish_map.get(finish, 0.0)) if finish else 0.0,
     )

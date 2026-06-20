@@ -564,6 +564,17 @@ def _generate_contour_cutline(
         border_img = border_img.crop((crop_x1, crop_y1, crop_x2, crop_y2))
         out_w = crop_x2 - crop_x1
         out_h = crop_y2 - crop_y1
+
+        # Alpha-trim: the rectangular crop includes transparent corners where
+        # the organic bleed shape doesn't reach. Remove them so the sticker's
+        # reported dimensions are tight to actual content (white bleed edge).
+        alpha_bbox = border_img.getbbox()
+        if alpha_bbox and (alpha_bbox[0] > 0 or alpha_bbox[1] > 0
+                          or alpha_bbox[2] < out_w or alpha_bbox[3] < out_h):
+            points_px = [(x - alpha_bbox[0], y - alpha_bbox[1]) for x, y in points_px]
+            border_img = border_img.crop(alpha_bbox)
+            out_w = alpha_bbox[2] - alpha_bbox[0]
+            out_h = alpha_bbox[3] - alpha_bbox[1]
     else:
         out_w = padded_w
         out_h = padded_h

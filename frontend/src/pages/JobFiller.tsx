@@ -34,6 +34,7 @@ import {
   getJob,
   Job,
   listJobUploads,
+  optimiseJobAssets,
   pollOutputStatus,
   QueueItem,
   updateJob,
@@ -844,6 +845,47 @@ export default function JobFiller() {
     thresholdMB: number;
   } | null>(null);
 
+  // Bulk optimise state
+  const [optimising, setOptimising] = useState(false);
+  const [optimiseResult, setOptimiseResult] = useState<string | null>(null);
+
+  const totalAssetBytes = useMemo(
+    () => rows.reduce((sum, r) => sum + (r.asset.file_size || 0), 0),
+    [rows]
+  );
+  const hasLargeAssets = totalAssetBytes > 20_000_000; // Show button if >20MB total
+
+  async function onOptimise() {
+    if (!job) return;
+    setOptimising(true);
+    setOptimiseResult(null);
+    try {
+      const result = await optimiseJobAssets(job.id);
+      if (result.optimised === 0) {
+        setOptimiseResult("No assets needed optimising (all are vector or already small).");
+      } else {
+        const beforeMB = (result.total_before_bytes / (1024 * 1024)).toFixed(1);
+        const afterMB = (result.total_after_bytes / (1024 * 1024)).toFixed(1);
+        setOptimiseResult(
+          `Optimised ${result.optimised} file${result.optimised > 1 ? "s" : ""}: ${beforeMB} MB → ${afterMB} MB. Ready to generate.`
+        );
+        // Refresh rows with updated asset sizes
+        const refreshed = await listJobUploads(job.id);
+        setRows((prev) =>
+          prev.map((r) => {
+            const fresh = refreshed.find((a) => a.id === r.asset.id);
+            return fresh ? { ...r, asset: fresh } : r;
+          })
+        );
+        setJob({ ...job, optimised_at: new Date().toISOString() });
+      }
+    } catch (e: any) {
+      setOptimiseResult(`Optimise failed: ${e?.message || e}`);
+    } finally {
+      setOptimising(false);
+    }
+  }
+
   async function onGenerate() {
     if (!job) return;
 
@@ -1050,8 +1092,8 @@ export default function JobFiller() {
 
     {/* ─── Main content ────────────────────────────────────────── */}
     <div className="max-w-[1600px] mx-auto px-2 sm:px-6 py-3 sm:py-8 pb-40 sm:pb-8 overflow-x-hidden">
-      <div className="flex items-start justify-between mb-4 sm:mb-6 gap-3 sm:gap-6 flex-wrap min-w-0">
-        <div className="min-w-0">
+      <div className="flex items-start justify-between mb-4 sm:mb-6 gap-3 sm:gap-6 min-w-0">
+        <div className="min-w-0 flex-1">
           <Link to="/app/jobs" className="text-sm text-neutral-400 hover:text-white">
             ← Jobs
           </Link>
@@ -1064,7 +1106,7 @@ export default function JobFiller() {
         {/* Desktop / tablet action row. On mobile we mirror Save+Generate
             into a sticky bottom bar so they're always reachable while the
             user scrolls the queue. */}
-        <div className="hidden sm:flex items-center gap-2">
+        <div className="hidden sm:flex items-center gap-2 flex-wrap justify-end ml-auto shrink-0">
           <Link
             to={`/app/jobs/${job.id}/program`}
             className="rounded-lg border border-neutral-800 px-4 py-2 text-sm hover:border-neutral-600"
@@ -1094,22 +1136,38 @@ export default function JobFiller() {
               Subscribe to generate PDF →
             </Link>
           ) : (
-            <button
-              onClick={onGenerate}
-              disabled={generating || queuedQty === 0}
-              className="rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-5 py-2.5 font-semibold text-white hover:from-violet-400 hover:to-fuchsia-400 disabled:opacity-40 shadow-lg shadow-violet-500/20"
-              title={
-                includeCutLines
-                  ? "Generate with cut lines embedded for print/cut RIP"
-                  : "Generate artwork-only PDF"
-              }
-            >
-              {generating
-                ? "Generating…"
-                : includeCutLines
-                ? `Generate PDF + cut →`
-                : `Generate PDF →`}
-            </button>
+            <>
+              {job?.optimised_at ? (
+                <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-300">
+                  ✓ Optimised
+                </span>
+              ) : hasLargeAssets ? (
+                <button
+                  onClick={onOptimise}
+                  disabled={optimising || generating}
+                  className="rounded-lg border border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 px-4 py-2 text-sm font-medium disabled:opacity-40"
+                  title="Convert large PDF assets to optimised 600 DPI PNGs for faster generation"
+                >
+                  {optimising ? "Optimising…" : "⚡ Optimise large files"}
+                </button>
+              ) : null}
+              <button
+                onClick={onGenerate}
+                disabled={generating || queuedQty === 0}
+                className="rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 px-5 py-2.5 font-semibold text-white hover:from-violet-400 hover:to-fuchsia-400 disabled:opacity-40 shadow-lg shadow-violet-500/20"
+                title={
+                  includeCutLines
+                    ? "Generate with cut lines embedded for print/cut RIP"
+                    : "Generate artwork-only PDF"
+                }
+              >
+                {generating
+                  ? "Generating…"
+                  : includeCutLines
+                  ? `Generate PDF + cut →`
+                  : `Generate PDF →`}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1117,6 +1175,18 @@ export default function JobFiller() {
       {err && (
         <div className="mb-4">
           <QuotaErrorBanner error={err} />
+        </div>
+      )}
+
+      {optimiseResult && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 flex items-center justify-between">
+          <span>{optimiseResult}</span>
+          <button
+            onClick={() => setOptimiseResult(null)}
+            className="ml-3 text-amber-400 hover:text-white"
+          >
+            ✕
+          </button>
         </div>
       )}
 

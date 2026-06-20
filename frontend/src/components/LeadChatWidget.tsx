@@ -143,6 +143,8 @@ export default function LeadChatWidget() {
     if (/^\/app\/templates\/[^/]+$/.test(pathname)) return true; // designer
     if (pathname.startsWith("/app/templates/new/sticker")) return true; // sticker builder
     if (pathname.startsWith("/app/sheets")) return true; // sheet builder
+    if (pathname.startsWith("/embed")) return true; // embedded widget
+    if (pathname.startsWith("/app/widget/preview")) return true; // widget preview
     if (pathname === "/app/jobs/new") return true;
     if (/^\/app\/jobs\/[^/]+\/(program|fill)$/.test(pathname)) return true;
     return false;

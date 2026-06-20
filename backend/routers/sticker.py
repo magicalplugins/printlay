@@ -535,9 +535,14 @@ def regenerate_sticker(
     # so changing the cut line keeps the sticker the same physical size.
     import json
     work_dpi = 300.0
+    has_custom_points = False
+    custom_meta: dict | None = None
     try:
         meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
         work_dpi = float(meta.get("work_dpi", 300.0))
+        has_custom_points = bool(meta.get("custom_points"))
+        if has_custom_points:
+            custom_meta = meta
     except Exception:
         work_dpi = 300.0
 
@@ -588,6 +593,52 @@ def regenerate_sticker(
         "application/json",
     )
 
+    # Restore hand-edited cutline if it existed before this regenerate
+    response_cutline_points = _normalised_points(
+        result.cutline.points_px,
+        result.cutline.width_px,
+        result.cutline.height_px,
+    )
+    if has_custom_points and custom_meta:
+        from backend.services.cutline_generator import CutlineResult
+        from backend.services.sticker_processor import _render_preview
+
+        c_width_px = int(custom_meta["width_px"])
+        c_height_px = int(custom_meta["height_px"])
+        c_width_pt = float(custom_meta["width_pt"])
+        c_height_pt = float(custom_meta["height_pt"])
+
+        cutline = CutlineResult(
+            points_px=[(float(p[0]), float(p[1])) for p in custom_meta["points_px"]],
+            points_pt=[(float(p[0]), float(p[1])) for p in custom_meta["points_pt"]],
+            width_px=c_width_px,
+            height_px=c_height_px,
+            width_pt=c_width_pt,
+            height_pt=c_height_pt,
+            border_image=result.border_png,
+        )
+        preview_png = _render_preview(cutline)
+        storage.put_bytes(f"{prefix}/preview.png", preview_png, "image/png")
+
+        restored_payload = {
+            "points_px": custom_meta["points_px"],
+            "points_pt": custom_meta["points_pt"],
+            "width_px": c_width_px,
+            "height_px": c_height_px,
+            "width_pt": c_width_pt,
+            "height_pt": c_height_pt,
+            "width_mm": custom_meta.get("width_mm", result.width_mm),
+            "height_mm": custom_meta.get("height_mm", result.height_mm),
+            "work_dpi": custom_meta.get("work_dpi", work_dpi),
+            "custom_points": True,
+        }
+        storage.put_bytes(
+            f"{prefix}/cutline.json", json.dumps(restored_payload).encode("utf-8"), "application/json"
+        )
+        response_cutline_points = _normalised_points(
+            cutline.points_px, c_width_px, c_height_px,
+        )
+
     return ProcessResponse(
         preview_url=storage.presigned_get(f"{prefix}/preview.png"),
         border_url=storage.presigned_get(f"{prefix}/border.png"),
@@ -597,11 +648,7 @@ def regenerate_sticker(
         bg_type=result.bg_type,
         removal_method=result.removal_method,
         session_id=body.session_id,
-        cutline_points=_normalised_points(
-            result.cutline.points_px,
-            result.cutline.width_px,
-            result.cutline.height_px,
-        ),
+        cutline_points=response_cutline_points,
         img_w_px=result.cutline.width_px,
         img_h_px=result.cutline.height_px,
     )
@@ -831,6 +878,8 @@ def edit_cutline(
     )
 
     dpi = width_px * 25.4 / width_mm if width_mm > 0 else 300
+    bleed_mm = 3.0
+    bleed_px = int(bleed_mm * dpi / 25.4)
     # The freehand stroke is hand-drawn with a mouse, so smooth out the wobble
     # before it becomes a cut path: target oscillating runs, round corners with
     # Chaikin, then enforce a cutter-safe minimum radius so the knife never has
@@ -843,6 +892,42 @@ def edit_cutline(
         points_px = _enforce_min_corner_radius(points_px, dpi=int(dpi), min_radius_mm=1.0)
     except Exception:
         pass
+
+    # Re-crop border image to new cutline bounds + bleed so the sticker
+    # footprint stays tight after hand-editing.
+    border_pil = Image.open(io.BytesIO(border_png)).convert("RGBA")
+    min_cx = min(p[0] for p in points_px)
+    min_cy = min(p[1] for p in points_px)
+    max_cx = max(p[0] for p in points_px)
+    max_cy = max(p[1] for p in points_px)
+    c_x1 = max(0, int(min_cx) - bleed_px)
+    c_y1 = max(0, int(min_cy) - bleed_px)
+    c_x2 = min(width_px, int(max_cx) + bleed_px + 1)
+    c_y2 = min(height_px, int(max_cy) + bleed_px + 1)
+    if c_x1 > 0 or c_y1 > 0 or c_x2 < width_px or c_y2 < height_px:
+        points_px = [(x - c_x1, y - c_y1) for x, y in points_px]
+        border_pil = border_pil.crop((c_x1, c_y1, c_x2, c_y2))
+        width_px = c_x2 - c_x1
+        height_px = c_y2 - c_y1
+        # Alpha-trim transparent corners
+        alpha_bbox = border_pil.getbbox()
+        if alpha_bbox and (alpha_bbox[0] > 0 or alpha_bbox[1] > 0
+                          or alpha_bbox[2] < width_px or alpha_bbox[3] < height_px):
+            points_px = [(x - alpha_bbox[0], y - alpha_bbox[1]) for x, y in points_px]
+            border_pil = border_pil.crop(alpha_bbox)
+            width_px = alpha_bbox[2] - alpha_bbox[0]
+            height_px = alpha_bbox[3] - alpha_bbox[1]
+        # Re-persist cropped border
+        buf = io.BytesIO()
+        border_pil.save(buf, format="PNG")
+        border_png = buf.getvalue()
+        storage.put_bytes(f"{prefix}/border.png", border_png, "image/png")
+        # Recalculate physical dimensions
+        px_to_pt = 72.0 / dpi
+        width_pt = width_px * px_to_pt
+        height_pt = height_px * px_to_pt
+        width_mm = width_pt * 25.4 / 72.0
+        height_mm = height_pt * 25.4 / 72.0
 
     px_to_pt_x = width_pt / width_px if width_px else 0.0
     px_to_pt_y = height_pt / height_px if height_px else 0.0
@@ -872,6 +957,7 @@ def edit_cutline(
         "height_pt": height_pt,
         "width_mm": width_mm,
         "height_mm": height_mm,
+        "custom_points": True,
     }
     storage.put_bytes(
         f"{prefix}/cutline.json",

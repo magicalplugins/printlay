@@ -246,6 +246,9 @@ class ProductConfig(BaseModel):
     bleed_mm: float
     safe_mm: float
     currency: str
+    show_filters: bool = True
+    show_ai_styles: bool = False
+    show_hand_edit: bool = False
 
 
 def _pricing_profile(db: Session, product: Product) -> PricingProfile | None:
@@ -260,6 +263,18 @@ def _pricing_profile(db: Session, product: Product) -> PricingProfile | None:
 
 def _product_config(product: Product, profile: PricingProfile | None) -> ProductConfig:
     styles = product.enabled_cut_styles or DEFAULT_CUT_STYLES
+
+    # Only include materials/finishes that exist in the linked profile
+    vinyl_types = product.vinyl_types or []
+    finishes = product.finishes or []
+    if profile:
+        valid_vinyl_keys = set((profile.vinyl_surcharges or {}).keys())
+        valid_finish_keys = set((profile.finish_surcharges or {}).keys())
+        if valid_vinyl_keys:
+            vinyl_types = [v for v in vinyl_types if v.get("key") in valid_vinyl_keys]
+        if valid_finish_keys:
+            finishes = [f for f in finishes if f.get("key") in valid_finish_keys]
+
     return ProductConfig(
         id=str(product.id),
         name=product.name,
@@ -271,17 +286,54 @@ def _product_config(product: Product, profile: PricingProfile | None) -> Product
         size_presets=getattr(product, "size_presets", None) or [],
         allow_custom_size=getattr(product, "allow_custom_size", True),
         corner_radius=getattr(product, "corner_radius", 0.01),
-        vinyl_types=product.vinyl_types or [],
-        finishes=product.finishes or [],
+        vinyl_types=vinyl_types,
+        finishes=finishes,
         bleed_mm=product.bleed_mm,
         safe_mm=product.safe_mm,
         currency=(profile.currency if profile else "GBP"),
+        show_filters=getattr(product, "show_filters", True),
+        show_ai_styles=getattr(product, "show_ai_styles", False),
+        show_hand_edit=getattr(product, "show_hand_edit", False),
     )
 
 
 # --------------------------------------------------------------------------- #
 # 1) Create a session (merchant API key)
 # --------------------------------------------------------------------------- #
+class PluginProductOut(BaseModel):
+    id: str
+    name: str
+    designer: str
+    is_active: bool
+
+
+@router.get("/products", response_model=list[PluginProductOut])
+def list_products_for_plugin(
+    ctx: MerchantContext = Depends(get_merchant_from_api_key),
+    db: Session = Depends(get_db),
+):
+    """List the merchant's active products (API-key auth).
+
+    Used by the WooCommerce/Shopify plugin settings page to populate
+    the product-linking dropdown.
+    """
+    products = (
+        db.query(Product)
+        .filter(Product.user_id == ctx.user.id, Product.is_active.is_(True))
+        .order_by(Product.name)
+        .all()
+    )
+    return [
+        PluginProductOut(
+            id=str(p.id),
+            name=p.name,
+            designer=p.designer,
+            is_active=p.is_active,
+        )
+        for p in products
+    ]
+
+
 class CreateSessionRequest(BaseModel):
     product_id: str
     external_ref: str | None = None
@@ -525,10 +577,15 @@ def regenerate(
 
     work_dpi = 300.0
     prev_mode: str | None = None
+    has_custom_points = False
+    custom_meta: dict | None = None
     try:
         meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
         work_dpi = float(meta.get("work_dpi", 300.0))
         prev_mode = meta.get("mode")
+        has_custom_points = bool(meta.get("custom_points"))
+        if has_custom_points:
+            custom_meta = meta
     except Exception:
         work_dpi = 300.0
 
@@ -580,6 +637,63 @@ def regenerate(
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"Regeneration failed: {exc}")
 
     _persist_result(prefix, result, mode=mode)
+
+    # If the user had hand-edited the cutline and only the filter/tighten changed
+    # (not switching modes), restore their custom cutline on the new artwork.
+    if has_custom_points and custom_meta and not bg_handling_changed:
+        from backend.services.cutline_generator import CutlineResult
+        from backend.services.sticker_processor import _render_preview
+
+        width_px = int(custom_meta["width_px"])
+        height_px = int(custom_meta["height_px"])
+        width_pt = float(custom_meta["width_pt"])
+        height_pt = float(custom_meta["height_pt"])
+
+        cutline = CutlineResult(
+            points_px=[(float(p[0]), float(p[1])) for p in custom_meta["points_px"]],
+            points_pt=[(float(p[0]), float(p[1])) for p in custom_meta["points_pt"]],
+            width_px=width_px,
+            height_px=height_px,
+            width_pt=width_pt,
+            height_pt=height_pt,
+            border_image=result.border_png,
+        )
+        preview_png = _render_preview(cutline)
+        storage.put_bytes(f"{prefix}/preview.png", preview_png, "image/png")
+
+        payload = {
+            "points_px": custom_meta["points_px"],
+            "points_pt": custom_meta["points_pt"],
+            "width_px": width_px,
+            "height_px": height_px,
+            "width_pt": width_pt,
+            "height_pt": height_pt,
+            "width_mm": custom_meta.get("width_mm", result.width_mm),
+            "height_mm": custom_meta.get("height_mm", result.height_mm),
+            "work_dpi": custom_meta.get("work_dpi", work_dpi),
+            "mode": mode,
+            "custom_points": True,
+        }
+        storage.put_bytes(
+            f"{prefix}/cutline.json", json.dumps(payload).encode("utf-8"), "application/json"
+        )
+
+        ctx.session.params = {"cut_style": body.cut_style, "filter_id": body.filter_id}
+        db.commit()
+        return ProcessResponse(
+            preview_url=storage.presigned_get(f"{prefix}/preview.png"),
+            border_url=storage.presigned_get(f"{prefix}/border.png"),
+            cutout_url=_safe_presigned(f"{prefix}/cutout.png"),
+            width_mm=result.width_mm,
+            height_mm=result.height_mm,
+            bg_type=result.bg_type,
+            removal_method=result.removal_method,
+            session_id=ctx.session.token,
+            cutline_points=_normalised_points(cutline.points_px, width_px, height_px),
+            img_w_px=width_px,
+            img_h_px=height_px,
+        )
+
     ctx.session.params = {"cut_style": body.cut_style, "filter_id": body.filter_id}
     db.commit()
     return _process_response(prefix, result, ctx.session.token)
@@ -628,6 +742,8 @@ def edit_cutline(
     from backend.services.sticker_processor import _render_preview
 
     dpi = width_px * 25.4 / width_mm if width_mm > 0 else 300
+    bleed_mm = 3.0
+    bleed_px = int(bleed_mm * dpi / 25.4)
     try:
         points_px = _smooth_oscillating_regions(
             points_px, iterations=10, window=6, wiggle_threshold=0.3, strength=0.55
@@ -636,6 +752,40 @@ def edit_cutline(
         points_px = _enforce_min_corner_radius(points_px, dpi=int(dpi), min_radius_mm=1.0)
     except Exception:
         pass
+
+    # Re-crop border image to new cutline bounds + bleed
+    from PIL import Image as _PILImage
+    import io as _io
+    border_pil = _PILImage.open(_io.BytesIO(border_png)).convert("RGBA")
+    min_cx = min(p[0] for p in points_px)
+    min_cy = min(p[1] for p in points_px)
+    max_cx = max(p[0] for p in points_px)
+    max_cy = max(p[1] for p in points_px)
+    c_x1 = max(0, int(min_cx) - bleed_px)
+    c_y1 = max(0, int(min_cy) - bleed_px)
+    c_x2 = min(width_px, int(max_cx) + bleed_px + 1)
+    c_y2 = min(height_px, int(max_cy) + bleed_px + 1)
+    if c_x1 > 0 or c_y1 > 0 or c_x2 < width_px or c_y2 < height_px:
+        points_px = [(x - c_x1, y - c_y1) for x, y in points_px]
+        border_pil = border_pil.crop((c_x1, c_y1, c_x2, c_y2))
+        width_px = c_x2 - c_x1
+        height_px = c_y2 - c_y1
+        alpha_bbox = border_pil.getbbox()
+        if alpha_bbox and (alpha_bbox[0] > 0 or alpha_bbox[1] > 0
+                          or alpha_bbox[2] < width_px or alpha_bbox[3] < height_px):
+            points_px = [(x - alpha_bbox[0], y - alpha_bbox[1]) for x, y in points_px]
+            border_pil = border_pil.crop(alpha_bbox)
+            width_px = alpha_bbox[2] - alpha_bbox[0]
+            height_px = alpha_bbox[3] - alpha_bbox[1]
+        buf = _io.BytesIO()
+        border_pil.save(buf, format="PNG")
+        border_png = buf.getvalue()
+        storage.put_bytes(f"{prefix}/border.png", border_png, "image/png")
+        px_to_pt = 72.0 / dpi
+        width_pt = width_px * px_to_pt
+        height_pt = height_px * px_to_pt
+        width_mm = width_pt * 25.4 / 72.0
+        height_mm = height_pt * 25.4 / 72.0
 
     px_to_pt_x = width_pt / width_px if width_px else 0.0
     px_to_pt_y = height_pt / height_px if height_px else 0.0
@@ -664,6 +814,7 @@ def edit_cutline(
                 "height_pt": height_pt,
                 "width_mm": width_mm,
                 "height_mm": height_mm,
+                "custom_points": True,
             }
         ).encode("utf-8"),
         "application/json",
@@ -682,6 +833,114 @@ def edit_cutline(
         img_w_px=width_px,
         img_h_px=height_px,
     )
+
+
+# --------------------------------------------------------------------------- #
+# 5b) AI style — redraw in an illustration style (session token)
+# --------------------------------------------------------------------------- #
+class AIStyleWidgetRequest(BaseModel):
+    style: str = "cartoon"
+    custom_prompt: str | None = None
+
+
+@router.post("/ai-style", response_model=ProcessResponse)
+def widget_ai_style(
+    body: AIStyleWidgetRequest,
+    ctx: WidgetSessionContext = Depends(get_widget_session),
+    db: Session = Depends(get_db),
+):
+    """Apply an AI illustration style using the merchant's OpenAI key."""
+    from backend.services import ai_stylize, secrets_store
+    from backend.models import User
+
+    merchant = db.query(User).filter(User.id == ctx.merchant_id).one_or_none()
+    if not merchant:
+        raise HTTPException(404, "Merchant account not found.")
+    api_key = secrets_store.decrypt_value(merchant.openai_api_key_enc)
+    if not api_key:
+        raise HTTPException(400, "AI styles are not configured for this store.")
+
+    if not getattr(ctx.product, "show_ai_styles", False):
+        raise HTTPException(403, "AI styles are not enabled for this product.")
+
+    if body.style == "custom":
+        if not (body.custom_prompt or "").strip():
+            raise HTTPException(400, "Enter a description for your custom AI style.")
+    elif body.style not in ai_stylize.STYLE_PROMPTS:
+        raise HTTPException(400, f"Unknown AI style: {body.style}")
+
+    prefix = _prefix(ctx.merchant_id, ctx.session.id)
+    try:
+        cutout = storage.get_bytes(f"{prefix}/cutout.png")
+    except Exception:
+        raise HTTPException(404, "Design session expired. Please re-upload.")
+
+    work_dpi = 300.0
+    try:
+        meta = json.loads(storage.get_bytes(f"{prefix}/cutline.json").decode("utf-8"))
+        work_dpi = float(meta.get("work_dpi", 300.0))
+    except Exception:
+        work_dpi = 300.0
+
+    from PIL import Image as PILImage
+    import io as _io
+
+    try:
+        orig = PILImage.open(_io.BytesIO(cutout)).convert("RGBA")
+        orig_w, orig_h = orig.size
+    except Exception:
+        orig_w, orig_h = 0, 0
+
+    try:
+        stylized = ai_stylize.stylize_image(
+            cutout, body.style, api_key, custom_prompt=body.custom_prompt
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    except Exception as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"AI style failed: {exc}")
+
+    from backend.routers.sticker import _fit_into
+
+    new_cutout = _fit_into(stylized, orig_w, orig_h)
+    storage.put_bytes(f"{prefix}/cutout.png", new_cutout, "image/png")
+
+    params = ctx.session.params or {}
+    cut_style = params.get("cut_style", "die_cut")
+    mode = _CUT_STYLE_TO_MODE.get(cut_style, "contour")
+
+    from backend.services.cutline_generator import FaceNotFoundError
+    from backend.services.sticker_processor import regenerate_cutline
+
+    border = 2.0
+    with _heavy_job_slot("widget-ai-style"):
+        try:
+            result = regenerate_cutline(
+                cutout_bytes=new_cutout,
+                border_width_mm=border,
+                bleed_mm=ctx.product.bleed_mm,
+                dpi=work_dpi,
+                cutline_mode=mode,
+                cutline_precision="medium",
+            )
+        except FaceNotFoundError:
+            # AI-styled image may not have a detectable face — fallback to contour
+            result = regenerate_cutline(
+                cutout_bytes=new_cutout,
+                border_width_mm=border,
+                bleed_mm=ctx.product.bleed_mm,
+                dpi=work_dpi,
+                cutline_mode="contour",
+                cutline_precision="medium",
+            )
+            mode = "contour"
+        except Exception as exc:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, f"AI style failed: {exc}")
+
+    _persist_result(prefix, result, mode=mode)
+    ctx.session.params = {**params, "filter_id": "none"}
+    db.commit()
+    return _process_response(prefix, result, ctx.session.token)
 
 
 # --------------------------------------------------------------------------- #
@@ -775,6 +1034,7 @@ class FinalizeResponse(BaseModel):
     total: float
     currency: str
     options: dict
+    thumbnail_url: str | None = None
 
 
 @router.post("/finalize", response_model=FinalizeResponse)
@@ -896,6 +1156,7 @@ def finalize(
         total=float(quote.get("total") or 0.0),
         currency=str(quote.get("currency") or "GBP"),
         options=quote.get("options", {}),
+        thumbnail_url=_safe_presigned(thumb_key),
     )
 
 
@@ -1185,4 +1446,5 @@ def canvas_finalize(
         total=float(quote.get("total") or 0.0),
         currency=str(quote.get("currency") or "GBP"),
         options=options,
+        thumbnail_url=_safe_presigned(thumb_key),
     )

@@ -70,6 +70,16 @@ def _asset_urls(a: Asset) -> tuple[str | None, str | None]:
     return thumb, preview
 
 
+def _pixel_dims(a: Asset) -> tuple[int | None, int | None]:
+    """Return (width_px, height_px) for raster assets; None for vectors."""
+    if a.kind in ("png", "jpg"):
+        return (
+            round(a.width_pt * 300 / 72),
+            round(a.height_pt * 300 / 72),
+        )
+    return None, None
+
+
 def _content_type_for_original(kind: str, fallback: str | None) -> str:
     if kind == "svg":
         return "image/svg+xml"
@@ -271,6 +281,7 @@ def list_assets(
     out: list[AssetOut] = []
     for r in rows:
         thumb_url, preview_url = _asset_urls(r)
+        wpx, hpx = _pixel_dims(r)
         out.append(
             AssetOut(
                 id=r.id,
@@ -288,6 +299,8 @@ def list_assets(
                 page_count=max(1, int(getattr(r, "page_count", 1) or 1)),
                 cut_contour=_asset_cut_contour(r),
                 is_sticker_editable=bool(getattr(r, "sticker_session_prefix", None)),
+                width_px=wpx,
+                height_px=hpx,
             )
         )
     return out
@@ -405,6 +418,7 @@ async def upload_asset(
     db.refresh(asset)
 
     thumb_url, preview_url = _asset_urls(asset)
+    wpx, hpx = _pixel_dims(asset)
 
     return AssetOut(
         id=asset.id,
@@ -422,6 +436,8 @@ async def upload_asset(
         page_count=max(1, int(getattr(asset, "page_count", 1) or 1)),
         cut_contour=_asset_cut_contour(asset),
         is_sticker_editable=bool(getattr(asset, "sticker_session_prefix", None)),
+        width_px=wpx,
+        height_px=hpx,
     )
 
 

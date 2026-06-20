@@ -395,6 +395,98 @@ async def upload_job_asset(
     return _asset_to_out(asset)
 
 
+# ---------------------------------------------------------------------------
+# Bulk optimise large assets (rasterise to 600 DPI PNG)
+# ---------------------------------------------------------------------------
+
+class OptimiseResult(BaseModel):
+    optimised: int
+    skipped: int
+    total_before_bytes: int
+    total_after_bytes: int
+
+
+@router.post("/{job_id}/optimise-assets", response_model=OptimiseResult)
+def optimise_job_assets(
+    job_id: uuid.UUID,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> OptimiseResult:
+    """Force-rasterise all large PDF assets in a job to 600 DPI PNGs.
+
+    Any PDF over 2MB is converted — including vectors. The user has
+    explicitly chosen speed over infinite-resolution vector fidelity.
+    The original R2 file is replaced with the optimised version.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    user = _resolve_user(db, auth)
+    job = _own_job(db, user, job_id)
+
+    assets = (
+        db.query(Asset)
+        .filter(Asset.job_id == job.id, Asset.user_id == user.id)
+        .all()
+    )
+
+    # Collect asset info then close the DB session so other requests aren't blocked
+    asset_info = [
+        {"id": a.id, "r2_key": a.r2_key, "file_size": a.file_size or 0}
+        for a in assets
+        if a.r2_key and (a.file_size or 0) >= 2_000_000
+    ]
+    skipped = len(assets) - len(asset_info)
+    db.close()
+
+    # Rasterise in parallel (CPU + I/O heavy, no DB needed)
+    def _process(info: dict) -> dict | None:
+        try:
+            source_bytes = r2_cache.get_bytes(info["r2_key"])
+        except Exception:
+            return None
+
+        compressed = asset_pipeline.force_rasterise(source_bytes)
+        if compressed is source_bytes or len(compressed) >= len(source_bytes):
+            return None
+
+        storage.put_bytes(info["r2_key"], compressed, content_type="application/pdf")
+        r2_cache.put(info["r2_key"], compressed)
+        return {
+            "id": info["id"],
+            "before": len(source_bytes),
+            "after": len(compressed),
+        }
+
+    results = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(_process, asset_info))
+
+    # Re-open DB to update file sizes (quick operation)
+    successful = [r for r in results if r is not None]
+    skipped += sum(1 for r in results if r is None)
+
+    if successful:
+        for s in successful:
+            asset = db.query(Asset).get(s["id"])
+            if asset:
+                asset.file_size = s["after"]
+                asset.placement_r2_key = None
+        job_row = db.query(Job).get(job.id)
+        if job_row:
+            job_row.optimised_at = datetime.now(timezone.utc)
+        db.commit()
+
+    total_before = sum(s["before"] for s in successful)
+    total_after = sum(s["after"] for s in successful)
+
+    return OptimiseResult(
+        optimised=len(successful),
+        skipped=skipped,
+        total_before_bytes=total_before,
+        total_after_bytes=total_after,
+    )
+
+
 @router.delete("/{job_id}/uploads/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_job_upload(
     job_id: uuid.UUID,

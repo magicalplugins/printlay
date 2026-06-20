@@ -499,6 +499,134 @@ def run_auto_layout(
     )
 
 
+# ---------- Multi-Asset Auto-Layout ----------
+
+
+class MultiAssetItem(BaseModel):
+    asset_id: uuid.UUID
+    quantity: int = Field(gt=0, le=10000)
+    width_mm: float | None = Field(default=None, gt=0, le=5000)
+    height_mm: float | None = Field(default=None, gt=0, le=5000)
+    orientation: str = "auto"
+
+
+class MultiAutoLayoutIn(BaseModel):
+    items: list[MultiAssetItem] = Field(min_length=1)
+
+
+@router.post("/{sheet_id}/multi-auto-layout", response_model=AutoLayoutOut)
+def run_multi_auto_layout(
+    sheet_id: uuid.UUID,
+    payload: MultiAutoLayoutIn,
+    auth: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AutoLayoutOut:
+    """Pack multiple different assets onto the sheet, each with their own qty/size."""
+    user = _resolve_user(db, auth)
+    sheet = _own_sheet(db, user, sheet_id)
+
+    # Save sheet config first
+    cfg = SheetConfig(
+        media_width_mm=sheet.media_width_mm,
+        mode=sheet.mode or "roll",
+        gap_mm=sheet.gap_mm,
+        edge_margin_mm=sheet.edge_margin_mm,
+        registration_type=sheet.registration_type,
+        max_zone_length_mm=sheet.max_zone_length_mm,
+        mark_offset_mm=sheet.mark_offset_mm or 5.0,
+        sub_sheet_size=sheet.sub_sheet_size,
+        sub_sheet_custom_w_mm=sheet.sub_sheet_custom_w_mm,
+        sub_sheet_custom_h_mm=sheet.sub_sheet_custom_h_mm,
+        sub_sheet_padding_mm=sheet.sub_sheet_padding_mm or 5.0,
+        sub_sheet_gap_mm=sheet.sub_sheet_gap_mm or 5.0,
+        show_crop_marks=sheet.show_crop_marks if sheet.show_crop_marks is not None else True,
+        sub_sheet_title=sheet.sub_sheet_title,
+        sub_sheet_title_size_mm=sheet.sub_sheet_title_size_mm or 5.0,
+        sticker_align_h=sheet.sticker_align_h or "center",
+        sticker_align_v=sheet.sticker_align_v or "top",
+    )
+
+    all_placements: list[dict] = []
+    y_offset = cfg.edge_margin_mm
+    gap = cfg.gap_mm
+    margin = cfg.edge_margin_mm
+
+    for item in payload.items:
+        asset = (
+            db.query(Asset)
+            .filter(Asset.id == item.asset_id, Asset.user_id == user.id)
+            .one_or_none()
+        )
+        if not asset:
+            continue
+
+        native_w_mm = asset.width_pt / (72.0 / 25.4)
+        native_h_mm = asset.height_pt / (72.0 / 25.4)
+
+        if item.width_mm and item.width_mm > 0 and native_w_mm > 0:
+            scale = item.width_mm / native_w_mm
+        elif item.height_mm and item.height_mm > 0 and native_h_mm > 0:
+            scale = item.height_mm / native_h_mm
+        else:
+            scale = 1.0
+
+        sw = native_w_mm * scale
+        sh = native_h_mm * scale
+
+        # Determine orientation
+        available_w = cfg.media_width_mm - 2 * margin
+        orient = item.orientation
+        if orient == "auto":
+            cols_h = max(1, int((available_w + gap) / (sw + gap)))
+            cols_v = max(1, int((available_w + gap) / (sh + gap)))
+            if cols_v > cols_h:
+                sw, sh = sh, sw
+        elif orient == "horizontal":
+            if sw > sh:
+                sw, sh = sh, sw
+        elif orient == "vertical":
+            if sh > sw:
+                sw, sh = sh, sw
+
+        cols = max(1, int((available_w + gap) / (sw + gap)))
+        rows_needed = math.ceil(item.quantity / cols)
+        rotation = 90 if (sw != native_w_mm * scale) else 0
+
+        idx = 0
+        for row in range(rows_needed):
+            for col in range(cols):
+                if idx >= item.quantity:
+                    break
+                x = margin + col * (sw + gap)
+                y = y_offset + row * (sh + gap)
+                all_placements.append({
+                    "asset_id": str(asset.id),
+                    "x_mm": round(x, 2),
+                    "y_mm": round(y, 2),
+                    "rotation_deg": rotation,
+                    "scale": round(scale, 4),
+                })
+                idx += 1
+
+        y_offset += rows_needed * (sh + gap)
+
+    total_height = y_offset + margin
+    sheet.placements = all_placements
+    sheet.media_height_mm = total_height
+    db.commit()
+
+    total_items = sum(i.quantity for i in payload.items)
+    cols_approx = max(1, int((cfg.media_width_mm - 2 * margin + gap) / 50))
+
+    return AutoLayoutOut(
+        placements=all_placements,
+        total_height_mm=round(total_height, 2),
+        cols=cols_approx,
+        rows=math.ceil(total_items / max(cols_approx, 1)),
+        zones=1,
+    )
+
+
 # ---------- DTF Auto-Pack ----------
 
 

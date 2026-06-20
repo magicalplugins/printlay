@@ -54,3 +54,6 @@ class AssetOut(BaseModel):
     is_sticker_editable: bool = False
     """True when the asset was created with the sticker editor and its
     session files are preserved in R2 so the user can resume editing."""
+    width_px: int | None = None
+    height_px: int | None = None
+    """Original pixel dimensions for raster images. Null for vector assets."""

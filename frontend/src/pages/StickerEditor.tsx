@@ -1168,7 +1168,7 @@ function PreviewState({
             widthMm={result.width_mm}
             heightMm={result.height_mm}
             filterCssOverlay={previewFilterCss}
-            busy={regenerating}
+            busy={regenerating || !!aiStyling}
           />
         ) : (
           <div
@@ -1179,7 +1179,7 @@ function PreviewState({
             }}
           >
             <img src={result.preview_url} alt="Sticker preview" className="w-full h-auto" />
-            {regenerating && (
+            {(regenerating || !!aiStyling) && (
               <div className="absolute inset-0 bg-neutral-950/60 flex items-center justify-center">
                 <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -1255,6 +1255,7 @@ function PreviewState({
             </p>
           </div>
 
+          {(mode === "contour" || mode === "face") && (
           <div>
             <div className="text-xs text-neutral-400 mb-2">Hand fix</div>
             <button
@@ -1269,6 +1270,7 @@ function PreviewState({
               Edit cut line by hand
             </button>
           </div>
+          )}
 
           <p className="text-[11px] text-neutral-500">
             Changes re-use the removed background — no extra AI credits used.
@@ -1674,16 +1676,22 @@ function LivePreview({
   const [img, setImg] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
+    setImg(null);
     const im = new Image();
+    im.crossOrigin = "anonymous";
     im.onload = () => setImg(im);
     im.src = borderUrl;
   }, [borderUrl]);
 
   useEffect(() => {
     const c = canvasRef.current;
-    if (!c || !img) return;
+    if (!c) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
+    if (!img) {
+      ctx.clearRect(0, 0, c.width, c.height);
+      return;
+    }
     const maxDim = 800;
     const scale = Math.min(
       1,
@@ -1730,7 +1738,7 @@ function LivePreview({
       }}
     >
       <canvas ref={canvasRef} className="w-full h-auto block" />
-      {busy && (
+      {(busy || !img) && (
         <div className="absolute inset-0 bg-neutral-950/40 flex items-center justify-center">
           <svg className="animate-spin h-6 w-6 text-white" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
@@ -1809,6 +1817,27 @@ function CutlineEditor({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Undo stack: stores up to 10 previous point states
+  const undoStackRef = useRef<[number, number][][]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+
+  function pushUndo() {
+    const stack = undoStackRef.current;
+    stack.push(ptsRef.current.map((p) => [...p] as [number, number]));
+    if (stack.length > 10) stack.shift();
+    setUndoCount(stack.length);
+  }
+
+  function doUndo() {
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    const prev = stack.pop()!;
+    ptsRef.current = prev;
+    setUndoCount(stack.length);
+    setDirty(stack.length > 0 || ptsRef.current !== points);
+    redraw();
+  }
+
   // Live geometry lives in a ref so the smooth brush can mutate it every
   // pointer-move without forcing a React re-render of the whole editor.
   const ptsRef = useRef<[number, number][]>(points);
@@ -1822,7 +1851,9 @@ function CutlineEditor({
   brushRef.current = brush;
 
   useEffect(() => {
+    setImg(null);
     const im = new Image();
+    im.crossOrigin = "anonymous";
     im.onload = () => setImg(im);
     im.src = borderUrl;
   }, [borderUrl]);
@@ -1846,6 +1877,20 @@ function CutlineEditor({
 
       const pts = ptsRef.current;
       if (pts.length > 1) {
+        // Fill white outside the cutline polygon so the sticker border is visible
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, cw, ch);
+        ctx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i][0] * cw, pts[i][1] * ch);
+        }
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,255,255,0.85)";
+        ctx.fill("evenodd");
+        ctx.restore();
+
+        // Draw the dashed cutline
         ctx.beginPath();
         ctx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
         for (let i = 1; i < pts.length; i++) {
@@ -1900,9 +1945,23 @@ function CutlineEditor({
 
   useEffect(() => {
     ptsRef.current = points;
+    undoStackRef.current = [];
+    setUndoCount(0);
     setDirty(false);
     redraw();
   }, [points, redraw]);
+
+  // Keyboard shortcut: Ctrl+Z / Cmd+Z to undo
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        doUndo();
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  });
 
   function toNorm(e: React.PointerEvent): [number, number] {
     const c = canvasRef.current!;
@@ -2007,6 +2066,7 @@ function CutlineEditor({
       startIdxRef.current = nearestIdx(n);
       strokeRef.current = [n];
     } else {
+      pushUndo();
       brushPosRef.current = n;
       smoothAt(n);
       setDirty(true);
@@ -2051,6 +2111,7 @@ function CutlineEditor({
         redraw();
         return;
       }
+      pushUndo();
       ptsRef.current = replaceArc(
         ptsRef.current,
         startIdxRef.current,
@@ -2086,6 +2147,8 @@ function CutlineEditor({
 
   function resetPts() {
     ptsRef.current = points;
+    undoStackRef.current = [];
+    setUndoCount(0);
     setDirty(false);
     redraw();
   }
@@ -2190,6 +2253,15 @@ function CutlineEditor({
         </button>
         <button
           type="button"
+          onClick={doUndo}
+          disabled={busy || undoCount === 0}
+          className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
+          title="Undo last edit (up to 10)"
+        >
+          Undo
+        </button>
+        <button
+          type="button"
           onClick={resetPts}
           disabled={busy || !dirty}
           className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
@@ -2200,7 +2272,7 @@ function CutlineEditor({
           type="button"
           onClick={onClose}
           disabled={busy}
-          className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition disabled:opacity-40"
+          className={`rounded-xl border border-neutral-700 px-4 py-2.5 text-sm text-neutral-300 hover:border-neutral-500 transition ${dirty ? "hidden" : ""} disabled:opacity-40`}
         >
           Done
         </button>

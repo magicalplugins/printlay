@@ -1,0 +1,202 @@
+/**
+ * PrintLay WooCommerce Frontend Styles
+ */
+
+/* Customize & Order button */
+.printlay-designer-trigger {
+  margin: 1em 0;
+}
+
+.printlay-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 28px;
+  font-size: 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background: #0f172a;
+  color: #fff;
+  transition: background 0.2s, transform 0.1s;
+  text-decoration: none;
+}
+
+.printlay-btn:hover {
+  background: #1e293b;
+  transform: translateY(-1px);
+}
+
+.printlay-btn:active {
+  transform: translateY(0);
+}
+
+.printlay-btn-primary {
+  background: #7c3aed;
+}
+
+.printlay-btn-primary:hover {
+  background: #6d28d9;
+}
+
+/* From price */
+.printlay-from-price {
+  font-size: 1.1em;
+  color: #475569;
+  font-weight: 500;
+}
+
+/* Full-screen overlay */
+.printlay-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  animation: printlay-slide-up 0.3s ease;
+}
+
+@keyframes printlay-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Overlay header */
+.printlay-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: #0f172a;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.printlay-overlay-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.printlay-overlay-close {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.printlay-overlay-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Overlay body */
+.printlay-overlay-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Iframe */
+.printlay-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  position: absolute;
+  inset: 0;
+}
+
+/* Loading state */
+.printlay-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.printlay-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  animation: printlay-spin 0.7s linear infinite;
+}
+
+@keyframes printlay-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Success state */
+.printlay-success {
+  text-align: center;
+  padding: 40px;
+}
+
+.printlay-success-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: #dcfce7;
+  color: #16a34a;
+  font-size: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+}
+
+.printlay-success h3 {
+  font-size: 22px;
+  margin: 0 0 8px;
+  color: #0f172a;
+}
+
+.printlay-success p {
+  color: #64748b;
+  margin: 0 0 24px;
+}
+
+.printlay-success-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Mobile adjustments */
+@media (max-width: 600px) {
+  .printlay-overlay-header {
+    padding: 10px 14px;
+  }
+
+  .printlay-overlay-title {
+    font-size: 14px;
+  }
+
+  .printlay-btn {
+    padding: 12px 20px;
+    font-size: 14px;
+  }
+}

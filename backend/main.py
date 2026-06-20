@@ -18,6 +18,7 @@ from backend.routers import auth as auth_router
 from backend.routers import billing as billing_router
 from backend.routers import catalogue as catalogue_router
 from backend.routers import changelog as changelog_router
+from backend.routers import free_tools as free_tools_router
 from backend.routers import color_profiles as color_profiles_router
 from backend.routers import invites as invites_router
 from backend.routers import jobs as jobs_router
@@ -135,11 +136,31 @@ app.include_router(changelog_router.admin_router)
 app.include_router(admin_router.router)
 app.include_router(admin_affiliate_router.router)
 app.include_router(affiliate_router.router)
+app.include_router(free_tools_router.router)
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.environment}
+
+
+# ---- Periodic cleanup for free tool sessions ----
+import threading
+import time as _time
+
+def _free_tools_cleanup_loop():
+    """Background thread: clean up stale free-tool sessions every 30 min."""
+    _time.sleep(60)  # Wait 1 min after startup before first run
+    while True:
+        try:
+            from backend.routers.free_tools import cleanup_stale_sessions
+            cleanup_stale_sessions()
+        except Exception:
+            pass
+        _time.sleep(1800)  # 30 minutes
+
+_cleanup_thread = threading.Thread(target=_free_tools_cleanup_loop, daemon=True)
+_cleanup_thread.start()
 
 
 # ---- Frontend build version ----

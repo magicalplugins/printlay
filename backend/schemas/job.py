@@ -45,6 +45,7 @@ class JobOut(BaseModel):
     created_at: datetime
     color_profile_id: uuid.UUID | None = None
     color_swaps_draft: list[dict] | None = None
+    optimised_at: datetime | None = None
 
 
 class JobCreate(BaseModel):

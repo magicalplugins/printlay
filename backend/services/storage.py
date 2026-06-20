@@ -113,3 +113,19 @@ def is_configured() -> bool:
         and settings.storage_secret_key
         and settings.storage_bucket
     )
+
+
+def list_prefix(prefix: str) -> list[str]:
+    """List all object keys under a given prefix."""
+    resp = _client().list_objects_v2(Bucket=_bucket(), Prefix=prefix)
+    return [obj["Key"] for obj in resp.get("Contents", [])]
+
+
+def delete_prefix(prefix: str) -> int:
+    """Delete all objects under a prefix. Returns count deleted."""
+    keys = list_prefix(prefix)
+    if not keys:
+        return 0
+    objects = [{"Key": k} for k in keys]
+    _client().delete_objects(Bucket=_bucket(), Delete={"Objects": objects})
+    return len(keys)

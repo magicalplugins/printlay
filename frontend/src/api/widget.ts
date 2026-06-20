@@ -73,6 +73,7 @@ export interface PricingProfile {
   margin_pct: number;
   handling_fee: number;
   min_order_price: number;
+  min_length_m: number;
   vinyl_surcharges: Record<string, number> | null;
   finish_surcharges: Record<string, number> | null;
   quantity_breaks: QuantityBreak[] | null;
@@ -122,6 +123,9 @@ export interface Product {
   finishes: VinylOption[];
   bleed_mm: number;
   safe_mm: number;
+  show_filters: boolean;
+  show_ai_styles: boolean;
+  show_hand_edit: boolean;
   pricing_profile_id: string | null;
   created_at: string;
 }

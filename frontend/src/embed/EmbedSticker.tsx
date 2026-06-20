@@ -68,6 +68,7 @@ export default function EmbedSticker() {
         ) : (
           <ShapedDesigner config={config} client={client} onDone={() => setStep("done")} />
         )}
+        <PoweredBy />
       </div>
     );
   }
@@ -86,6 +87,7 @@ export default function EmbedSticker() {
         <DesignStep config={config} client={client} onDone={() => setStep("done")} />
       )}
       {step === "done" && <DoneStep />}
+      <PoweredBy />
     </div>
   );
 }
@@ -224,6 +226,9 @@ function DesignStep({
   const CORNER_MIN = 0.01;
   const [cornerRadius, setCornerRadius] = useState(CORNER_MIN);
   const [busy, setBusy] = useState(false);
+  const [aiStyling, setAiStyling] = useState<string | null>(null);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [editingCutline, setEditingCutline] = useState(false);
 
   // Natural aspect of the processed design; the customer scales by longest side.
   const aspect = result && result.height_mm > 0 ? result.width_mm / result.height_mm : 1;
@@ -293,6 +298,26 @@ function DesignStep({
     [client, cutStyle, tighten, filterId, cornerRadius]
   );
 
+  const handleAiStyle = useCallback(
+    async (style: string, prompt?: string) => {
+      setAiStyling(style);
+      setBusy(true);
+      try {
+        const r = await client.aiStyle(style, prompt);
+        setResult(r);
+        sessionStore.result = r;
+        setFilterId("none");
+      } catch (e: any) {
+        const msg = e instanceof WidgetApiError ? e.detail : (e?.message || "AI style failed. Please try again.");
+        setPriceErr(msg);
+      } finally {
+        setAiStyling(null);
+        setBusy(false);
+      }
+    },
+    [client]
+  );
+
   // Debounced live price whenever the order options change.
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +364,7 @@ function DesignStep({
           currency: fin.currency,
           quantity,
           options: fin.options,
+          thumbnail_url: fin.thumbnail_url,
         },
         "*"
       );
@@ -352,12 +378,33 @@ function DesignStep({
 
   const money = (n: number) => `${currencySymbol(config.currency)}${n.toFixed(2)}`;
 
+  if (editingCutline && result) {
+    return (
+      <EmbedCutlineEditor
+        borderUrl={result.border_url}
+        points={result.cutline_points}
+        onApply={async (pts) => {
+          setBusy(true);
+          try {
+            const r = await client.editCutline(pts);
+            setResult(r);
+            sessionStore.result = r;
+          } catch { /* keep previous */ }
+          setBusy(false);
+          setEditingCutline(false);
+        }}
+        onClose={() => setEditingCutline(false)}
+      />
+    );
+  }
+
   return (
     <div className="psw-grid">
       <div className="psw-card psw-preview-col">
         <div className={`psw-preview ${busy ? "is-busy" : ""}`}>
           {result && (
             <CutPreview
+              key={result.border_url}
               borderUrl={result.border_url}
               points={result.cutline_points}
               committedTighten={tighten}
@@ -371,6 +418,7 @@ function DesignStep({
           {busy && <div className="psw-spin" />}
         </div>
 
+        {config.show_filters !== false && (
         <div className="psw-field">
           <label className="psw-label">Filter</label>
           <div className="psw-filmstrip">
@@ -382,14 +430,59 @@ function DesignStep({
                 onClick={() => regen({ filterId: f.id })}
                 disabled={busy}
               >
-                {result && (
-                  <img src={result.cutout_url || result.preview_url} alt="" style={{ filter: f.css }} />
+                {result && (result.cutout_url || result.preview_url) && (
+                  <img src={result.cutout_url || result.preview_url} alt="" style={{ filter: f.css }} loading="eager" />
                 )}
                 <span>{f.label}</span>
               </button>
             ))}
           </div>
         </div>
+        )}
+
+        {config.show_ai_styles && (
+        <div className="psw-field">
+          <label className="psw-label">AI Style</label>
+          <div className="psw-ai-styles">
+            {[
+              { id: "cartoon", label: "Cartoon" },
+              { id: "caricature", label: "Caricature" },
+              { id: "pencil", label: "Pencil" },
+              { id: "anime", label: "Anime" },
+              { id: "popart", label: "Pop art" },
+              { id: "watercolor", label: "Watercolour" },
+            ].map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`psw-ai-btn ${aiStyling === s.id ? "is-loading" : ""}`}
+                onClick={() => handleAiStyle(s.id)}
+                disabled={busy || !!aiStyling}
+              >
+                {aiStyling === s.id ? "..." : s.label}
+              </button>
+            ))}
+          </div>
+          <div className="psw-ai-custom">
+            <input
+              type="text"
+              placeholder="Custom style, e.g. &quot;neon glow&quot;"
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+              disabled={busy || !!aiStyling}
+              className="psw-ai-input"
+            />
+            <button
+              type="button"
+              className="psw-ai-btn psw-ai-go"
+              disabled={busy || !!aiStyling || !customPrompt.trim()}
+              onClick={() => handleAiStyle("custom", customPrompt.trim())}
+            >
+              {aiStyling === "custom" ? "..." : "Go"}
+            </button>
+          </div>
+        </div>
+        )}
       </div>
 
       <div className="psw-card psw-options-col">
@@ -479,6 +572,19 @@ function DesignStep({
             <span>Tighter</span>
           </div>
         </div>
+
+        {config.show_hand_edit && result && (cutStyle === "die_cut" || cutStyle === "face" || cutStyle === "contour") && (
+        <div className="psw-field">
+          <button
+            type="button"
+            className="psw-edit-btn"
+            onClick={() => setEditingCutline(true)}
+            disabled={busy || !!aiStyling}
+          >
+            ✏️ Edit cut line by hand
+          </button>
+        </div>
+        )}
 
         {cutStyle === "keep_bg" && (
           <div className="psw-field">
@@ -583,6 +689,16 @@ function Centered({ children, tone }: { children: React.ReactNode; tone?: "error
     <div className="psw-root">
       <StyleTag />
       <div className={`psw-centered ${tone === "error" ? "is-error" : ""}`}>{children}</div>
+    </div>
+  );
+}
+
+function PoweredBy() {
+  return (
+    <div className="psw-powered-by">
+      <a href="https://printlay.co.uk" target="_blank" rel="noopener noreferrer">
+        Powered by <strong>PrintLay</strong>
+      </a>
     </div>
   );
 }
@@ -722,6 +838,7 @@ function CutPreview({
 
   useEffect(() => {
     let cancelled = false;
+    setFrame(null);
     const im = new Image();
     im.onload = () => {
       if (!cancelled)
@@ -742,7 +859,13 @@ function CutPreview({
 
   useEffect(() => {
     const c = canvasRef.current;
-    if (!c || !frame) return;
+    if (!c || !frame) {
+      if (c) {
+        const ctx = c.getContext("2d");
+        if (ctx) ctx.clearRect(0, 0, c.width, c.height);
+      }
+      return;
+    }
     const ctx = c.getContext("2d");
     if (!ctx) return;
     const { img } = frame;
@@ -790,18 +913,393 @@ function CutPreview({
   return <canvas ref={canvasRef} className="psw-canvas" />;
 }
 
+// Full-featured cut line editor for the embed widget (matches admin experience)
+type EditTool = "redraw" | "smooth";
+
+function polyArea(pts: [number, number][]): number {
+  let a = 0;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    a += (pts[j][0] + pts[i][0]) * (pts[j][1] - pts[i][1]);
+  }
+  return Math.abs(a / 2);
+}
+
+function arcForward(pts: [number, number][], from: number, to: number): [number, number][] {
+  const out: [number, number][] = [];
+  let i = from;
+  while (true) {
+    out.push(pts[i]);
+    if (i === to) break;
+    i = (i + 1) % pts.length;
+    if (out.length > pts.length) break;
+  }
+  return out;
+}
+
+function replaceArc(
+  pts: [number, number][],
+  startIdx: number,
+  endIdx: number,
+  stroke: [number, number][]
+): [number, number][] {
+  const n = pts.length;
+  if (n < 3 || stroke.length < 2 || startIdx === endIdx) return pts;
+  const aArc = arcForward(pts, (endIdx + 1) % n, (startIdx - 1 + n) % n);
+  const polyA: [number, number][] = [...stroke, ...aArc];
+  const bArc = arcForward(pts, (startIdx + 1) % n, (endIdx - 1 + n) % n).reverse();
+  const polyB: [number, number][] = [...stroke, ...bArc];
+  return polyArea(polyA) >= polyArea(polyB) ? polyA : polyB;
+}
+
+function EmbedCutlineEditor({
+  borderUrl,
+  points,
+  onApply,
+  onClose,
+}: {
+  borderUrl: string;
+  points: [number, number][];
+  onApply: (pts: [number, number][]) => void;
+  onClose: () => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [tool, setTool] = useState<EditTool>("redraw");
+  const [brush, setBrush] = useState(40);
+  const [dirty, setDirty] = useState(false);
+  const busy = false;
+
+  const undoStackRef = useRef<[number, number][][]>([]);
+  const [undoCount, setUndoCount] = useState(0);
+
+  function pushUndo() {
+    const stack = undoStackRef.current;
+    stack.push(ptsRef.current.map((p) => [...p] as [number, number]));
+    if (stack.length > 10) stack.shift();
+    setUndoCount(stack.length);
+  }
+
+  function doUndo() {
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+    ptsRef.current = stack.pop()!;
+    setUndoCount(stack.length);
+    setDirty(stack.length > 0);
+    redraw();
+  }
+
+  const ptsRef = useRef<[number, number][]>([...points]);
+  const drawingRef = useRef(false);
+  const strokeRef = useRef<[number, number][]>([]);
+  const startIdxRef = useRef(0);
+  const brushPosRef = useRef<[number, number] | null>(null);
+  const toolRef = useRef<EditTool>(tool);
+  toolRef.current = tool;
+  const brushRef = useRef(brush);
+  brushRef.current = brush;
+
+  useEffect(() => {
+    setImg(null);
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => setImg(im);
+    im.src = borderUrl;
+  }, [borderUrl]);
+
+  const brushRadiusPx = useCallback(() => {
+    const c = canvasRef.current;
+    const w = c ? c.width : 400;
+    return w * (0.05 + (brushRef.current / 100) * 0.13);
+  }, []);
+
+  const redraw = useCallback(
+    (opts?: { stroke?: [number, number][]; brush?: [number, number] | null }) => {
+      const c = canvasRef.current;
+      if (!c || !img) return;
+      const ctx = c.getContext("2d");
+      if (!ctx) return;
+      const cw = c.width;
+      const ch = c.height;
+      ctx.clearRect(0, 0, cw, ch);
+      ctx.drawImage(img, 0, 0, cw, ch);
+
+      const pts = ptsRef.current;
+      if (pts.length > 1) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, cw, ch);
+        ctx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] * cw, pts[i][1] * ch);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,255,255,0.8)";
+        ctx.fill("evenodd");
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0] * cw, pts[0][1] * ch);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] * cw, pts[i][1] * ch);
+        ctx.closePath();
+        ctx.setLineDash([8, 5]);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#8b5cf6";
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      const s = opts?.stroke;
+      if (s && s.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(s[0][0] * cw, s[0][1] * ch);
+        for (let i = 1; i < s.length; i++) ctx.lineTo(s[i][0] * cw, s[i][1] * ch);
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#84cc16";
+        ctx.stroke();
+      }
+
+      const b = opts && "brush" in opts ? opts.brush : brushPosRef.current;
+      if (b) {
+        ctx.beginPath();
+        ctx.arc(b[0] * cw, b[1] * ch, brushRadiusPx(), 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(132,204,22,0.9)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    },
+    [img, brushRadiusPx]
+  );
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c || !img) return;
+    const maxDim = 600;
+    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+    c.width = Math.round(img.naturalWidth * scale);
+    c.height = Math.round(img.naturalHeight * scale);
+    redraw();
+  }, [img, redraw]);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        doUndo();
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  });
+
+  function toNorm(e: React.PointerEvent): [number, number] {
+    const c = canvasRef.current!;
+    const rect = c.getBoundingClientRect();
+    return [
+      Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
+      Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+    ];
+  }
+
+  function nearestIdx(n: [number, number]): number {
+    const c = canvasRef.current!;
+    const pts = ptsRef.current;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const dx = (pts[i][0] - n[0]) * c.width;
+      const dy = (pts[i][1] - n[1]) * c.height;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    }
+    return best;
+  }
+
+  function smoothAt(n: [number, number]) {
+    const c = canvasRef.current!;
+    const cw = c.width, ch = c.height;
+    const r = brushRadiusPx();
+    const len = ptsRef.current.length;
+    if (len < 7) return;
+    const src0 = ptsRef.current;
+    let inCount = 0;
+    for (let i = 0; i < len; i++) {
+      if (Math.hypot((src0[i][0] - n[0]) * cw, (src0[i][1] - n[1]) * ch) <= r) inCount++;
+    }
+    if (inCount < 2) return;
+    const K = Math.max(2, Math.min(Math.floor(inCount / 4), 12));
+    let pts = src0;
+    for (let it = 0; it < 3; it++) {
+      const src = pts;
+      const out = src.slice() as [number, number][];
+      for (let i = 0; i < len; i++) {
+        const dist = Math.hypot((src[i][0] - n[0]) * cw, (src[i][1] - n[1]) * ch);
+        if (dist > r) continue;
+        const w = 1 - dist / r;
+        let ax = 0, ay = 0;
+        for (let k = 1; k <= K; k++) {
+          ax += src[(i - k + len) % len][0] + src[(i + k) % len][0];
+          ay += src[(i - k + len) % len][1] + src[(i + k) % len][1];
+        }
+        ax /= K * 2; ay /= K * 2;
+        const lambda = Math.min(0.45, 0.4 * w);
+        out[i] = [src[i][0] + (ax - src[i][0]) * lambda, src[i][1] + (ay - src[i][1]) * lambda];
+      }
+      pts = out;
+    }
+    ptsRef.current = pts;
+  }
+
+  function onDown(e: React.PointerEvent) {
+    if (busy) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    const n = toNorm(e);
+    drawingRef.current = true;
+    if (toolRef.current === "redraw") {
+      startIdxRef.current = nearestIdx(n);
+      strokeRef.current = [n];
+    } else {
+      pushUndo();
+      brushPosRef.current = n;
+      smoothAt(n);
+      setDirty(true);
+      redraw({ brush: n });
+    }
+  }
+
+  function onMove(e: React.PointerEvent) {
+    const n = toNorm(e);
+    if (!drawingRef.current) {
+      if (toolRef.current === "smooth") { brushPosRef.current = n; redraw({ brush: n }); }
+      return;
+    }
+    if (toolRef.current === "redraw") {
+      const last = strokeRef.current[strokeRef.current.length - 1];
+      const c = canvasRef.current!;
+      if (((n[0] - last[0]) * c.width) ** 2 + ((n[1] - last[1]) * c.height) ** 2 < 9) return;
+      strokeRef.current.push(n);
+      redraw({ stroke: strokeRef.current });
+    } else {
+      brushPosRef.current = n;
+      smoothAt(n);
+      redraw({ brush: n });
+    }
+  }
+
+  function onUp(e: React.PointerEvent) {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    const n = toNorm(e);
+    if (toolRef.current === "redraw") {
+      const endIdx = nearestIdx(n);
+      const stroke = strokeRef.current;
+      strokeRef.current = [];
+      if (stroke.length < 2) { redraw(); return; }
+      pushUndo();
+      ptsRef.current = replaceArc(ptsRef.current, startIdxRef.current, endIdx, stroke);
+      setDirty(true);
+      redraw();
+    } else {
+      brushPosRef.current = n;
+      redraw({ brush: n });
+    }
+  }
+
+  function onLeave() {
+    if (drawingRef.current) return;
+    brushPosRef.current = null;
+    redraw({ brush: null });
+  }
+
+  function resetPts() {
+    ptsRef.current = [...points];
+    undoStackRef.current = [];
+    setUndoCount(0);
+    setDirty(false);
+    redraw();
+  }
+
+  return (
+    <div className="psw-card" style={{ maxWidth: 560 }}>
+      <div className="psw-cutline-tools">
+        <button
+          type="button"
+          className={`psw-tool-btn ${tool === "redraw" ? "is-active" : ""}`}
+          onClick={() => setTool("redraw")}
+        >
+          ✏️ Redraw
+        </button>
+        <button
+          type="button"
+          className={`psw-tool-btn ${tool === "smooth" ? "is-active" : ""}`}
+          onClick={() => setTool("smooth")}
+        >
+          〰️ Smooth
+        </button>
+        <button
+          type="button"
+          className="psw-tool-btn"
+          disabled={undoCount === 0}
+          onClick={doUndo}
+        >
+          ↩ Undo
+        </button>
+      </div>
+
+      {tool === "smooth" && (
+        <div className="psw-brush-row">
+          <span>Brush</span>
+          <input type="range" min={10} max={100} step={5} value={brush} onChange={(e) => setBrush(+e.target.value)} />
+        </div>
+      )}
+
+      <div className="psw-cutline-stage">
+        <canvas
+          ref={canvasRef}
+          onPointerDown={onDown}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onPointerCancel={onUp}
+          onPointerLeave={onLeave}
+          style={{ maxWidth: "100%", maxHeight: "55vh", height: "auto", display: "block", margin: "0 auto", touchAction: "none", cursor: "crosshair" }}
+        />
+        {busy && <div className="psw-spin" />}
+      </div>
+
+      <p style={{ fontSize: 11, color: "#94a3b8", textAlign: "center", margin: "8px 0" }}>
+        {tool === "redraw"
+          ? "Drag from one spot on the cut line to another to redraw that section."
+          : "Swipe back and forth over a notchy area to smooth it out."}
+      </p>
+
+      <div className="psw-cutline-actions">
+        <button className="psw-apply-btn" disabled={!dirty || busy} onClick={() => onApply(ptsRef.current)}>
+          Apply changes
+        </button>
+        <button className="psw-tool-btn" disabled={!dirty || busy} onClick={resetPts}>
+          Reset
+        </button>
+        <button className={`psw-tool-btn ${dirty ? "psw-hidden" : ""}`} onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function StyleTag() {
   return <style>{CSS}</style>;
 }
 
 const CSS = `
-.psw-root{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;background:#fff;padding:16px;box-sizing:border-box;min-height:100%}
+html,body{margin:0;padding:0;overflow-x:hidden;width:100%}
+.psw-root{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;background:#fff;padding:16px;box-sizing:border-box;min-height:100%;overflow-x:hidden}
 .psw-root *,.psw-root *::before,.psw-root *::after{box-sizing:border-box}
 .psw-centered{display:flex;align-items:center;justify-content:center;min-height:60vh;color:#64748b;text-align:center;padding:24px}
 .psw-centered.is-error{color:#be123c}
 .psw-card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;max-width:560px;margin:0 auto}
 .psw-grid{display:grid;grid-template-columns:1fr;gap:16px;max-width:920px;margin:0 auto}
 @media(min-width:760px){.psw-grid{grid-template-columns:1fr 320px}}
+@media(max-width:759px){.psw-root{padding:10px}.psw-card{max-width:100%;width:100%;border-radius:12px;padding:14px}.psw-grid{gap:10px}.psw-preview-col{overflow:hidden}}
 .psw-h1{font-size:20px;font-weight:700;margin:0 0 4px}
 .psw-sub{color:#64748b;font-size:14px;margin:0 0 16px}
 .psw-drop{border:2px dashed #cbd5e1;border-radius:14px;min-height:200px;display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;background:#f8fafc;transition:border-color .15s}
@@ -821,12 +1319,13 @@ const CSS = `
 .psw-btn-primary{margin-top:20px;width:100%;background:#0f172a;color:#fff;border:0;border-radius:12px;padding:13px;font-size:15px;font-weight:600;cursor:pointer}
 .psw-btn-primary:disabled{opacity:.45;cursor:default}
 .psw-err{color:#be123c;font-size:13px;margin-top:12px}
-.psw-preview{position:relative;background:repeating-conic-gradient(#f1f5f9 0% 25%,#fff 0% 50%) 50%/20px 20px;border:1px solid #e2e8f0;border-radius:12px;display:flex;align-items:center;justify-content:center;min-height:260px;overflow:hidden}
-.psw-preview img,.psw-canvas{max-height:340px;max-width:100%;height:auto;object-fit:contain;display:block}
+.psw-preview{position:relative;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;display:flex;align-items:center;justify-content:center;min-height:200px;overflow:hidden}
+.psw-preview img,.psw-canvas{max-height:340px;max-width:100%;width:auto;height:auto;object-fit:contain;display:block;margin:0 auto}
+@media(max-width:759px){.psw-preview{min-height:180px;border-radius:10px}.psw-preview img,.psw-canvas{max-height:260px}}
 .psw-preview.is-busy img,.psw-preview.is-busy .psw-canvas{opacity:.4}
 .psw-spin{position:absolute;width:32px;height:32px;border:3px solid #cbd5e1;border-top-color:#8b5cf6;border-radius:50%;animation:psw-spin 0.8s linear infinite}
 @keyframes psw-spin{to{transform:rotate(360deg)}}
-.psw-filmstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+.psw-filmstrip{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch}
 .psw-film{flex:0 0 auto;border:1px solid #e2e8f0;border-radius:10px;background:#fff;padding:4px;cursor:pointer;width:64px;text-align:center}
 .psw-film.is-active{border-color:#8b5cf6;box-shadow:0 0 0 2px #ede9fe}
 .psw-film img{width:54px;height:54px;object-fit:contain;border-radius:6px;background:#f8fafc}
@@ -835,6 +1334,7 @@ const CSS = `
 .psw-hint-row{display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-top:2px}
 .psw-options-col select,.psw-options-col input[type=number]{width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:9px 10px;font-size:14px;background:#fff;color:#0f172a}
 .psw-options-col input[type=range],.psw-preview-col input[type=range]{width:100%;accent-color:#8b5cf6}
+@media(max-width:759px){.psw-options-col{max-width:100%}}
 .psw-price{margin-top:20px;padding-top:16px;border-top:1px solid #e2e8f0}
 .psw-price-total{font-size:28px;font-weight:800;letter-spacing:-.02em}
 .psw-price-unit{font-size:13px;color:#64748b;margin-top:2px}
@@ -890,4 +1390,36 @@ const CSS = `
 .psw-unit{display:inline-flex;border:1px solid #e2e8f0;border-radius:9px;overflow:hidden;background:#f8fafc}
 .psw-unit button{border:0;background:transparent;padding:6px 14px;font-size:13px;color:#64748b;cursor:pointer}
 .psw-unit button.is-active{background:#0f172a;color:#fff}
+.psw-size-warning{margin-top:10px;padding:10px 14px;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;font-size:13px;color:#92400e;animation:psw-fade-in .2s ease}
+@keyframes psw-fade-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.psw-powered-by{text-align:center;padding:12px 0 4px;font-size:11px;color:#94a3b8;letter-spacing:.02em}
+.psw-powered-by a{color:#94a3b8;text-decoration:none;transition:color .15s}
+.psw-powered-by a:hover{color:#6366f1}
+.psw-powered-by strong{font-weight:600;color:#64748b}
+.psw-powered-by a:hover strong{color:#6366f1}
+.psw-ai-styles{display:flex;flex-wrap:wrap;gap:6px}
+.psw-ai-btn{border:1px solid #e2e8f0;background:#fff;border-radius:8px;padding:7px 12px;font-size:12px;color:#334155;cursor:pointer;transition:border-color .15s}
+.psw-ai-btn:hover{border-color:#8b5cf6}
+.psw-ai-btn:disabled{opacity:.5;cursor:default}
+.psw-ai-btn.is-loading{border-color:#8b5cf6;color:#8b5cf6}
+.psw-ai-custom{display:flex;gap:6px;margin-top:8px}
+.psw-ai-input{flex:1;border:1px solid #e2e8f0;border-radius:8px;padding:7px 10px;font-size:12px;color:#0f172a}
+.psw-ai-input:disabled{opacity:.5}
+.psw-ai-go{min-width:40px}
+.psw-edit-btn{width:100%;border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:10px;font-size:13px;color:#334155;cursor:pointer;transition:border-color .15s}
+.psw-edit-btn:hover{border-color:#8b5cf6;color:#0f172a}
+.psw-edit-btn:disabled{opacity:.5;cursor:default}
+.psw-cutline-tools{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.psw-tool-btn{border:1px solid #e2e8f0;background:#fff;border-radius:8px;padding:7px 12px;font-size:12px;color:#334155;cursor:pointer;transition:border-color .15s}
+.psw-tool-btn:hover{border-color:#8b5cf6}
+.psw-tool-btn:disabled{opacity:.4;cursor:default}
+.psw-tool-btn.is-active{background:#8b5cf6;color:#fff;border-color:#8b5cf6}
+.psw-brush-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:11px;color:#64748b}
+.psw-brush-row input{flex:1;accent-color:#8b5cf6}
+.psw-cutline-stage{position:relative;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#f8fafc;padding:10px}
+@media(max-width:759px){.psw-cutline-stage{padding:6px}}
+.psw-cutline-actions{display:flex;gap:6px;margin-top:10px}
+.psw-apply-btn{border:0;background:#8b5cf6;color:#fff;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer}
+.psw-apply-btn:disabled{opacity:.4;cursor:default}
+.psw-hidden{display:none}
 `;

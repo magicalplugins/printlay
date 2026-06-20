@@ -24,6 +24,9 @@ export interface ProductConfig {
   bleed_mm: number;
   safe_mm: number;
   currency: string;
+  show_filters?: boolean;
+  show_ai_styles?: boolean;
+  show_hand_edit?: boolean;
 }
 
 export interface ProcessResult {
@@ -62,6 +65,7 @@ export interface FinalizeResult {
   total: number;
   currency: string;
   options: Record<string, unknown>;
+  thumbnail_url?: string | null;
 }
 
 export class WidgetApiError extends Error {
@@ -130,6 +134,14 @@ export class WidgetClient {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({ points }),
+    }).then((r) => this.handle<ProcessResult>(r));
+  }
+
+  aiStyle(style: string, customPrompt?: string) {
+    return fetch("/api/v1/widget/ai-style", {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({ style, custom_prompt: customPrompt || null }),
     }).then((r) => this.handle<ProcessResult>(r));
   }
 

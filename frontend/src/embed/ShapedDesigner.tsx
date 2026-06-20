@@ -53,6 +53,7 @@ function NumField({
   min,
   max,
   onCommit,
+  onOutOfRange,
   ariaLabel,
   decimals = 0,
 }: {
@@ -60,6 +61,7 @@ function NumField({
   min: number;
   max: number;
   onCommit: (n: number) => void;
+  onOutOfRange?: (attempted: number, min: number, max: number) => void;
   ariaLabel?: string;
   decimals?: number;
 }) {
@@ -77,6 +79,9 @@ function NumField({
     }
     const factor = Math.pow(10, decimals);
     const clamped = Math.min(max, Math.max(min, Math.round(n * factor) / factor));
+    if (n > max || n < min) {
+      onOutOfRange?.(n, min, max);
+    }
     setText(String(clamped));
     if (clamped !== value) onCommit(clamped);
   };
@@ -143,6 +148,24 @@ export default function ShapedDesigner({
   // Rounded corners for square/rectangle artboards (0..1 of half the short side).
   const [cornerRadius, setCornerRadius] = useState(
     typeof config.corner_radius === "number" ? config.corner_radius : 0.2
+  );
+
+  const [sizeWarning, setSizeWarning] = useState<string | null>(null);
+  const sizeWarningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleOutOfRange = useCallback(
+    (attempted: number, min: number, max: number) => {
+      const maxDisplay = unit === "cm" ? (max / 10).toFixed(1) : String(max);
+      const minDisplay = unit === "cm" ? (min / 10).toFixed(1) : String(min);
+      if (attempted > max) {
+        setSizeWarning(`Maximum size is ${maxDisplay} ${unit}. Please choose a smaller value.`);
+      } else {
+        setSizeWarning(`Minimum size is ${minDisplay} ${unit}. Please choose a larger value.`);
+      }
+      if (sizeWarningTimer.current) clearTimeout(sizeWarningTimer.current);
+      sizeWarningTimer.current = setTimeout(() => setSizeWarning(null), 4000);
+    },
+    [unit]
   );
 
   // A locked shape (square / circle) can be "unlocked" into its free variant
@@ -516,6 +539,7 @@ export default function ShapedDesigner({
           currency: fin.currency,
           quantity,
           options: fin.options,
+          thumbnail_url: fin.thumbnail_url,
         },
         "*"
       );
@@ -757,10 +781,17 @@ export default function ShapedDesigner({
               min={mmToUnit(config.min_size_mm, unit)}
               max={mmToUnit(config.max_size_mm, unit)}
               onCommit={(v) => setWidthMm(Math.round(unitToMm(v, unit)))}
+              onOutOfRange={handleOutOfRange}
               ariaLabel={`Width in ${unit}`}
               decimals={dec}
             />
           </div>
+
+          {sizeWarning && (
+            <div className="psw-size-warning" role="alert">
+              {sizeWarning}
+            </div>
+          )}
 
           {canUnlock && (
             <label className="psw-toggle">
@@ -786,6 +817,7 @@ export default function ShapedDesigner({
                 min={mmToUnit(config.min_size_mm, unit)}
                 max={mmToUnit(config.max_size_mm, unit)}
                 onCommit={(v) => setHeightMm(Math.round(unitToMm(v, unit)))}
+                onOutOfRange={handleOutOfRange}
                 ariaLabel={`Height in ${unit}`}
                 decimals={dec}
               />

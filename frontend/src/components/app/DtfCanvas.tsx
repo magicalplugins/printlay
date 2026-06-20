@@ -18,6 +18,7 @@ export interface DtfItem {
   w_mm: number;
   h_mm: number;
   rotation_deg: number;
+  spacing_mm?: number;
 }
 
 interface SnapLine {
@@ -35,6 +36,7 @@ interface Props {
   onSelect: (id: string | null) => void;
   selectedId: string | null;
   mirrorPreview?: boolean;
+  zoom?: number;
 }
 
 const SNAP_THRESHOLD_MM = 2;
@@ -53,6 +55,7 @@ export default function DtfCanvas({
   onSelect,
   selectedId,
   mirrorPreview,
+  zoom = 1,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragState, setDragState] = useState<{
@@ -78,8 +81,11 @@ export default function DtfCanvas({
       const svg = svgRef.current;
       if (!svg) return { x: 0, y: 0 };
       const rect = svg.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * sheetWidthMm;
-      const y = ((e.clientY - rect.top) / rect.height) * sheetHeightMm;
+      const RULER = 20;
+      const totalW = sheetWidthMm + RULER;
+      const totalH = sheetHeightMm + RULER;
+      const x = ((e.clientX - rect.left) / rect.width) * totalW - RULER;
+      const y = ((e.clientY - rect.top) / rect.height) * totalH - RULER;
       return { x, y };
     },
     [sheetWidthMm, sheetHeightMm]
@@ -320,26 +326,65 @@ export default function DtfCanvas({
     onSelect(null);
   }, [onSelect]);
 
+  const RULER_SIZE = 20; // mm in SVG coordinate space
+
   return (
     <div
-      className="relative rounded-xl border border-neutral-700 overflow-hidden bg-neutral-900"
-      style={{ transform: mirrorPreview ? "scaleX(-1)" : undefined }}
+      className="relative rounded-xl border border-neutral-700 overflow-auto bg-neutral-900"
+      style={{ transform: mirrorPreview ? "scaleX(-1)" : undefined, maxHeight: "75vh" }}
     >
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${sheetWidthMm} ${sheetHeightMm}`}
-        className="w-full h-auto block select-none"
-        style={{ minHeight: 200, maxHeight: "70vh" }}
+        viewBox={`${-RULER_SIZE} ${-RULER_SIZE} ${sheetWidthMm + RULER_SIZE} ${sheetHeightMm + RULER_SIZE}`}
+        className="block select-none"
+        style={{ width: `${zoom * 100}%`, minWidth: "100%", height: "auto" }}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onClick={handleBgClick}
       >
-        <style>{`
-          @keyframes dtf-dash {
-            to { stroke-dashoffset: -6; }
-          }
-        `}</style>
+        <style>{``}</style>
+
+        {/* Top ruler */}
+        <rect x={0} y={-RULER_SIZE} width={sheetWidthMm} height={RULER_SIZE} fill="#1e1e1e" />
+        {Array.from({ length: Math.ceil(sheetWidthMm / 10) + 1 }, (_, i) => {
+          const pos = i * 10;
+          if (pos > sheetWidthMm) return null;
+          const isMajor = pos % 100 === 0;
+          const tickH = isMajor ? RULER_SIZE * 0.7 : pos % 50 === 0 ? RULER_SIZE * 0.5 : RULER_SIZE * 0.3;
+          return (
+            <g key={`rt-${i}`}>
+              <line x1={pos} y1={-tickH} x2={pos} y2={0} stroke="#666" strokeWidth={0.3} />
+              {isMajor && (
+                <text x={pos + 1.5} y={-RULER_SIZE * 0.35} fill="#999" fontSize={5} fontFamily="monospace">
+                  {pos}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Left ruler */}
+        <rect x={-RULER_SIZE} y={0} width={RULER_SIZE} height={sheetHeightMm} fill="#1e1e1e" />
+        {Array.from({ length: Math.ceil(sheetHeightMm / 10) + 1 }, (_, i) => {
+          const pos = i * 10;
+          if (pos > sheetHeightMm) return null;
+          const isMajor = pos % 100 === 0;
+          const tickW = isMajor ? RULER_SIZE * 0.7 : pos % 50 === 0 ? RULER_SIZE * 0.5 : RULER_SIZE * 0.3;
+          return (
+            <g key={`rl-${i}`}>
+              <line x1={-tickW} y1={pos} x2={0} y2={pos} stroke="#666" strokeWidth={0.3} />
+              {isMajor && (
+                <text x={-RULER_SIZE + 1} y={pos + 5} fill="#999" fontSize={5} fontFamily="monospace">
+                  {pos}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Corner square */}
+        <rect x={-RULER_SIZE} y={-RULER_SIZE} width={RULER_SIZE} height={RULER_SIZE} fill="#111" />
         {/* Sheet background */}
         <rect
           x={0}
@@ -465,6 +510,19 @@ function GridPattern({ widthMm, heightMm }: { widthMm: number; heightMm: number 
   return <>{lines}</>;
 }
 
+// ---------------------------------------------------------------------------
+// DPI calculation
+// ---------------------------------------------------------------------------
+
+export function getEffectiveDpi(item: DtfItem): number | null {
+  const kind = item.asset.kind;
+  if (kind === "pdf" || kind === "svg") return null;
+  const nativeWmm = item.asset.width_pt * 25.4 / 72;
+  if (nativeWmm <= 0 || item.w_mm <= 0) return null;
+  const scale = item.w_mm / nativeWmm;
+  return Math.round(300 / scale);
+}
+
 function DragItem({
   item,
   isSelected,
@@ -491,10 +549,11 @@ function DragItem({
   const thumbUrl = item.asset.thumbnail_url || "";
   const handleSize = Math.min(item.w_mm, item.h_mm) * 0.12;
   const hs = Math.max(2, Math.min(6, handleSize));
+  const dpi = getEffectiveDpi(item);
+  const lowDpi = dpi !== null && dpi < 150;
 
   return (
     <g
-      className={isDragging ? "" : "transition-all duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]"}
       style={{
         filter: isDragging
           ? "drop-shadow(0 6px 12px rgba(0,0,0,0.5)) drop-shadow(0 2px 4px rgba(0,0,0,0.3))"
@@ -508,6 +567,7 @@ function DragItem({
           ? "scale(0.97)"
           : undefined,
         transformOrigin: `${item.x_mm + item.w_mm / 2}px ${item.y_mm + item.h_mm / 2}px`,
+        transition: isBouncing ? "transform 0.3s ease-out" : undefined,
       }}
     >
       {/* Artwork image */}
@@ -538,7 +598,7 @@ function DragItem({
             strokeWidth={isSelected ? 0.6 : 0.3}
             strokeDasharray={isSelected ? "2 1" : "1.5 1"}
             className="pointer-events-none"
-            style={isSelected ? { strokeDashoffset: 0, animation: "dtf-dash 1s linear infinite" } : undefined}
+            style={undefined}
           />
           {/* Corner handles for selected */}
           {isSelected && (
@@ -579,6 +639,28 @@ function DragItem({
             onRotate();
           }}
         />
+      )}
+
+      {/* Low DPI warning badge */}
+      {lowDpi && (
+        <g className="pointer-events-none">
+          <polygon
+            points={`${item.x_mm + 1},${item.y_mm + 5} ${item.x_mm + 3.5},${item.y_mm + 1} ${item.x_mm + 6},${item.y_mm + 5}`}
+            fill="#f59e0b"
+            stroke="#92400e"
+            strokeWidth={0.3}
+          />
+          <text
+            x={item.x_mm + 3.5}
+            y={item.y_mm + 4.4}
+            textAnchor="middle"
+            fontSize={2.4}
+            fontWeight="bold"
+            fill="#92400e"
+          >
+            !
+          </text>
+        </g>
       )}
     </g>
   );

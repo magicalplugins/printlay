@@ -56,6 +56,9 @@ const GangSheetCalculator = lazyWithRetry(
 const BleedDpiCalculator = lazyWithRetry(
   () => import("./pages/tools/BleedDpiCalculator")
 );
+const FreeSheetTool = lazyWithRetry(
+  () => import("./pages/FreeSheetTool")
+);
 const AffiliateDashboard = lazyWithRetry(() => import("./pages/AffiliateDashboard"));
 const AdminAffiliate = lazyWithRetry(() => import("./pages/AdminAffiliate"));
 const AdminCatalogues = lazyWithRetry(() => import("./pages/AdminCatalogues"));
@@ -106,6 +109,10 @@ export default function App() {
               <Route
                 path="/tools/bleed-dpi-calculator"
                 element={<BleedDpiCalculator />}
+              />
+              <Route
+                path="/tools/gang-sheet"
+                element={<FreeSheetTool />}
               />
               {/* Embeddable sticker designer. No auth/profile guard and no app
                   shell — it runs inside an iframe and authenticates purely with

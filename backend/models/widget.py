@@ -103,6 +103,11 @@ class PricingProfile(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     """Price floor — the estimate is never returned below this."""
 
+    min_length_m: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0.0"
+    )
+    """Minimum billable length in metres. 0 = pro-rata, 1 = DTF sheets."""
+
     vinyl_surcharges: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     """Per-vinyl surcharge map, e.g. {'holographic': 0.15} where the value is a
     fraction added to the media cost (0.15 = +15%)."""
@@ -195,6 +200,21 @@ class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Float, nullable=False, default=4.0, server_default="4.0"
     )
     """Inner safe area shown only as a friendly dashed guide."""
+
+    show_filters: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    """Whether to show photo filter options to customers in the widget."""
+
+    show_ai_styles: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """Whether to show AI style options (cartoon, pencil, etc.) in the widget."""
+
+    show_hand_edit: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """Whether to show the hand-edit cutline tool in the widget."""
 
     pricing_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

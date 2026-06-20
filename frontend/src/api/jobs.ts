@@ -34,6 +34,7 @@ export type Job = {
   created_at: string;
   color_profile_id?: string | null;
   color_swaps_draft?: ColorSwap[] | null;
+  optimised_at?: string | null;
 };
 
 export function listJobs() {
@@ -208,6 +209,19 @@ export type GenerationInfo = {
 
 export function getGenerationInfo(id: string) {
   return api<GenerationInfo>(`/api/jobs/${id}/generation-info`);
+}
+
+export type OptimiseResult = {
+  optimised: number;
+  skipped: number;
+  total_before_bytes: number;
+  total_after_bytes: number;
+};
+
+export function optimiseJobAssets(id: string) {
+  return api<OptimiseResult>(`/api/jobs/${id}/optimise-assets`, {
+    method: "POST",
+  });
 }
 
 export function pollOutputStatus(outputId: string) {

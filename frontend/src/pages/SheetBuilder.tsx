@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   AutoLayoutResult,
   CutterPreset,
+  MultiAssetItem,
   StickerSheet,
   autoLayout,
   bulkDeleteSheets,
@@ -13,6 +14,7 @@ import {
   exportSheetSvg,
   listPresets,
   listSheets,
+  multiAutoLayout,
   packSheet,
   updateSheet,
 } from "../api/sheets";
@@ -24,6 +26,7 @@ import SpotColourRow, { spotDisplayColor } from "../components/app/SpotColourRow
 import DtfCanvas, {
   DtfItem,
   dtfItemsToplacements,
+  getEffectiveDpi,
   placementsToDtfItems,
 } from "../components/app/DtfCanvas";
 
@@ -35,6 +38,7 @@ export default function SheetBuilder() {
   const [activeSheet, setActiveSheet] = useState<StickerSheet | null>(null);
   const [presets, setPresets] = useState<CutterPreset[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [userSpots, setUserSpots] = useState<SpotColour[]>([]);
@@ -69,16 +73,163 @@ export default function SheetBuilder() {
   // Auto-layout form
   const [layoutAssetId, setLayoutAssetId] = useState<string>("");
   const [layoutQty, setLayoutQty] = useState(10);
-  const [layoutOrientation, setLayoutOrientation] = useState<
+  const [layoutOrientation, _setLayoutOrientation] = useState<
     "auto" | "horizontal" | "vertical"
   >("auto");
   // Placed sticker size (mm). Aspect-locked to the asset's native ratio so
   // changing one dimension updates the other. Empty until an asset is picked.
   const [layoutWidthMm, setLayoutWidthMm] = useState<string>("");
-  const [layoutHeightMm, setLayoutHeightMm] = useState<string>("");
+  const [_layoutHeightMm, setLayoutHeightMm] = useState<string>("");
   const [layoutResult, setLayoutResult] = useState<AutoLayoutResult | null>(
     null
   );
+
+  // Multi-asset gang queue (sticker mode)
+  type GangQueueItem = {
+    id: string;
+    asset: Asset;
+    qty: number;
+    widthMm: number;
+    heightMm: number;
+    expanded: boolean;
+  };
+  const [gangQueue, setGangQueue] = useState<GangQueueItem[]>([]);
+  const [gangDragOver, setGangDragOver] = useState(false);
+  const [gangUploading, setGangUploading] = useState(false);
+  // Catalogue picker state
+  const [catPickerOpen, setCatPickerOpen] = useState(false);
+  const [catPickerCat, setCatPickerCat] = useState<{ id: string; name: string } | null>(null);
+  const [catPickerAssets, setCatPickerAssets] = useState<Asset[] | null>(null);
+  const [catPickerSearch, setCatPickerSearch] = useState("");
+  const [catPickerExpanded, setCatPickerExpanded] = useState(false);
+
+  function gangAddAsset(asset: Asset) {
+    if (gangQueue.find((g) => g.asset.id === asset.id)) return;
+    const ptToMm = 25.4 / 72;
+    const wMm = asset.width_pt * ptToMm;
+    const hMm = asset.height_pt * ptToMm;
+    setGangQueue((prev) => [
+      ...prev,
+      {
+        id: asset.id,
+        asset,
+        qty: 1,
+        widthMm: Math.round(wMm * 10) / 10,
+        heightMm: Math.round(hMm * 10) / 10,
+        expanded: true,
+      },
+    ]);
+  }
+
+  function gangRemoveItem(id: string) {
+    setGangQueue((prev) => prev.filter((g) => g.id !== id));
+  }
+
+  function gangUpdateQty(id: string, qty: number) {
+    setGangQueue((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, qty: Math.max(1, qty) } : g))
+    );
+  }
+
+  function gangUpdateWidth(id: string, w: number) {
+    setGangQueue((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        const aspect = g.asset.width_pt / g.asset.height_pt;
+        return { ...g, widthMm: w, heightMm: Math.round((w / aspect) * 10) / 10 };
+      })
+    );
+  }
+
+  function gangUpdateHeight(id: string, h: number) {
+    setGangQueue((prev) =>
+      prev.map((g) => {
+        if (g.id !== id) return g;
+        const aspect = g.asset.width_pt / g.asset.height_pt;
+        return { ...g, heightMm: h, widthMm: Math.round((h * aspect) * 10) / 10 };
+      })
+    );
+  }
+
+  function gangToggleExpand(id: string) {
+    setGangQueue((prev) =>
+      prev.map((g) => (g.id === id ? { ...g, expanded: !g.expanded } : g))
+    );
+  }
+
+  // Load assets when a category is selected in the picker
+  useEffect(() => {
+    if (!catPickerCat) { setCatPickerAssets(null); return; }
+    listAssets(catPickerCat.id).then(setCatPickerAssets).catch(() => setCatPickerAssets([]));
+  }, [catPickerCat]);
+
+  const gangHandleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setGangDragOver(false);
+      if (!activeSheet) return;
+
+      const files = Array.from(e.dataTransfer.files).filter(
+        (f) => f.type.startsWith("image/") || f.name.endsWith(".pdf") || f.name.endsWith(".svg") ||
+        /\.(png|jpe?g|gif|webp)$/i.test(f.name)
+      );
+      if (files.length === 0) return;
+
+      if (files.length > 10) {
+        setErr("Maximum 10 files at once. Please drop fewer files.");
+        return;
+      }
+
+      setGangUploading(true);
+      try {
+        const cats = await listCategories();
+        let gangCat = cats.find((c) => c.name === "Gang Sheet Uploads");
+        if (!gangCat) {
+          const { createCategory } = await import("../api/catalogue");
+          gangCat = await createCategory("Gang Sheet Uploads");
+        }
+
+        let failed = 0;
+        for (const file of files) {
+          try {
+            const asset = await uploadAsset(gangCat.id, file, file.name);
+            setAssets((prev) => [...prev, asset]);
+            gangAddAsset(asset);
+          } catch {
+            failed++;
+          }
+        }
+        if (failed > 0) setErr(`${failed} file(s) failed to upload`);
+      } catch (err) {
+        setErr(String(err));
+      } finally {
+        setGangUploading(false);
+      }
+    },
+    [activeSheet, gangQueue]
+  );
+
+  async function handleMultiAutoLayout() {
+    if (!activeSheet || gangQueue.length === 0) return;
+    try {
+      await updateSheet(activeSheet.id, activeSheet);
+      const items: MultiAssetItem[] = gangQueue.map((g) => ({
+        asset_id: g.asset.id,
+        quantity: g.qty,
+        width_mm: g.widthMm,
+      }));
+      const result = await multiAutoLayout(activeSheet.id, items);
+      setLayoutResult(result);
+      setActiveSheet((prev) =>
+        prev
+          ? { ...prev, placements: result.placements, media_height_mm: result.total_height_mm }
+          : null
+      );
+    } catch (e) {
+      setErr(String(e));
+    }
+  }
 
   // Canvas
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -102,6 +253,7 @@ export default function SheetBuilder() {
   async function loadAssets() {
     try {
       const cats = await listCategories();
+      setCategories(cats);
       const allAssets: Asset[] = [];
       for (const cat of cats) {
         const catAssets = await listAssets(cat.id);
@@ -148,13 +300,21 @@ export default function SheetBuilder() {
   }, [presetAssetId, assets, sheets]);
 
   // Sync DTF items from active sheet placements
+  const dtfHydrated = useRef(false);
   useEffect(() => {
-    if (activeSheet?.sheet_type === "dtf" && activeSheet.placements && assets.length > 0) {
+    if (activeSheet?.sheet_type === "dtf" && activeSheet.placements && assets.length > 0 && !dtfHydrated.current) {
       setDtfItems(placementsToDtfItems(activeSheet.placements, assets));
-    } else if (activeSheet?.sheet_type === "dtf") {
+      dtfHydrated.current = true;
+    } else if (activeSheet?.sheet_type === "dtf" && !activeSheet.placements && !dtfHydrated.current) {
       setDtfItems([]);
+      dtfHydrated.current = true;
     }
   }, [activeSheet?.id, activeSheet?.sheet_type, assets]);
+
+  // Reset hydration flag when switching sheets
+  useEffect(() => {
+    dtfHydrated.current = false;
+  }, [activeSheet?.id]);
 
   // DTF handlers
   const dtfHandleMove = useCallback((id: string, x: number, y: number) => {
@@ -180,19 +340,53 @@ export default function SheetBuilder() {
       const MM_PER = 25.4 / 72;
       const w = asset.width_pt * MM_PER;
       const h = asset.height_pt * MM_PER;
-      const newItems: DtfItem[] = [];
-      for (let i = 0; i < qty; i++) {
-        newItems.push({
-          id: `${asset.id}-${Date.now()}-${i}`,
-          asset,
-          x_mm: 5 + (i % 5) * (w + 3),
-          y_mm: 5 + Math.floor(i / 5) * (h + 3),
-          w_mm: w,
-          h_mm: h,
-          rotation_deg: 0,
-        });
-      }
-      setDtfItems((prev) => [...prev, ...newItems]);
+      const margin = activeSheet.edge_margin_mm || 10;
+      const gap = activeSheet.gap_mm || 5;
+      const sheetW = activeSheet.media_width_mm;
+
+      setDtfItems((prev) => {
+        // Find the next available position using a simple row-packing algorithm
+        let cursorX = margin;
+        let cursorY = margin;
+        let rowHeight = 0;
+
+        // Build occupied bounding boxes from existing items
+        const occupied = prev.map((i) => ({
+          x: i.x_mm,
+          y: i.y_mm,
+          r: i.x_mm + i.w_mm,
+          b: i.y_mm + i.h_mm,
+        }));
+
+        // Find the bottom of existing content
+        if (occupied.length > 0) {
+          const maxBottom = Math.max(...occupied.map((o) => o.b));
+          // Start new items after existing content
+          cursorY = maxBottom + gap;
+          cursorX = margin;
+        }
+
+        const newItems: DtfItem[] = [];
+        for (let i = 0; i < qty; i++) {
+          if (cursorX + w > sheetW - margin) {
+            cursorX = margin;
+            cursorY += rowHeight + gap;
+            rowHeight = 0;
+          }
+          newItems.push({
+            id: `${asset.id}-${Date.now()}-${i}`,
+            asset,
+            x_mm: cursorX,
+            y_mm: cursorY,
+            w_mm: w,
+            h_mm: h,
+            rotation_deg: 0,
+          });
+          cursorX += w + gap;
+          rowHeight = Math.max(rowHeight, h);
+        }
+        return [...prev, ...newItems];
+      });
     },
     [activeSheet]
   );
@@ -205,6 +399,8 @@ export default function SheetBuilder() {
 
   const [dtfDragOver, setDtfDragOver] = useState(false);
   const [dtfUploading, setDtfUploading] = useState(false);
+  const [dtfZoom, setDtfZoom] = useState(1);
+  const [dtfOverflowMsg, setDtfOverflowMsg] = useState<string | null>(null);
 
   const dtfHandleDrop = useCallback(
     async (e: React.DragEvent) => {
@@ -214,9 +410,15 @@ export default function SheetBuilder() {
       if (!activeSheet) return;
 
       const files = Array.from(e.dataTransfer.files).filter((f) =>
-        f.type.startsWith("image/") || f.name.endsWith(".pdf")
+        f.type.startsWith("image/") || f.name.endsWith(".pdf") ||
+        /\.(png|jpe?g|gif|webp|svg)$/i.test(f.name)
       );
       if (files.length === 0) return;
+
+      if (files.length > 10) {
+        setErr("Maximum 10 files at once. Please drop fewer files.");
+        return;
+      }
 
       setDtfUploading(true);
       try {
@@ -228,11 +430,22 @@ export default function SheetBuilder() {
           dtfCat = await createCategory("DTF Uploads");
         }
 
+        // Upload sequentially to avoid overwhelming the server
+        let uploaded = 0;
+        let failed = 0;
         for (const file of files) {
-          const asset = await uploadAsset(dtfCat.id, file, file.name);
-          // Reload assets so we have the new one
-          setAssets((prev) => [...prev, asset]);
-          dtfAddArtwork(asset, 1);
+          try {
+            const asset = await uploadAsset(dtfCat.id, file, file.name);
+            setAssets((prev) => [...prev, asset]);
+            dtfAddArtwork(asset, 1);
+            uploaded++;
+          } catch {
+            failed++;
+          }
+        }
+
+        if (failed > 0) {
+          setErr(`${uploaded} uploaded, ${failed} failed`);
         }
       } catch (err) {
         setErr(String(err));
@@ -246,26 +459,158 @@ export default function SheetBuilder() {
   const dtfDuplicateItem = useCallback(
     (id: string, qty: number) => {
       const item = dtfItems.find((i) => i.id === id);
-      if (!item) return;
-      const newItems: DtfItem[] = [];
-      for (let i = 0; i < qty; i++) {
-        newItems.push({
-          ...item,
-          id: `${item.asset.id}-${Date.now()}-${i}`,
-          x_mm: item.x_mm + (i + 1) * 3,
-          y_mm: item.y_mm + (i + 1) * 3,
-        });
-      }
-      setDtfItems((prev) => [...prev, ...newItems]);
+      if (!item || !activeSheet) return;
+      const margin = activeSheet.edge_margin_mm || 10;
+      const gap = item.spacing_mm ?? activeSheet.gap_mm ?? 5;
+      const sheetW = activeSheet.media_width_mm;
+      const sheetH = activeSheet.media_height_mm || 1000;
+      const w = item.w_mm;
+      const h = item.h_mm;
+
+      setDtfItems((prev) => {
+        // Find all items of the same asset to place new copies adjacent to them
+        const sameAsset = prev.filter((i) => i.asset.id === item.asset.id);
+        // Find the rightmost item of this asset
+        const rightmost = sameAsset.reduce((best, cur) =>
+          (cur.x_mm + cur.w_mm > best.x_mm + best.w_mm) ? cur : best
+        , sameAsset[0]);
+
+        // Start placing to the right of the rightmost same-asset item
+        let cursorX = rightmost.x_mm + rightmost.w_mm + gap;
+        let cursorY = rightmost.y_mm;
+        let rowHeight = h;
+
+        const occupied = prev.map((i) => ({
+          x: i.x_mm, y: i.y_mm, w: i.w_mm, h: i.h_mm,
+        }));
+
+        const doesCollide = (x: number, y: number, occ: typeof occupied) => {
+          for (const o of occ) {
+            if (x < o.x + o.w + gap && x + w > o.x - gap && y < o.y + o.h + gap && y + h > o.y - gap) return true;
+          }
+          return false;
+        };
+
+        const newItems: DtfItem[] = [];
+        for (let i = 0; i < qty; i++) {
+          // Wrap to next row if no horizontal space
+          if (cursorX + w > sheetW - margin) {
+            cursorX = margin;
+            cursorY += rowHeight + gap;
+            rowHeight = 0;
+          }
+
+          // Check sheet height
+          if (cursorY + h > sheetH - margin) {
+            setDtfOverflowMsg("No room on sheet — reduce quantity or spacing to fit.");
+            setTimeout(() => setDtfOverflowMsg(null), 4000);
+            break;
+          }
+
+          // If this spot collides, skip forward
+          while (doesCollide(cursorX, cursorY, [...occupied, ...newItems.map((n) => ({ x: n.x_mm, y: n.y_mm, w: n.w_mm, h: n.h_mm }))]) && cursorX + w <= sheetW - margin) {
+            cursorX += w + gap;
+          }
+          // If went off right edge, wrap
+          if (cursorX + w > sheetW - margin) {
+            cursorX = margin;
+            cursorY += rowHeight + gap;
+            rowHeight = 0;
+            if (cursorY + h > sheetH - margin) {
+              setDtfOverflowMsg("No room on sheet — reduce quantity or spacing to fit.");
+              setTimeout(() => setDtfOverflowMsg(null), 4000);
+              break;
+            }
+          }
+
+          newItems.push({
+            ...item,
+            id: `${item.asset.id}-${Date.now()}-${i}`,
+            x_mm: cursorX,
+            y_mm: cursorY,
+          });
+          cursorX += w + gap;
+          rowHeight = Math.max(rowHeight, h);
+        }
+        return [...prev, ...newItems];
+      });
     },
-    [dtfItems]
+    [dtfItems, activeSheet]
   );
+
+  // Re-layout all items grouped by asset, horizontal-first
+  const dtfRepack = useCallback(() => {
+    if (!activeSheet) return;
+    const margin = activeSheet.edge_margin_mm || 10;
+    const sheetW = activeSheet.media_width_mm;
+    const sheetH = activeSheet.media_height_mm || 1000;
+
+    setDtfItems((prev) => {
+      // Group items by asset ID, preserving insertion order
+      const groups: DtfItem[][] = [];
+      const seen = new Set<string>();
+      for (const item of prev) {
+        if (!seen.has(item.asset.id)) {
+          seen.add(item.asset.id);
+          groups.push(prev.filter((i) => i.asset.id === item.asset.id));
+        }
+      }
+
+      const packed: DtfItem[] = [];
+      let cursorX = margin;
+      let cursorY = margin;
+      let rowHeight = 0;
+      let overflow = false;
+
+      for (const group of groups) {
+        if (overflow) break;
+        const gap = group[0].spacing_mm ?? activeSheet.gap_mm ?? 5;
+
+        for (const item of group) {
+          const w = item.w_mm;
+          const h = item.h_mm;
+
+          // Wrap to next row if no horizontal space
+          if (cursorX + w > sheetW - margin) {
+            cursorX = margin;
+            cursorY += rowHeight + gap;
+            rowHeight = 0;
+          }
+
+          // Check sheet height
+          if (cursorY + h > sheetH - margin) {
+            overflow = true;
+            break;
+          }
+
+          packed.push({ ...item, x_mm: cursorX, y_mm: cursorY });
+          cursorX += w + gap;
+          rowHeight = Math.max(rowHeight, h);
+        }
+
+        // After each group, start a new row for the next group
+        if (!overflow && packed.length > 0) {
+          cursorX = margin;
+          cursorY += rowHeight + (groups[0][0].spacing_mm ?? activeSheet.gap_mm ?? 5);
+          rowHeight = 0;
+        }
+      }
+
+      if (overflow) {
+        setDtfOverflowMsg("Cannot fit all items — reduce quantity or spacing to fit on sheet.");
+        setTimeout(() => setDtfOverflowMsg(null), 4000);
+      } else {
+        setDtfOverflowMsg(null);
+      }
+      return packed;
+    });
+  }, [activeSheet]);
 
   const dtfSave = useCallback(async () => {
     if (!activeSheet) return;
     const placements = dtfItemsToplacements(dtfItems);
     try {
-      const updated = await updateSheet(activeSheet.id, { ...activeSheet, placements });
+      const updated = await updateSheet(activeSheet.id, { placements });
       setActiveSheet(updated);
     } catch (e) {
       setErr(String(e));
@@ -305,7 +650,6 @@ export default function SheetBuilder() {
   const nativeHmm = selectedAsset
     ? selectedAsset.height_pt * MM_PER_PT
     : 0;
-  const nativeAspect = nativeHmm > 0 ? nativeWmm / nativeHmm : 1;
 
   // Seed the size fields from the asset's native size whenever the selected
   // sticker changes, so the user starts from its designed dimensions.
@@ -336,22 +680,6 @@ export default function SheetBuilder() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutAssetId, assets]);
-
-  function onWidthChange(v: string) {
-    setLayoutWidthMm(v);
-    const n = parseFloat(v);
-    if (!Number.isNaN(n) && n > 0 && nativeAspect > 0) {
-      setLayoutHeightMm((n / nativeAspect).toFixed(1));
-    }
-  }
-
-  function onHeightChange(v: string) {
-    setLayoutHeightMm(v);
-    const n = parseFloat(v);
-    if (!Number.isNaN(n) && n > 0) {
-      setLayoutWidthMm((n * nativeAspect).toFixed(1));
-    }
-  }
 
   // Load thumbnail images for canvas rendering
   const [assetImages, setAssetImages] = useState<Record<string, HTMLImageElement>>({});
@@ -583,9 +911,11 @@ export default function SheetBuilder() {
       const s = await createSheet({
         name: newName,
         media_width_mm: newWidth,
-        media_height_mm: 300,
+        media_height_mm: newSheetType === "dtf" ? 1000 : 300,
         mode: "roll",
         sheet_type: newSheetType,
+        edge_margin_mm: newSheetType === "dtf" ? 10 : 5,
+        gap_mm: newSheetType === "dtf" ? 5 : 3,
       });
       setSheets((prev) => (prev ? [s, ...prev] : [s]));
       setActiveSheet(s);
@@ -631,6 +961,28 @@ export default function SheetBuilder() {
     if (!activeSheet || !layoutAssetId || !layoutWidthMm) return;
     if (layoutAssetId !== presetAssetId) return;
     autoLaidRef.current = true;
+
+    // Also add to gang queue so size controls are visible
+    const asset = assets.find((a) => a.id === presetAssetId);
+    if (asset && !gangQueue.find((g) => g.asset.id === asset.id)) {
+      const w = parseFloat(layoutWidthMm);
+      const h = parseFloat(_layoutHeightMm || "0");
+      const ptToMm = 25.4 / 72;
+      const wMm = w > 0 ? w : asset.width_pt * ptToMm;
+      const hMm = h > 0 ? h : asset.height_pt * ptToMm;
+      setGangQueue((prev) => [
+        ...prev,
+        {
+          id: asset.id,
+          asset,
+          qty: presetQty ? parseInt(presetQty, 10) || 1 : layoutQty,
+          widthMm: Math.round(wMm * 10) / 10,
+          heightMm: Math.round(hMm * 10) / 10,
+          expanded: true,
+        },
+      ]);
+    }
+
     void handleAutoLayout();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSheet, layoutAssetId, layoutWidthMm]);
@@ -1047,6 +1399,16 @@ export default function SheetBuilder() {
               {stats.count} stickers · {stats.metres}m
             </span>
           )}
+          {activeSheet?.sheet_type === "dtf" && (
+            <button
+              onClick={dtfSave}
+              disabled={dtfItems.length === 0}
+              className="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white px-3 sm:px-4 py-1.5 text-sm font-medium"
+            >
+              <span className="sm:hidden">Save</span>
+              <span className="hidden sm:inline">Save Layout</span>
+            </button>
+          )}
           <button
             onClick={handleExport}
             disabled={
@@ -1061,6 +1423,7 @@ export default function SheetBuilder() {
               </>
             )}
           </button>
+          {activeSheet?.sheet_type !== "dtf" && (
           <button
             onClick={handleExportSvg}
             disabled={
@@ -1075,6 +1438,7 @@ export default function SheetBuilder() {
               </>
             )}
           </button>
+          )}
           {/* Mobile: open settings drawer */}
           <button
             onClick={() => setPanelOpen(true)}
@@ -1120,22 +1484,39 @@ export default function SheetBuilder() {
               <DtfCanvas
                 items={dtfItems}
                 sheetWidthMm={activeSheet.media_width_mm}
-                sheetHeightMm={activeSheet.media_height_mm || 300}
+                sheetHeightMm={activeSheet.media_height_mm || 1000}
                 onMove={dtfHandleMove}
                 onResize={dtfHandleResize}
                 onRotate={dtfHandleRotate}
                 onSelect={setDtfSelectedId}
                 selectedId={dtfSelectedId}
                 mirrorPreview={activeSheet.mirror_output}
+                zoom={dtfZoom}
               />
+              {/* DTF zoom controls */}
+              <div className="mt-2 flex items-center justify-center gap-1">
+                {[1, 2, 3].map((level) => (
+                  <button
+                    key={level}
+                    onClick={() => setDtfZoom(level)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                      dtfZoom === level
+                        ? "bg-emerald-600 text-white"
+                        : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+                    }`}
+                  >
+                    {level === 1 ? "Fit" : `${level}×`}
+                  </button>
+                ))}
+              </div>
+              {/* Overflow warning */}
+              {dtfOverflowMsg && (
+                <div className="mt-2 rounded-lg bg-amber-900/60 border border-amber-600/50 px-3 py-2 text-xs text-amber-200 text-center">
+                  {dtfOverflowMsg}
+                </div>
+              )}
               {/* DTF toolbar */}
               <div className="mt-3 flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={dtfSave}
-                  className="rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-sm font-medium transition"
-                >
-                  Save layout
-                </button>
                 <button
                   onClick={dtfAutoPack}
                   disabled={packing || dtfItems.length === 0}
@@ -1167,11 +1548,28 @@ export default function SheetBuilder() {
               </div>
             </div>
           ) : (
-            <canvas
-              ref={canvasRef}
-              className="rounded-lg"
-              style={{ imageRendering: "crisp-edges" }}
-            />
+            <div
+              className={`relative ${gangDragOver ? "ring-2 ring-violet-400 ring-offset-2 ring-offset-neutral-950 rounded-lg" : ""}`}
+              onDragOver={(e) => { e.preventDefault(); setGangDragOver(true); }}
+              onDragLeave={() => setGangDragOver(false)}
+              onDrop={gangHandleDrop}
+            >
+              {gangDragOver && (
+                <div className="absolute inset-0 z-10 rounded-xl bg-violet-500/10 border-2 border-dashed border-violet-400 flex items-center justify-center pointer-events-none">
+                  <span className="text-violet-300 text-lg font-semibold">Drop artwork here</span>
+                </div>
+              )}
+              {gangUploading && (
+                <div className="absolute inset-0 z-10 rounded-xl bg-neutral-900/80 flex items-center justify-center">
+                  <span className="text-white text-sm animate-pulse">Uploading…</span>
+                </div>
+              )}
+              <canvas
+                ref={canvasRef}
+                className="rounded-lg"
+                style={{ imageRendering: "crisp-edges" }}
+              />
+            </div>
           )}
         </div>
 
@@ -1232,6 +1630,25 @@ export default function SheetBuilder() {
                 if (dtfSelectedId === id) setDtfSelectedId(null);
               }}
               onDuplicate={dtfDuplicateItem}
+              onResize={(id, w, h) => {
+                setDtfItems((prev) =>
+                  prev.map((i) => {
+                    if (i.asset.id === prev.find((x) => x.id === id)?.asset.id) {
+                      return { ...i, w_mm: w, h_mm: h };
+                    }
+                    return i;
+                  })
+                );
+                setTimeout(dtfRepack, 0);
+              }}
+              onSpacing={(assetId, spacing) => {
+                setDtfItems((prev) =>
+                  prev.map((i) =>
+                    i.asset.id === assetId ? { ...i, spacing_mm: spacing } : i
+                  )
+                );
+                setTimeout(dtfRepack, 0);
+              }}
             />
           )}
           {/* Mobile close header */}
@@ -1244,129 +1661,215 @@ export default function SheetBuilder() {
               Close ✕
             </button>
           </div>
-          {/* Auto-layout */}
-          <Panel title="Auto-Layout" defaultOpen>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs text-neutral-400 mb-1">
-                  Sticker asset
-                </label>
-                <select
-                  value={layoutAssetId}
-                  onChange={(e) => setLayoutAssetId(e.target.value)}
-                  className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                >
-                  <option value="">Select...</option>
-                  {assets.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {layoutAssetId && (
+          {/* Auto-layout / Gang Queue */}
+          {activeSheet?.sheet_type === "sticker" ? (
+            <Panel title="Artwork Queue" defaultOpen>
+              <div className="space-y-3">
+                {gangQueue.length === 0 ? (
+                  <p className="text-xs text-neutral-500 italic">
+                    Drag artwork onto the canvas or pick from your catalogue below.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {gangQueue.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-lg border border-neutral-700 bg-neutral-800/50 overflow-hidden"
+                      >
+                        <button
+                          onClick={() => gangToggleExpand(item.id)}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-neutral-700/30"
+                        >
+                          {item.asset.thumbnail_url && (
+                            <img
+                              src={item.asset.thumbnail_url}
+                              className="w-8 h-8 rounded object-cover shrink-0"
+                              alt=""
+                            />
+                          )}
+                          <span className="flex-1 text-sm text-white truncate">
+                            {item.asset.name}
+                          </span>
+                          <span className="text-xs text-neutral-400">×{item.qty}</span>
+                          <span className="text-neutral-500 text-xs">{item.expanded ? "▲" : "▼"}</span>
+                        </button>
+                        {item.expanded && (
+                          <div className="px-3 pb-3 pt-1 space-y-2 border-t border-neutral-700/50">
+                            <div className="flex gap-2">
+                              <div className="flex-1">
+                                <label className="block text-[10px] text-neutral-500 mb-0.5">Qty</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={10000}
+                                  value={item.qty}
+                                  onChange={(e) => gangUpdateQty(item.id, Number(e.target.value))}
+                                  className="w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-white"
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <label className="block text-[10px] text-neutral-500 mb-0.5">W (mm)</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  step={0.5}
+                                  value={item.widthMm}
+                                  onChange={(e) => gangUpdateWidth(item.id, Number(e.target.value))}
+                                  className="w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-white"
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <label className="block text-[10px] text-neutral-500 mb-0.5">H (mm)</label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  step={0.5}
+                                  value={item.heightMm}
+                                  onChange={(e) => gangUpdateHeight(item.id, Number(e.target.value))}
+                                  className="w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-white"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-neutral-500">
+                                {item.widthMm.toFixed(0)}×{item.heightMm.toFixed(0)}mm · aspect locked
+                              </span>
+                              <button
+                                onClick={() => gangRemoveItem(item.id)}
+                                className="text-[10px] text-rose-400 hover:text-rose-300"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Catalogue picker (category → thumbnails) */}
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs text-neutral-400">
-                      Sticker size (mm)
-                    </label>
-                    <span className="text-[10px] text-neutral-500">
-                      aspect locked 🔒
-                    </span>
-                  </div>
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="number"
-                      min={1}
-                      step={0.5}
-                      value={layoutWidthMm}
-                      onChange={(e) => onWidthChange(e.target.value)}
-                      className="flex-1 w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white text-right"
-                      title="Width (mm)"
-                    />
-                    <span className="text-neutral-500 text-xs">W</span>
-                    <span className="text-neutral-600">×</span>
-                    <input
-                      type="number"
-                      min={1}
-                      step={0.5}
-                      value={layoutHeightMm}
-                      onChange={(e) => onHeightChange(e.target.value)}
-                      className="flex-1 w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white text-right"
-                      title="Height (mm)"
-                    />
-                    <span className="text-neutral-500 text-xs">H</span>
-                  </div>
-                  {nativeWmm > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLayoutWidthMm(nativeWmm.toFixed(1));
-                        setLayoutHeightMm(nativeHmm.toFixed(1));
-                      }}
-                      className="mt-1 text-[10px] text-violet-400 hover:text-violet-300"
-                    >
-                      Reset to design size ({nativeWmm.toFixed(0)}×
-                      {nativeHmm.toFixed(0)}mm)
-                    </button>
+                  <button
+                    onClick={() => setCatPickerOpen(!catPickerOpen)}
+                    className="w-full flex items-center justify-between rounded-lg border border-neutral-700 bg-neutral-800/60 px-3 py-2.5 text-sm text-neutral-200 hover:border-neutral-500 transition"
+                  >
+                    <span>Choose from catalogue</span>
+                    <span className="text-neutral-500">{catPickerOpen ? "−" : "+"}</span>
+                  </button>
+                  {catPickerOpen && !catPickerExpanded && (
+                    <div className="mt-2 space-y-2">
+                      {!catPickerCat ? (
+                        <>
+                          <div className="flex gap-2">
+                            <input
+                              type="search"
+                              value={catPickerSearch}
+                              onChange={(e) => setCatPickerSearch(e.target.value)}
+                              placeholder="Search categories…"
+                              className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+                            />
+                            <button
+                              onClick={() => setCatPickerExpanded(true)}
+                              className="shrink-0 rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+                              title="Full screen"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                                <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </button>
+                          </div>
+                          {categories.length === 0 ? (
+                            <div className="text-xs text-neutral-500">Loading…</div>
+                          ) : (
+                            <ul className="overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800 max-h-52">
+                              {categories
+                                .filter((c) => !catPickerSearch || c.name.toLowerCase().includes(catPickerSearch.toLowerCase()))
+                                .map((c) => (
+                                  <li key={c.id}>
+                                    <button
+                                      onClick={() => setCatPickerCat(c)}
+                                      className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
+                                    >
+                                      <span>{c.name}</span>
+                                      <span className="text-neutral-600 group-hover:text-neutral-300">→</span>
+                                    </button>
+                                  </li>
+                                ))}
+                            </ul>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between text-sm">
+                            <button onClick={() => setCatPickerCat(null)} className="text-neutral-400 hover:text-white">
+                              ← Categories
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <span className="text-neutral-500 text-xs truncate max-w-[120px]">{catPickerCat.name}</span>
+                              <button
+                                onClick={() => setCatPickerExpanded(true)}
+                                className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+                                title="Full screen"
+                              >
+                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                                  <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          {catPickerAssets === null ? (
+                            <div className="text-xs text-neutral-500">Loading…</div>
+                          ) : catPickerAssets.length === 0 ? (
+                            <div className="text-xs text-neutral-500">Empty category.</div>
+                          ) : (
+                            <div className="overflow-y-auto max-h-64">
+                              <div className="grid grid-cols-3 gap-2">
+                                {catPickerAssets
+                                  .filter((a) => !gangQueue.find((g) => g.asset.id === a.id))
+                                  .map((a) => (
+                                    <button
+                                      key={a.id}
+                                      onClick={() => { gangAddAsset(a); }}
+                                      className="rounded-lg border border-neutral-800 bg-white overflow-hidden hover:border-violet-500 active:scale-95 transition-all"
+                                      title={a.name}
+                                      style={{ height: 72 }}
+                                    >
+                                      {(a.preview_url || a.thumbnail_url) ? (
+                                        <img src={a.preview_url ?? a.thumbnail_url ?? ""} alt={a.name} className="w-full h-full object-contain p-1" draggable={false} />
+                                      ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400">{a.name}</div>
+                                      )}
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-              )}
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Quantity
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10000}
-                    value={layoutQty}
-                    onChange={(e) => setLayoutQty(Number(e.target.value))}
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Orient
-                  </label>
-                  <select
-                    value={layoutOrientation}
-                    onChange={(e) =>
-                      setLayoutOrientation(
-                        e.target.value as "auto" | "horizontal" | "vertical"
-                      )
-                    }
-                    className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1.5 text-sm text-white"
-                  >
-                    <option value="auto">Auto</option>
-                    <option value="horizontal">Horizontal</option>
-                    <option value="vertical">Vertical</option>
-                  </select>
-                </div>
+                <button
+                  onClick={handleMultiAutoLayout}
+                  disabled={gangQueue.length === 0}
+                  className="w-full rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-3 py-2 text-sm font-medium"
+                >
+                  Fill / Update Sheet
+                </button>
+                {layoutResult && (
+                  <div className="text-xs text-neutral-400 space-y-0.5">
+                    <div>
+                      Total: {(layoutResult.total_height_mm / 1000).toFixed(2)}m
+                    </div>
+                    <div>{layoutResult.placements.length} placements</div>
+                  </div>
+                )}
               </div>
-              <button
-                onClick={handleAutoLayout}
-                disabled={!layoutAssetId}
-                className="w-full rounded-md bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-white px-3 py-2 text-sm font-medium"
-              >
-                Fill Sheet
-              </button>
-              {layoutResult && (
-                <div className="text-xs text-neutral-400 space-y-0.5">
-                  <div>
-                    {layoutResult.cols} cols &times; {layoutResult.rows} rows
-                  </div>
-                  <div>{layoutResult.zones} zone(s)</div>
-                  <div>
-                    Total: {(layoutResult.total_height_mm / 1000).toFixed(2)}m
-                  </div>
-                </div>
-              )}
-            </div>
-          </Panel>
+            </Panel>
+          ) : null}
 
-          {/* Sheet Settings */}
+          {/* Sheet Settings — hidden for DTF */}
+          {activeSheet?.sheet_type !== "dtf" && (
           <Panel title="Sheet Settings" defaultOpen>
             <div className="space-y-3">
               <SettingRow label="Sticker gap (mm)">
@@ -1569,6 +2072,7 @@ export default function SheetBuilder() {
               )}
             </div>
           </Panel>
+          )}
 
           {/* Spot Colours */}
           <Panel title="Spot Colours">
@@ -1996,6 +2500,105 @@ export default function SheetBuilder() {
           >
             &times;
           </button>
+        </div>
+      )}
+
+      {/* Full-screen catalogue overlay */}
+      {catPickerExpanded && (
+        <div
+          className="fixed inset-0 z-50 bg-neutral-950/95 backdrop-blur-sm overflow-y-auto"
+          style={{ WebkitOverflowScrolling: "touch" }}
+        >
+          <div className="px-4 pt-6 pb-6 space-y-3">
+            {!catPickerCat ? (
+              <>
+                <div className="flex gap-2">
+                  <input
+                    type="search"
+                    value={catPickerSearch}
+                    onChange={(e) => setCatPickerSearch(e.target.value)}
+                    placeholder="Search categories…"
+                    className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-white outline-none focus:border-neutral-600"
+                  />
+                  <button
+                    onClick={() => setCatPickerExpanded(false)}
+                    className="shrink-0 flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-2 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all whitespace-nowrap"
+                    title="Exit full screen"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                      <path d="M9 1h4v4M5 13H1V9M13 1l-5 5M1 13l5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                    <span>Exit full screen</span>
+                  </button>
+                </div>
+                {categories.length === 0 ? (
+                  <div className="text-xs text-neutral-500">Loading…</div>
+                ) : (
+                  <ul className="overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800">
+                    {categories
+                      .filter((c) => !catPickerSearch || c.name.toLowerCase().includes(catPickerSearch.toLowerCase()))
+                      .map((c) => (
+                        <li key={c.id}>
+                          <button
+                            onClick={() => setCatPickerCat(c)}
+                            className="w-full text-left px-3 py-2.5 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
+                          >
+                            <span>{c.name}</span>
+                            <span className="text-neutral-600 group-hover:text-neutral-300">→</span>
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-sm">
+                  <button onClick={() => setCatPickerCat(null)} className="text-neutral-400 hover:text-white">
+                    ← Categories
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-neutral-400 text-xs truncate max-w-[180px]">{catPickerCat.name}</span>
+                    <button
+                      onClick={() => setCatPickerExpanded(false)}
+                      className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 hover:border-neutral-500 hover:bg-neutral-700 active:scale-95 transition-all whitespace-nowrap"
+                      title="Exit full screen"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                        <path d="M9 1h4v4M5 13H1V9M13 1l-5 5M1 13l5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                      <span>Exit full screen</span>
+                    </button>
+                  </div>
+                </div>
+                {catPickerAssets === null ? (
+                  <div className="text-xs text-neutral-500">Loading…</div>
+                ) : catPickerAssets.length === 0 ? (
+                  <div className="text-xs text-neutral-500">Empty category.</div>
+                ) : (
+                  <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
+                    {catPickerAssets
+                      .filter((a) => !gangQueue.find((g) => g.asset.id === a.id))
+                      .map((a) => (
+                        <button
+                          key={a.id}
+                          onClick={() => { gangAddAsset(a); setCatPickerExpanded(false); }}
+                          className="rounded-lg border border-neutral-800 bg-white overflow-hidden hover:border-violet-500 active:scale-95 transition-all"
+                          title={a.name}
+                          style={{ height: 110 }}
+                        >
+                          {(a.preview_url || a.thumbnail_url) ? (
+                            <img src={a.preview_url ?? a.thumbnail_url ?? ""} alt={a.name} className="w-full h-full object-contain p-1.5" draggable={false} />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400">{a.name}</div>
+                          )}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -2451,14 +3054,19 @@ function DtfLayersPanel({
   onSelect,
   onRemove,
   onDuplicate,
+  onResize,
+  onSpacing,
 }: {
   items: DtfItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onRemove: (id: string) => void;
   onDuplicate: (id: string, qty: number) => void;
+  onResize?: (id: string, w: number, h: number) => void;
+  onSpacing?: (assetId: string, spacing: number) => void;
 }) {
-  // Group by asset to show unique artworks with counts
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
   const grouped = useMemo(() => {
     const map = new Map<string, { asset: Asset; ids: string[]; item: DtfItem }>();
     for (const item of items) {
@@ -2472,11 +3080,20 @@ function DtfLayersPanel({
     return Array.from(map.values());
   }, [items]);
 
+  function toggleExpand(assetId: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(assetId)) next.delete(assetId);
+      else next.add(assetId);
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-3 pb-4 border-b border-neutral-800 mb-3">
       <div className="flex items-center justify-between">
         <h3 className="text-xs uppercase tracking-widest text-emerald-400 font-semibold">
-          Layers
+          Artwork Queue
         </h3>
         <span className="text-[10px] text-neutral-500">
           {items.length} item{items.length !== 1 ? "s" : ""} on sheet
@@ -2493,48 +3110,122 @@ function DtfLayersPanel({
         </div>
       )}
 
-      <div className="space-y-1.5 max-h-[50vh] overflow-y-auto pr-1">
-        {grouped.map(({ asset, ids, item }) => (
-          <div
-            key={asset.id}
-            className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 transition cursor-pointer ${
-              ids.includes(selectedId || "")
-                ? "border-emerald-500/60 bg-emerald-500/5"
-                : "border-neutral-800 bg-neutral-950 hover:border-neutral-600"
-            }`}
-            onClick={() => onSelect(ids[0])}
-          >
-            {asset.thumbnail_url && (
-              <img
-                src={asset.thumbnail_url}
-                alt=""
-                className="w-9 h-9 rounded object-cover shrink-0 bg-neutral-800"
-              />
-            )}
-            <div className="flex-1 min-w-0">
-              <div className="text-xs text-neutral-200 truncate">{asset.name}</div>
-              <div className="text-[10px] text-neutral-500 mt-0.5">
-                {Math.round(item.w_mm)}×{Math.round(item.h_mm)} mm · ×{ids.length}
-              </div>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
+      <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+        {grouped.map(({ asset, ids, item }) => {
+          const isExpanded = expanded.has(asset.id);
+          const aspect = item.w_mm / item.h_mm;
+          return (
+            <div
+              key={asset.id}
+              className={`rounded-lg border overflow-hidden transition ${
+                ids.includes(selectedId || "")
+                  ? "border-emerald-500/60 bg-emerald-500/5"
+                  : "border-neutral-800 bg-neutral-950"
+              }`}
+            >
               <button
-                onClick={(e) => { e.stopPropagation(); onDuplicate(ids[0], 1); }}
-                className="w-6 h-6 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs flex items-center justify-center"
-                title="Add another"
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-neutral-800/50"
+                onClick={() => { onSelect(ids[0]); toggleExpand(asset.id); }}
               >
-                +
+                {asset.thumbnail_url && (
+                  <img
+                    src={asset.thumbnail_url}
+                    alt=""
+                    className="w-9 h-9 rounded object-cover shrink-0 bg-neutral-800"
+                  />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-neutral-200 truncate">{asset.name}</div>
+                  <div className="text-[10px] text-neutral-500 mt-0.5">
+                    {Math.round(item.w_mm)}×{Math.round(item.h_mm)} mm
+                    {(() => {
+                      const dpi = getEffectiveDpi(item);
+                      if (dpi !== null && dpi < 150) return (
+                        <span className="ml-1.5 text-amber-400 font-medium">⚠ {dpi} DPI</span>
+                      );
+                      return null;
+                    })()}
+                  </div>
+                </div>
+                <span className="text-xs text-neutral-400 shrink-0">×{ids.length}</span>
+                <span className="text-neutral-500 text-xs shrink-0">{isExpanded ? "▲" : "▼"}</span>
               </button>
-              <button
-                onClick={(e) => { e.stopPropagation(); onRemove(ids[ids.length - 1]); }}
-                className="w-6 h-6 rounded bg-neutral-800 hover:bg-rose-900/60 text-neutral-300 hover:text-rose-300 text-xs flex items-center justify-center"
-                title="Remove one"
-              >
-                −
-              </button>
+              {isExpanded && (
+                <div className="px-2.5 pb-2.5 pt-1 space-y-2 border-t border-neutral-800/50">
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <label className="block text-[10px] text-neutral-500 mb-0.5">Qty</label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onRemove(ids[ids.length - 1]); }}
+                          className="w-7 h-7 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-sm flex items-center justify-center"
+                        >−</button>
+                        <span className="text-sm text-white w-8 text-center">{ids.length}</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onDuplicate(ids[0], 1); }}
+                          className="w-7 h-7 rounded bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-sm flex items-center justify-center"
+                        >+</button>
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-[10px] text-neutral-500 mb-0.5">W (mm)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={0.5}
+                        value={Math.round(item.w_mm * 10) / 10}
+                        onChange={(e) => {
+                          const w = Number(e.target.value);
+                          if (w > 0 && onResize) onResize(ids[0], w, w / aspect);
+                        }}
+                        className="w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-white"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-[10px] text-neutral-500 mb-0.5">H (mm)</label>
+                      <input
+                        type="number"
+                        min={1}
+                        step={0.5}
+                        value={Math.round(item.h_mm * 10) / 10}
+                        onChange={(e) => {
+                          const h = Number(e.target.value);
+                          if (h > 0 && onResize) onResize(ids[0], h * aspect, h);
+                        }}
+                        className="w-full rounded bg-neutral-900 border border-neutral-700 px-2 py-1 text-sm text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-neutral-500">Spacing</label>
+                    <select
+                      value={item.spacing_mm ?? 5}
+                      onChange={(e) => onSpacing?.(asset.id, Number(e.target.value))}
+                      className="rounded bg-neutral-900 border border-neutral-700 px-1.5 py-0.5 text-xs text-white"
+                    >
+                      <option value={3}>3mm</option>
+                      <option value={5}>5mm</option>
+                      <option value={10}>10mm</option>
+                      <option value={15}>15mm</option>
+                      <option value={20}>20mm</option>
+                      <option value={25}>25mm</option>
+                      <option value={30}>30mm</option>
+                      <option value={40}>40mm</option>
+                    </select>
+                    <button
+                      onClick={() => {
+                        for (const id of ids) onRemove(id);
+                      }}
+                      className="ml-auto text-[10px] text-rose-400 hover:text-rose-300"
+                    >
+                      Remove all
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

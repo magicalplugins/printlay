@@ -136,6 +136,21 @@ export function autoLayout(
   });
 }
 
+export type MultiAssetItem = {
+  asset_id: string;
+  quantity: number;
+  width_mm?: number | null;
+  height_mm?: number | null;
+  orientation?: "auto" | "horizontal" | "vertical";
+};
+
+export function multiAutoLayout(sheetId: string, items: MultiAssetItem[]) {
+  return api<AutoLayoutResult>(`/api/sheets/${sheetId}/multi-auto-layout`, {
+    method: "POST",
+    body: JSON.stringify({ items }),
+  });
+}
+
 export interface PackResult {
   placements: Placement[];
   total_height_mm: number;

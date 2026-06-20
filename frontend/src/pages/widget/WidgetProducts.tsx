@@ -45,6 +45,9 @@ const BLANK: ProductInput = {
   finishes: [],
   bleed_mm: 3,
   safe_mm: 4,
+  show_filters: true,
+  show_ai_styles: false,
+  show_hand_edit: false,
   pricing_profile_id: null,
 };
 
@@ -78,6 +81,9 @@ export default function WidgetProducts() {
         finishes: p.finishes,
         bleed_mm: p.bleed_mm,
         safe_mm: p.safe_mm,
+        show_filters: p.show_filters ?? true,
+        show_ai_styles: p.show_ai_styles ?? false,
+        show_hand_edit: p.show_hand_edit ?? false,
         pricing_profile_id: p.pricing_profile_id,
       },
     });
@@ -258,11 +264,11 @@ function ProductEditor({
           </Field>
           <Field label="Pricing profile">
             <select
-              className={inputCls}
+              className={`${inputCls} ${!d.pricing_profile_id ? "border-amber-600" : ""}`}
               value={d.pricing_profile_id ?? ""}
               onChange={(e) => setD({ ...d, pricing_profile_id: e.target.value || null })}
             >
-              <option value="">— none —</option>
+              <option value="">— select a profile —</option>
               {profiles.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -307,6 +313,53 @@ function ProductEditor({
               </button>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={d.show_filters ?? true}
+              onChange={(e) => setD({ ...d, show_filters: e.target.checked })}
+              className="accent-violet-600 w-4 h-4"
+            />
+            <span className={labelCls + " !mb-0"}>Show photo filters to customers</span>
+          </label>
+          <p className="text-xs text-neutral-500 mt-1 ml-6">
+            When enabled, customers can apply Instagram-style filters to their artwork before ordering.
+            Only applies to cut-out products (background removal / face).
+          </p>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={d.show_ai_styles ?? false}
+              onChange={(e) => setD({ ...d, show_ai_styles: e.target.checked })}
+              className="accent-violet-600 w-4 h-4"
+            />
+            <span className={labelCls + " !mb-0"}>Show AI styles to customers</span>
+          </label>
+          <p className="text-xs text-neutral-500 mt-1 ml-6">
+            Cartoon, caricature, pencil, anime, pop art, watercolour and custom prompts.
+            Uses your OpenAI API key (set in Settings → Preferences).
+          </p>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={d.show_hand_edit ?? false}
+              onChange={(e) => setD({ ...d, show_hand_edit: e.target.checked })}
+              className="accent-violet-600 w-4 h-4"
+            />
+            <span className={labelCls + " !mb-0"}>Show hand-edit cut line to customers</span>
+          </label>
+          <p className="text-xs text-neutral-500 mt-1 ml-6">
+            Let customers manually adjust the cut line with a brush tool.
+          </p>
         </div>
 
         <div>
@@ -426,17 +479,23 @@ function ProductEditor({
         </label>
       </div>
 
-      <OptionEditor
-        title="Materials"
-        hint="The materials a customer can pick. The key must match any surcharge key in the pricing profile."
-        rows={d.vinyl_types}
-        setRows={(r) => setD({ ...d, vinyl_types: r })}
+      <ProfileOptionsSelector
+        title="Materials customers can choose"
+        hint="Select which materials from the pricing profile to offer for this product."
+        profileId={d.pricing_profile_id}
+        profiles={profiles}
+        optionSource="vinyl_surcharges"
+        selected={d.vinyl_types}
+        setSelected={(r) => setD({ ...d, vinyl_types: r })}
       />
-      <OptionEditor
-        title="Finishes"
-        hint="Optional finishes (e.g. laminate). Leave empty for none."
-        rows={d.finishes}
-        setRows={(r) => setD({ ...d, finishes: r })}
+      <ProfileOptionsSelector
+        title="Finishes customers can choose"
+        hint="Select which finishes from the pricing profile to offer for this product."
+        profileId={d.pricing_profile_id}
+        profiles={profiles}
+        optionSource="finish_surcharges"
+        selected={d.finishes}
+        setSelected={(r) => setD({ ...d, finishes: r })}
       />
     </WidgetShell>
   );
@@ -544,66 +603,90 @@ function SizePresetEditor({
   );
 }
 
-function OptionEditor({
-  title,
-  hint,
-  rows,
-  setRows,
-}: {
-  title: string;
-  hint: string;
-  rows: VinylOption[];
-  setRows: (r: VinylOption[]) => void;
-}) {
-  return (
-    <div className={`${card} mt-6`}>
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h3 className="font-semibold text-sm">{title}</h3>
-          <p className="text-xs text-neutral-500 mt-0.5 max-w-md">{hint}</p>
-        </div>
-        <button className={btnSecondary} onClick={() => setRows([...rows, { key: "", label: "" }])}>
-          Add
-        </button>
-      </div>
-      {rows.length === 0 ? (
-        <p className="text-sm text-neutral-500">None.</p>
-      ) : (
-        <div className="space-y-2">
-          {rows.map((r, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input
-                className={`${inputCls} w-40`}
-                placeholder="key (e.g. matte)"
-                value={r.key}
-                onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
-              />
-              <input
-                className={`${inputCls} flex-1`}
-                placeholder="Label shown to customer"
-                value={r.label}
-                onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))}
-              />
-              <button
-                className="text-rose-300 text-sm hover:text-rose-200"
-                onClick={() => setRows(rows.filter((_, j) => j !== i))}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
       <label className={labelCls}>{label}</label>
       {children}
       {hint && <p className="text-xs text-neutral-600 mt-1">{hint}</p>}
+    </div>
+  );
+}
+
+function ProfileOptionsSelector({
+  title,
+  hint,
+  profileId,
+  profiles,
+  optionSource,
+  selected,
+  setSelected,
+}: {
+  title: string;
+  hint: string;
+  profileId: string | null;
+  profiles: PricingProfile[];
+  optionSource: "vinyl_surcharges" | "finish_surcharges";
+  selected: VinylOption[];
+  setSelected: (r: VinylOption[]) => void;
+}) {
+  const profile = profiles.find((p) => p.id === profileId);
+  const surchargeMap = profile?.[optionSource];
+  const availableKeys = surchargeMap ? Object.keys(surchargeMap) : [];
+  const availableSet = new Set(availableKeys);
+
+  // Auto-remove stale entries that no longer exist in the profile
+  useEffect(() => {
+    if (!profileId || availableKeys.length === 0) return;
+    const cleaned = selected.filter((s) => availableSet.has(s.key));
+    if (cleaned.length !== selected.length) {
+      setSelected(cleaned);
+    }
+  }, [profileId, availableKeys.join(",")]);
+
+  const selectedKeys = new Set(selected.map((s) => s.key));
+
+  const toggle = (key: string) => {
+    if (selectedKeys.has(key)) {
+      setSelected(selected.filter((s) => s.key !== key));
+    } else {
+      setSelected([...selected, { key, label: key }]);
+    }
+  };
+
+  return (
+    <div className={`${card} mt-6`}>
+      <div className="mb-3">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-violet-300">{title}</h3>
+        <p className="text-xs text-neutral-500 mt-0.5 max-w-lg">{hint}</p>
+      </div>
+      {!profileId ? (
+        <p className="text-sm text-amber-400">Select a pricing profile first to see available options.</p>
+      ) : availableKeys.length === 0 ? (
+        <p className="text-sm text-neutral-500">
+          No {optionSource === "vinyl_surcharges" ? "materials" : "finishes"} defined in this pricing profile.
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {availableKeys.map((key) => {
+            const isActive = selectedKeys.has(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => toggle(key)}
+                className={`px-4 py-2 rounded-full border text-sm font-medium transition ${
+                  isActive
+                    ? "border-violet-500 bg-violet-500/10 text-violet-200"
+                    : "border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-neutral-200"
+                }`}
+              >
+                {key}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

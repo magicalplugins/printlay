@@ -217,6 +217,7 @@ class PricingProfileIn(BaseModel):
     margin_pct: float = 0.0
     handling_fee: float = 0.0
     min_order_price: float = 0.0
+    min_length_m: float = 0.0
     vinyl_surcharges: dict | None = None
     finish_surcharges: dict | None = None
     quantity_breaks: list | None = None
@@ -238,6 +239,7 @@ def _profile_out(p: PricingProfile) -> PricingProfileOut:
         margin_pct=p.margin_pct,
         handling_fee=p.handling_fee,
         min_order_price=p.min_order_price,
+        min_length_m=getattr(p, "min_length_m", 0.0) or 0.0,
         vinyl_surcharges=p.vinyl_surcharges,
         finish_surcharges=p.finish_surcharges,
         quantity_breaks=p.quantity_breaks,
@@ -325,6 +327,9 @@ class ProductIn(BaseModel):
     bleed_mm: float = 3.0
     safe_mm: float = 4.0
     pricing_profile_id: str | None = None
+    show_filters: bool = True
+    show_ai_styles: bool = False
+    show_hand_edit: bool = False
 
 
 class ProductOut(BaseModel):
@@ -343,6 +348,9 @@ class ProductOut(BaseModel):
     bleed_mm: float
     safe_mm: float
     pricing_profile_id: str | None
+    show_filters: bool
+    show_ai_styles: bool
+    show_hand_edit: bool
     created_at: datetime
 
 
@@ -364,6 +372,9 @@ def _product_out(p: Product) -> ProductOut:
         bleed_mm=p.bleed_mm,
         safe_mm=p.safe_mm,
         pricing_profile_id=str(p.pricing_profile_id) if p.pricing_profile_id else None,
+        show_filters=getattr(p, "show_filters", True),
+        show_ai_styles=getattr(p, "show_ai_styles", False),
+        show_hand_edit=getattr(p, "show_hand_edit", False),
         created_at=p.created_at,
     )
 

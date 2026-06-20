@@ -30,6 +30,8 @@ export type Asset = {
   /** Present = this asset was created with the sticker editor and can be
    *  re-opened for further editing. */
   is_sticker_editable?: boolean;
+  width_px?: number | null;
+  height_px?: number | null;
 };
 
 export type AssetPageThumbnail = {

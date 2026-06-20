@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -47,4 +48,8 @@ class Job(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # the user is iterating on a job before promoting to a saved profile.
     color_swaps_draft: Mapped[list[dict] | None] = mapped_column(
         JSONB, nullable=True
+    )
+
+    optimised_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

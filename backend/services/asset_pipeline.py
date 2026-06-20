@@ -404,3 +404,38 @@ def compress_for_generation(pdf_bytes: bytes, page_index: int = 0) -> bytes:
         return result
     except Exception:
         return pdf_bytes
+
+
+def force_rasterise(pdf_bytes: bytes, page_index: int = 0) -> bytes:
+    """Force-rasterise ANY PDF (including vectors) to a 600 DPI PNG-based PDF.
+
+    Unlike compress_for_generation, this does NOT skip vector PDFs.
+    Used by the explicit user-triggered "Optimise large files" action
+    where the user has chosen speed over vector fidelity.
+    """
+    if len(pdf_bytes) < 50_000:
+        return pdf_bytes
+
+    try:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        if doc.page_count == 0:
+            return pdf_bytes
+        pidx = min(page_index, doc.page_count - 1)
+
+        page = doc[pidx]
+        pw = float(page.rect.width)
+        ph = float(page.rect.height)
+        if pw <= 0 or ph <= 0:
+            return pdf_bytes
+
+        dpi_scale = _COMPRESS_DPI / 72.0
+        mat = pymupdf.Matrix(dpi_scale, dpi_scale)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img_bytes = pix.tobytes("png")
+
+        img = Image.open(io.BytesIO(img_bytes))
+        out_pdf = io.BytesIO()
+        img.save(out_pdf, "PDF", resolution=_COMPRESS_DPI)
+        return out_pdf.getvalue()
+    except Exception:
+        return pdf_bytes

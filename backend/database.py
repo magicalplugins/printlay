@@ -22,13 +22,14 @@ def get_engine() -> Engine:
         # Supabase's session-mode pooler caps total clients (currently 15).
         # The release-command machine that runs `alembic upgrade head` during
         # a deploy needs at least one free slot, so we keep the app's footprint
-        # well under the cap (max 8 here) to always leave migration headroom.
+        # under the cap (max 15 here) to always leave migration headroom.
         _engine = create_engine(
             settings.database_url,
             pool_pre_ping=True,
-            pool_size=3,
-            max_overflow=5,
+            pool_size=5,
+            max_overflow=10,
             pool_recycle=900,
+            pool_timeout=10,
             future=True,
         )
     return _engine

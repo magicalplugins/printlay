@@ -430,8 +430,8 @@ function DesignStep({
                 onClick={() => regen({ filterId: f.id })}
                 disabled={busy}
               >
-                {result && (result.cutout_url || result.preview_url) && (
-                  <img src={result.cutout_url || result.preview_url} alt="" style={{ filter: f.css }} loading="eager" />
+                {result && result.border_url && (
+                  <img src={result.border_url} alt="" style={{ filter: f.css }} loading="eager" />
                 )}
                 <span>{f.label}</span>
               </button>

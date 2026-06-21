@@ -221,6 +221,8 @@ class PricingProfileIn(BaseModel):
     vinyl_surcharges: dict | None = None
     finish_surcharges: dict | None = None
     quantity_breaks: list | None = None
+    quantity_presets: list[int] | None = None
+    allow_custom_quantity: bool = True
 
 
 class PricingProfileOut(PricingProfileIn):
@@ -243,6 +245,8 @@ def _profile_out(p: PricingProfile) -> PricingProfileOut:
         vinyl_surcharges=p.vinyl_surcharges,
         finish_surcharges=p.finish_surcharges,
         quantity_breaks=p.quantity_breaks,
+        quantity_presets=getattr(p, "quantity_presets", None),
+        allow_custom_quantity=getattr(p, "allow_custom_quantity", True),
         created_at=p.created_at,
     )
 
@@ -330,6 +334,8 @@ class ProductIn(BaseModel):
     show_filters: bool = True
     show_ai_styles: bool = False
     show_hand_edit: bool = False
+    require_proof: bool = False
+    proof_fee: float = 0.0
 
 
 class ProductOut(BaseModel):
@@ -351,6 +357,8 @@ class ProductOut(BaseModel):
     show_filters: bool
     show_ai_styles: bool
     show_hand_edit: bool
+    require_proof: bool
+    proof_fee: float
     created_at: datetime
 
 
@@ -375,6 +383,8 @@ def _product_out(p: Product) -> ProductOut:
         show_filters=getattr(p, "show_filters", True),
         show_ai_styles=getattr(p, "show_ai_styles", False),
         show_hand_edit=getattr(p, "show_hand_edit", False),
+        require_proof=getattr(p, "require_proof", False),
+        proof_fee=getattr(p, "proof_fee", 0.0),
         created_at=p.created_at,
     )
 
@@ -506,6 +516,55 @@ def delete_product(
 
 
 # --------------------------------------------------------------------------- #
+# WooCommerce status webhook helper
+# --------------------------------------------------------------------------- #
+
+def _fire_wc_status_webhook(order: PrintOrder) -> None:
+    """Best-effort fire a status update to the WooCommerce REST endpoint."""
+    import os
+    import httpx
+
+    if order.platform != "woocommerce":
+        return
+    items = order.line_items or []
+    if not items:
+        return
+    design_ref = items[0].get("asset_id")
+    if not design_ref:
+        return
+
+    from backend.models.user import User
+    from backend.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == order.user_id).one_or_none()
+        if not user:
+            return
+        wc_url = getattr(user, "wc_site_url", None) or os.environ.get("WC_SITE_URL")
+        api_key = getattr(user, "wc_api_key", None) or os.environ.get("WC_API_KEY")
+        if not wc_url or not api_key:
+            return
+
+        endpoint = f"{wc_url.rstrip('/')}/wp-json/printlay/v1/status-update"
+        try:
+            httpx.post(
+                endpoint,
+                json={
+                    "design_ref": design_ref,
+                    "status": order.status,
+                    "proof_status": getattr(order, "proof_status", None),
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=10,
+            )
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------------------------- #
 # Print orders queue
 # --------------------------------------------------------------------------- #
 class OrderOut(BaseModel):
@@ -517,6 +576,11 @@ class OrderOut(BaseModel):
     amount_total: float
     currency: str
     status: str
+    proof_status: str | None = None
+    proof_notes: str | None = None
+    proof_history: list | None = None
+    customer_email: str | None = None
+    proof_token: str | None = None
     output_r2_key: str | None
     created_at: datetime
 
@@ -531,6 +595,11 @@ def _order_out(o: PrintOrder) -> OrderOut:
         amount_total=o.amount_total,
         currency=o.currency,
         status=o.status,
+        proof_status=getattr(o, "proof_status", None),
+        proof_notes=getattr(o, "proof_notes", None),
+        proof_history=getattr(o, "proof_history", None),
+        customer_email=getattr(o, "customer_email", None),
+        proof_token=getattr(o, "proof_token", None),
         output_r2_key=o.output_r2_key,
         created_at=o.created_at,
     )
@@ -544,7 +613,10 @@ def list_orders(
 ):
     q = db.query(PrintOrder).filter(PrintOrder.user_id == user.id)
     if status_filter:
-        q = q.filter(PrintOrder.status == status_filter)
+        if status_filter == "awaiting_proof":
+            q = q.filter(PrintOrder.proof_status.in_(["awaiting_proof", "proof_sent", "proof_rejected"]))
+        else:
+            q = q.filter(PrintOrder.status == status_filter)
     rows = q.order_by(PrintOrder.created_at.desc()).limit(200).all()
     return [_order_out(o) for o in rows]
 
@@ -575,6 +647,7 @@ def update_order(
     o.status = body.status
     db.commit()
     db.refresh(o)
+    _fire_wc_status_webhook(o)
     return _order_out(o)
 
 
@@ -591,6 +664,84 @@ def delete_order(
         raise HTTPException(404, "Order not found")
     db.delete(o)
     db.commit()
+
+
+@router.post("/orders/{order_id}/send-proof", response_model=OrderOut)
+def send_proof(
+    order_id: uuid.UUID,
+    user: User = Depends(_merchant),
+    db: Session = Depends(get_db),
+):
+    """Send proof email to customer and update proof_status."""
+    from backend.services import messaging
+    import os
+
+    o = (
+        db.query(PrintOrder)
+        .filter(PrintOrder.id == order_id, PrintOrder.user_id == user.id)
+        .one_or_none()
+    )
+    if o is None:
+        raise HTTPException(404, "Order not found")
+    if not o.customer_email:
+        raise HTTPException(400, "Order has no customer email address")
+
+    base_url = os.environ.get("APP_BASE_URL", "https://printlay.co.uk")
+    proof_url = f"{base_url}/proof/{o.proof_token}"
+
+    items_desc = ""
+    for item in (o.line_items or []):
+        opts = item.get("options", {})
+        w = opts.get("width_mm", "?")
+        h = opts.get("height_mm", "?")
+        qty = item.get("qty", 1)
+        items_desc += f"  • {qty}× {w}mm × {h}mm\n"
+
+    subject = f"Your design proof is ready — {o.customer_ref or 'Order'}"
+    text_body = (
+        f"Hi,\n\n"
+        f"Your design proof is ready for review.\n\n"
+        f"Specs:\n{items_desc}\n"
+        f"Total: {o.currency} {o.amount_total:.2f}\n\n"
+        f"Please review and approve (or request changes):\n{proof_url}\n\n"
+        f"Thank you!"
+    )
+    html_body = (
+        f"<div style='font-family:sans-serif;max-width:600px;margin:0 auto;padding:24px'>"
+        f"<h2 style='color:#1e293b'>Your design proof is ready</h2>"
+        f"<p>We've prepared your design for review before printing.</p>"
+        f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:16px 0'>"
+        f"<p style='margin:0 0 8px;font-weight:600'>Order details</p>"
+        f"<p style='margin:0;font-size:14px;color:#475569'>{items_desc.replace(chr(10), '<br>')}</p>"
+        f"<p style='margin:8px 0 0;font-size:14px'>Total: <strong>{o.currency} {o.amount_total:.2f}</strong></p>"
+        f"</div>"
+        f"<div style='text-align:center;margin:24px 0'>"
+        f"<a href='{proof_url}' style='display:inline-block;background:#8b5cf6;color:#fff;padding:12px 32px;"
+        f"border-radius:8px;text-decoration:none;font-weight:600;font-size:16px'>Review Proof</a>"
+        f"</div>"
+        f"<p style='font-size:13px;color:#64748b'>Or copy this link: {proof_url}</p>"
+        f"</div>"
+    )
+
+    messaging.send_email_bulk(
+        [o.customer_email],
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
+
+    o.proof_status = "proof_sent"
+    history = o.proof_history or []
+    history.append({
+        "action": "proof_sent",
+        "timestamp": datetime.utcnow().isoformat(),
+        "by": "merchant",
+        "message": f"Proof sent to {o.customer_email}",
+    })
+    o.proof_history = history
+    db.commit()
+    db.refresh(o)
+    return _order_out(o)
 
 
 # --------------------------------------------------------------------------- #

@@ -119,6 +119,15 @@ class PricingProfile(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Volume discounts, e.g. [{'min_qty': 50, 'discount_pct': 10},
     {'min_qty': 100, 'discount_pct': 20}] — highest matching break applies."""
 
+    quantity_presets: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    """Preset quantities shown as radio buttons in the widget, e.g.
+    [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500]. Null = defaults."""
+
+    allow_custom_quantity: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    """When True, a 'Custom quantity' radio option is also available."""
+
     def __repr__(self) -> str:
         return f"<PricingProfile {self.name} user={self.user_id}>"
 
@@ -215,6 +224,17 @@ class Product(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Boolean, nullable=False, default=False, server_default="false"
     )
     """Whether to show the hand-edit cutline tool in the widget."""
+
+    require_proof: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """If True, customers must choose between self-approval or requesting a
+    manual proof (reviewed by merchant before printing)."""
+
+    proof_fee: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0, server_default="0.0"
+    )
+    """Flat fee charged when the customer requests a manual proof (in profile currency)."""
 
     pricing_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

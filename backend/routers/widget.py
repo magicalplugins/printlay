@@ -54,6 +54,7 @@ from backend.routers.sticker import (
 router = APIRouter(prefix="/api/v1/widget", tags=["widget"])
 
 DEFAULT_CUT_STYLES = ["die_cut", "face", "keep_bg", "square", "circle"]
+DEFAULT_QTY_PRESETS = [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500]
 
 # Widget cut-style → cutline_generator mode.
 _CUT_STYLE_TO_MODE = {
@@ -107,6 +108,10 @@ def _record_draft_order(
     total,
     currency,
     quantity,
+    proof_requested: bool = False,
+    customer_email: str | None = None,
+    proof_note: str | None = None,
+    proof_fee: float = 0.0,
 ) -> None:
     """Drop a finished design into the merchant's order queue as a `draft`.
 
@@ -122,7 +127,7 @@ def _record_draft_order(
     """
     is_test = ctx.session.external_ref == "admin-preview"
     qty = max(1, int(quantity or 1))
-    total_f = round(float(total or 0.0), 2)
+    total_f = round(float(total or 0.0) + (proof_fee if proof_requested else 0.0), 2)
     line_item = {
         "asset_id": str(asset_id),
         "session_token": ctx.session.token,
@@ -143,16 +148,17 @@ def _record_draft_order(
         .one_or_none()
     )
     if existing is not None:
-        # Same session re-finalised: refresh the design but keep the friendly
-        # reference we assigned on first creation (e.g. "Test order 3").
         existing.line_items = [line_item]
         existing.amount_total = total_f
         existing.currency = currency or "GBP"
+        if proof_requested:
+            existing.proof_status = "awaiting_proof"
+            existing.customer_email = customer_email
+            existing.proof_notes = proof_note
+            existing.proof_token = existing.proof_token or str(uuid.uuid4())[:32]
         return
 
     if is_test:
-        # Friendly, sequential label so the admin queue + sheet reads
-        # "Test order 1, 2, 3…" instead of an opaque asset name.
         test_count = (
             db.query(PrintOrder)
             .filter(
@@ -166,18 +172,26 @@ def _record_draft_order(
     else:
         customer_ref = ctx.session.external_ref or None
 
-    db.add(
-        PrintOrder(
-            user_id=ctx.merchant_id,
-            platform="widget",
-            external_order_id=external_order_id,
-            customer_ref=customer_ref,
-            line_items=[line_item],
-            amount_total=total_f,
-            currency=currency or "GBP",
-            status="draft",
-        )
+    order_kwargs: dict = dict(
+        user_id=ctx.merchant_id,
+        platform="widget",
+        external_order_id=external_order_id,
+        customer_ref=customer_ref,
+        line_items=[line_item],
+        amount_total=total_f,
+        currency=currency or "GBP",
+        status="draft",
     )
+    if proof_requested:
+        order_kwargs["proof_status"] = "awaiting_proof"
+        order_kwargs["customer_email"] = customer_email
+        order_kwargs["proof_notes"] = proof_note
+        order_kwargs["proof_token"] = str(uuid.uuid4())[:32]
+        order_kwargs["proof_history"] = [
+            {"action": "requested", "timestamp": datetime.utcnow().isoformat(), "by": "customer", "message": proof_note or ""}
+        ]
+
+    db.add(PrintOrder(**order_kwargs))
 
 
 # --------------------------------------------------------------------------- #
@@ -249,6 +263,10 @@ class ProductConfig(BaseModel):
     show_filters: bool = True
     show_ai_styles: bool = False
     show_hand_edit: bool = False
+    require_proof: bool = False
+    proof_fee: float = 0.0
+    quantity_presets: list[int] = []
+    allow_custom_quantity: bool = True
 
 
 def _pricing_profile(db: Session, product: Product) -> PricingProfile | None:
@@ -294,6 +312,10 @@ def _product_config(product: Product, profile: PricingProfile | None) -> Product
         show_filters=getattr(product, "show_filters", True),
         show_ai_styles=getattr(product, "show_ai_styles", False),
         show_hand_edit=getattr(product, "show_hand_edit", False),
+        require_proof=getattr(product, "require_proof", False),
+        proof_fee=getattr(product, "proof_fee", 0.0),
+        quantity_presets=(profile.quantity_presets if profile and profile.quantity_presets else DEFAULT_QTY_PRESETS),
+        allow_custom_quantity=(profile.allow_custom_quantity if profile else True),
     )
 
 
@@ -1020,12 +1042,68 @@ def estimate(
     return EstimateResponse(breakdown=breakdown.to_dict(), quote_token=quote_token)
 
 
+class EstimateBatchRequest(BaseModel):
+    width_mm: float
+    height_mm: float
+    quantities: list[int]
+    cut_style: str = "die_cut"
+    vinyl: str | None = None
+    finish: str | None = None
+
+
+class EstimateBatchItem(BaseModel):
+    quantity: int
+    unit_price: float
+    total: float
+
+
+@router.post("/estimate-batch", response_model=list[EstimateBatchItem])
+def estimate_batch(
+    body: EstimateBatchRequest,
+    ctx: WidgetSessionContext = Depends(get_widget_session),
+    db: Session = Depends(get_db),
+):
+    """Return unit prices for multiple quantities at once (for radio button labels)."""
+    _validate_cut_style(ctx.product, body.cut_style)
+    _validate_size(ctx.product, body.width_mm, body.height_mm)
+
+    profile = _pricing_profile(db, ctx.product)
+    if profile is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This product has no pricing set up yet. Please contact the store.",
+        )
+
+    inputs = pricing_engine.inputs_from_profile(profile, vinyl=body.vinyl, finish=body.finish)
+    results: list[EstimateBatchItem] = []
+    for qty in body.quantities:
+        if qty < 1:
+            continue
+        bd = pricing_engine.estimate(
+            inputs,
+            currency=profile.currency,
+            width_mm=body.width_mm,
+            height_mm=body.height_mm,
+            quantity=qty,
+            quantity_breaks=profile.quantity_breaks,
+        )
+        results.append(EstimateBatchItem(
+            quantity=qty,
+            unit_price=bd.unit_price,
+            total=bd.total,
+        ))
+    return results
+
+
 # --------------------------------------------------------------------------- #
 # 7) Finalize — save the single sticker design + return the authoritative quote
 # --------------------------------------------------------------------------- #
 class FinalizeRequest(BaseModel):
     quote_token: str
     name: str | None = None
+    proof_requested: bool = False
+    customer_email: str | None = None
+    proof_note: str | None = None
 
 
 class FinalizeResponse(BaseModel):
@@ -1132,6 +1210,10 @@ def finalize(
         total=quote.get("total"),
         currency=quote.get("currency"),
         quantity=quote.get("quantity"),
+        proof_requested=body.proof_requested,
+        customer_email=body.customer_email,
+        proof_note=body.proof_note,
+        proof_fee=float(getattr(ctx.product, "proof_fee", 0.0) or 0.0),
     )
 
     ctx.session.asset_id = asset_id
@@ -1448,3 +1530,123 @@ def canvas_finalize(
         options=options,
         thumbnail_url=_safe_presigned(thumb_key),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Public proof review endpoints (token-authenticated, no login required)
+# --------------------------------------------------------------------------- #
+
+class MarkPaidRequest(BaseModel):
+    wc_order_id: int | str
+    design_ref: str
+
+
+@router.post("/orders/{design_ref}/mark-paid")
+def mark_order_paid(
+    design_ref: str,
+    body: MarkPaidRequest,
+    db: Session = Depends(get_db),
+):
+    """Called by WooCommerce plugin on payment_complete to mark the PrintLay order as paid."""
+    from backend.models import Asset
+    asset = db.query(Asset).filter(Asset.id == design_ref).one_or_none()
+    if not asset:
+        raise HTTPException(404, "Design not found")
+
+    orders = (
+        db.query(PrintOrder)
+        .filter(PrintOrder.user_id == asset.user_id)
+        .order_by(PrintOrder.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    order = None
+    for o in orders:
+        for item in (o.line_items or []):
+            if item.get("asset_id") == design_ref:
+                order = o
+                break
+        if order:
+            break
+
+    if not order:
+        raise HTTPException(404, "Order not found for this design")
+
+    if order.status == "draft":
+        order.status = "paid"
+    order.external_order_id = str(body.wc_order_id)
+    order.platform = "woocommerce"
+    db.commit()
+    return {"status": "ok"}
+
+class ProofInfoResponse(BaseModel):
+    order_id: str
+    customer_ref: str | None
+    line_items: list
+    amount_total: float
+    currency: str
+    proof_status: str | None
+    thumbnail_url: str | None = None
+
+
+@router.get("/proof/{token}")
+def get_proof_info(token: str, db: Session = Depends(get_db)):
+    """Public endpoint: fetch order info for the proof review page."""
+    o = db.query(PrintOrder).filter(PrintOrder.proof_token == token).one_or_none()
+    if o is None:
+        raise HTTPException(404, "Proof not found or link expired")
+
+    thumb_url = None
+    items = o.line_items or []
+    if items:
+        asset_id = items[0].get("asset_id")
+        if asset_id:
+            thumb_key = f"assets/{o.user_id}/{asset_id}_thumb.jpg"
+            thumb_url = _safe_presigned(thumb_key)
+
+    return ProofInfoResponse(
+        order_id=str(o.id),
+        customer_ref=o.customer_ref,
+        line_items=items,
+        amount_total=o.amount_total,
+        currency=o.currency,
+        proof_status=o.proof_status,
+        thumbnail_url=thumb_url,
+    )
+
+
+class ProofRespondRequest(BaseModel):
+    action: str  # "approve" | "reject"
+    comment: str | None = None
+
+
+@router.post("/proof/{token}/respond")
+def respond_to_proof(token: str, body: ProofRespondRequest, db: Session = Depends(get_db)):
+    """Public endpoint: customer approves or rejects a proof."""
+    o = db.query(PrintOrder).filter(PrintOrder.proof_token == token).one_or_none()
+    if o is None:
+        raise HTTPException(404, "Proof not found or link expired")
+
+    if body.action == "approve":
+        o.proof_status = "proof_approved"
+        o.status = "ready_to_print"
+        msg = "Customer approved the proof"
+    elif body.action == "reject":
+        if not body.comment:
+            raise HTTPException(400, "Please provide a reason for rejection")
+        o.proof_status = "proof_rejected"
+        o.proof_notes = body.comment
+        msg = f"Customer rejected: {body.comment}"
+    else:
+        raise HTTPException(400, "Invalid action — use 'approve' or 'reject'")
+
+    history = o.proof_history or []
+    history.append({
+        "action": body.action,
+        "timestamp": datetime.utcnow().isoformat(),
+        "by": "customer",
+        "message": msg,
+    })
+    o.proof_history = history
+    db.commit()
+    return {"status": "ok", "proof_status": o.proof_status}

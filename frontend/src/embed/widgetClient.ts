@@ -27,6 +27,10 @@ export interface ProductConfig {
   show_filters?: boolean;
   show_ai_styles?: boolean;
   show_hand_edit?: boolean;
+  require_proof?: boolean;
+  proof_fee?: number;
+  quantity_presets?: number[];
+  allow_custom_quantity?: boolean;
 }
 
 export interface ProcessResult {
@@ -161,11 +165,26 @@ export class WidgetClient {
     }).then((r) => this.handle<EstimateResult>(r));
   }
 
-  finalize(quoteToken: string, name?: string) {
+  estimateBatch(input: {
+    width_mm: number;
+    height_mm: number;
+    quantities: number[];
+    cut_style: string;
+    vinyl?: string | null;
+    finish?: string | null;
+  }) {
+    return fetch("/api/v1/widget/estimate-batch", {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(input),
+    }).then((r) => this.handle<{ quantity: number; unit_price: number; total: number }[]>(r));
+  }
+
+  finalize(quoteToken: string, name?: string, proof?: { proof_requested: boolean; customer_email?: string; proof_note?: string }) {
     return fetch("/api/v1/widget/finalize", {
       method: "POST",
       headers: this.headers(),
-      body: JSON.stringify({ quote_token: quoteToken, name }),
+      body: JSON.stringify({ quote_token: quoteToken, name, ...(proof || {}) }),
     }).then((r) => this.handle<FinalizeResult>(r));
   }
 

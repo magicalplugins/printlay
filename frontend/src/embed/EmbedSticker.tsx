@@ -247,14 +247,25 @@ function DesignStep({
   const allowCustom = config.allow_custom_size !== false || presets.length === 0;
   // -1 = custom (slider); >=0 = index into presets.
   const [sizeSel, setSizeSel] = useState<number>(presets.length ? 0 : -1);
-  const [longestMm, setLongestMm] = useState(() =>
-    Math.round(clamp(presets.length ? presets[0] : naturalLongest))
-  );
+  const [longestMm, setLongestMm] = useState(() => {
+    const raw = clamp(presets.length ? presets[0] : naturalLongest);
+    return Math.round(raw / 5) * 5 || 5;
+  });
 
   const [vinyl, setVinyl] = useState<string | null>(config.vinyl_types[0]?.key ?? null);
   const [finish, setFinish] = useState<string | null>(config.finishes[0]?.key ?? null);
-  const [quantity, setQuantity] = useState(50);
+  const [quantity, setQuantity] = useState(() => {
+    const presets = config.quantity_presets ?? [];
+    return presets.length > 0 ? presets[0] : 50;
+  });
+  const [customQty, setCustomQty] = useState(false);
+  const [batchPrices, setBatchPrices] = useState<{ quantity: number; unit_price: number; total: number }[]>([]);
   const [unit, setUnit] = useState<SizeUnit>("cm");
+
+  // Proof system state
+  const [proofChoice, setProofChoice] = useState<"approve" | "manual">("approve");
+  const [proofNote, setProofNote] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
 
   const [estimate, setEstimate] = useState<EstimateResult | null>(null);
   const [pricing, setPricing] = useState(false);
@@ -350,11 +361,35 @@ function DesignStep({
     };
   }, [client, dims.width_mm, dims.height_mm, quantity, cutStyle, vinyl, finish]);
 
+  // Batch-fetch unit prices for all quantity presets (for radio labels).
+  useEffect(() => {
+    const presets = config.quantity_presets ?? [];
+    if (presets.length === 0 || dims.width_mm <= 0 || dims.height_mm <= 0) return;
+    let cancelled = false;
+    const id = setTimeout(() => {
+      client
+        .estimateBatch({
+          width_mm: dims.width_mm,
+          height_mm: dims.height_mm,
+          quantities: presets,
+          cut_style: cutStyle,
+          vinyl: vinyl ?? undefined,
+          finish: finish ?? undefined,
+        })
+        .then((r) => { if (!cancelled) setBatchPrices(r); })
+        .catch(() => { if (!cancelled) setBatchPrices([]); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(id); };
+  }, [client, config.quantity_presets, dims.width_mm, dims.height_mm, cutStyle, vinyl, finish]);
+
   const addToCart = async () => {
     if (!estimate) return;
     setBusy(true);
     try {
-      const fin = await client.finalize(estimate.quote_token, config.name);
+      const proofInfo = config.require_proof && proofChoice === "manual"
+        ? { proof_requested: true, customer_email: customerEmail, proof_note: proofNote }
+        : { proof_requested: false };
+      const fin = await client.finalize(estimate.quote_token, config.name, proofInfo);
       window.parent?.postMessage(
         {
           type: "printlay:add-to-cart",
@@ -538,9 +573,9 @@ function DesignStep({
               type="range"
               min={config.min_size_mm}
               max={config.max_size_mm}
-              step={1}
+              step={5}
               value={longestMm}
-              onChange={(e) => setLongestMm(parseInt(e.target.value, 10))}
+              onChange={(e) => setLongestMm(Math.round(parseInt(e.target.value, 10) / 5) * 5)}
             />
           )}
         </div>
@@ -638,12 +673,52 @@ function DesignStep({
 
         <div className="psw-field">
           <label className="psw-label">Quantity</label>
-          <input
-            type="number"
-            min={1}
-            value={quantity}
-            onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-          />
+          {(config.quantity_presets ?? []).length > 0 ? (
+            <div className="psw-qty-grid">
+              {(config.quantity_presets ?? []).map((q) => {
+                const bp = batchPrices.find((b) => b.quantity === q);
+                return (
+                  <label key={q} className={`psw-qty-option${quantity === q && !customQty ? " psw-qty-active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="psw-qty"
+                      checked={quantity === q && !customQty}
+                      onChange={() => { setCustomQty(false); setQuantity(q); }}
+                    />
+                    <span className="psw-qty-num">{q.toLocaleString()}</span>
+                    {bp && <span className="psw-qty-unit">{money(bp.unit_price)} ea</span>}
+                  </label>
+                );
+              })}
+              {(config.allow_custom_quantity !== false) && (
+                <label className={`psw-qty-option${customQty ? " psw-qty-active" : ""}`}>
+                  <input
+                    type="radio"
+                    name="psw-qty"
+                    checked={customQty}
+                    onChange={() => setCustomQty(true)}
+                  />
+                  <span className="psw-qty-num">Custom</span>
+                </label>
+              )}
+              {customQty && (
+                <input
+                  type="number"
+                  min={1}
+                  className="psw-qty-custom-input"
+                  value={quantity}
+                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                />
+              )}
+            </div>
+          ) : (
+            <input
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+            />
+          )}
         </div>
 
         <div className="psw-price">
@@ -651,11 +726,15 @@ function DesignStep({
             <div className="psw-err">{priceErr}</div>
           ) : estimate ? (
             <>
-              <div className="psw-price-total">{money(estimate.breakdown.total)}</div>
+              <div className="psw-price-total">
+                {money(estimate.breakdown.total + (config.require_proof && proofChoice === "manual" ? (config.proof_fee ?? 0) : 0))}
+              </div>
               <div className="psw-price-unit">
                 {money(estimate.breakdown.unit_price)} each · {estimate.breakdown.quantity} stickers
                 {estimate.breakdown.quantity_discount_pct > 0 &&
                   ` · ${estimate.breakdown.quantity_discount_pct}% off`}
+                {config.require_proof && proofChoice === "manual" && (config.proof_fee ?? 0) > 0 &&
+                  ` + ${money(config.proof_fee!)} proof fee`}
               </div>
             </>
           ) : (
@@ -663,7 +742,65 @@ function DesignStep({
           )}
         </div>
 
-        <button className="psw-btn-primary" disabled={!estimate || busy || pricing} onClick={addToCart}>
+        {config.require_proof && result && (
+          <div className="psw-field psw-proof-section">
+            <label className="psw-label">Design approval</label>
+            <div className="psw-proof-options">
+              <label className={`psw-proof-option${proofChoice === "approve" ? " psw-proof-active" : ""}`}>
+                <input
+                  type="radio"
+                  name="psw-proof"
+                  checked={proofChoice === "approve"}
+                  onChange={() => setProofChoice("approve")}
+                />
+                <div>
+                  <span className="psw-proof-title">I approve this design</span>
+                  <span className="psw-proof-desc">Proceed straight to printing</span>
+                </div>
+              </label>
+              <label className={`psw-proof-option${proofChoice === "manual" ? " psw-proof-active" : ""}`}>
+                <input
+                  type="radio"
+                  name="psw-proof"
+                  checked={proofChoice === "manual"}
+                  onChange={() => setProofChoice("manual")}
+                />
+                <div>
+                  <span className="psw-proof-title">Request a manual proof</span>
+                  <span className="psw-proof-desc">
+                    We'll review your design before printing
+                    {(config.proof_fee ?? 0) > 0 && ` (+${money(config.proof_fee!)})`}
+                  </span>
+                </div>
+              </label>
+            </div>
+            {proofChoice === "manual" && (
+              <div className="psw-proof-details">
+                <input
+                  type="email"
+                  className="psw-proof-email"
+                  placeholder="Your email address *"
+                  value={customerEmail}
+                  onChange={(e) => setCustomerEmail(e.target.value)}
+                  required
+                />
+                <textarea
+                  className="psw-proof-note"
+                  placeholder="Add a note (optional)"
+                  value={proofNote}
+                  onChange={(e) => setProofNote(e.target.value)}
+                  rows={2}
+                />
+              </div>
+            )}
+          </div>
+        )}
+
+        <button
+          className="psw-btn-primary"
+          disabled={!estimate || busy || pricing || (config.require_proof && proofChoice === "manual" && !customerEmail)}
+          onClick={addToCart}
+        >
           {busy ? "Adding…" : "Add to cart"}
         </button>
       </div>
@@ -1422,4 +1559,24 @@ html,body{margin:0;padding:0;overflow-x:hidden;width:100%}
 .psw-apply-btn{border:0;background:#8b5cf6;color:#fff;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer}
 .psw-apply-btn:disabled{opacity:.4;cursor:default}
 .psw-hidden{display:none}
+.psw-qty-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.psw-qty-option{display:flex;align-items:center;gap:8px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;cursor:pointer;transition:border-color .15s,background .15s}
+.psw-qty-option:hover{border-color:#8b5cf6;background:#faf5ff}
+.psw-qty-active{border-color:#8b5cf6;background:#f5f3ff}
+.psw-qty-option input[type=radio]{accent-color:#8b5cf6;margin:0;width:16px;height:16px}
+.psw-qty-num{font-weight:600;font-size:14px}
+.psw-qty-unit{font-size:12px;color:#16a34a;margin-left:auto;font-weight:500}
+.psw-qty-custom-input{grid-column:1/-1;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:14px;width:100%}
+.psw-qty-custom-input:focus{outline:none;border-color:#8b5cf6}
+.psw-proof-section{margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0}
+.psw-proof-options{display:flex;flex-direction:column;gap:8px}
+.psw-proof-option{display:flex;align-items:flex-start;gap:10px;border:1px solid #e2e8f0;border-radius:10px;padding:12px;cursor:pointer;transition:border-color .15s,background .15s}
+.psw-proof-option:hover{border-color:#8b5cf6;background:#faf5ff}
+.psw-proof-active{border-color:#8b5cf6;background:#f5f3ff}
+.psw-proof-option input[type=radio]{accent-color:#8b5cf6;margin-top:2px;width:16px;height:16px;flex-shrink:0}
+.psw-proof-title{display:block;font-weight:600;font-size:14px;color:#0f172a}
+.psw-proof-desc{display:block;font-size:12px;color:#64748b;margin-top:2px}
+.psw-proof-details{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.psw-proof-email,.psw-proof-note{border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit}
+.psw-proof-email:focus,.psw-proof-note:focus{outline:none;border-color:#8b5cf6}
 `;

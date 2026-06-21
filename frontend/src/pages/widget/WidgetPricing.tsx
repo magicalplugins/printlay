@@ -45,6 +45,8 @@ const BLANK: PricingProfileInput = {
   vinyl_surcharges: null,
   finish_surcharges: null,
   quantity_breaks: [],
+  quantity_presets: [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
+  allow_custom_quantity: true,
 };
 
 type SurchargeRow = { key: string; value: number };
@@ -76,6 +78,8 @@ export default function WidgetPricing() {
         vinyl_surcharges: p.vinyl_surcharges,
         finish_surcharges: p.finish_surcharges,
         quantity_breaks: p.quantity_breaks,
+        quantity_presets: p.quantity_presets ?? [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
+        allow_custom_quantity: p.allow_custom_quantity ?? true,
       },
     });
 
@@ -95,6 +99,8 @@ export default function WidgetPricing() {
         vinyl_surcharges: p.vinyl_surcharges,
         finish_surcharges: p.finish_surcharges,
         quantity_breaks: p.quantity_breaks,
+        quantity_presets: p.quantity_presets ?? [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
+        allow_custom_quantity: p.allow_custom_quantity ?? true,
       },
     });
   };
@@ -208,6 +214,9 @@ function ProfileEditor({
   const [vinylRows, setVinylRows] = useState<SurchargeRow[]>(mapToRows(initial.vinyl_surcharges));
   const [finishRows, setFinishRows] = useState<SurchargeRow[]>(mapToRows(initial.finish_surcharges));
   const [breaks, setBreaks] = useState<QuantityBreak[]>(initial.quantity_breaks || []);
+  const [qtyPresets, setQtyPresets] = useState<number[]>(initial.quantity_presets ?? [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500]);
+  const [allowCustomQty, setAllowCustomQty] = useState(initial.allow_custom_quantity ?? true);
+  const [newQty, setNewQty] = useState("");
   const [saving, setSaving] = useState(false);
 
   const num = (k: keyof PricingProfileInput) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -221,6 +230,8 @@ function ProfileEditor({
         vinyl_surcharges: rowsToMap(vinylRows),
         finish_surcharges: rowsToMap(finishRows),
         quantity_breaks: breaks.filter((b) => b.min_qty > 0),
+        quantity_presets: qtyPresets.sort((a, b) => a - b),
+        allow_custom_quantity: allowCustomQty,
       });
     } catch {
       /* error surfaced by parent */
@@ -357,6 +368,69 @@ function ProfileEditor({
             ))}
           </div>
         )}
+      </div>
+
+      {/* Quantity options */}
+      <div className={`${card} mt-6`}>
+        <div className="mb-3">
+          <h3 className="font-semibold text-sm">Quantity options</h3>
+          <p className="text-xs text-neutral-500 mt-0.5">
+            Preset quantities shown as radio buttons to the customer. They pick one or enter a custom amount.
+          </p>
+        </div>
+        {qtyPresets.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {qtyPresets.sort((a, b) => a - b).map((q, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1.5 rounded-full border border-neutral-700 bg-neutral-800/40 pl-3 pr-1.5 py-1 text-sm"
+              >
+                {q.toLocaleString()}
+                <button
+                  type="button"
+                  className="text-neutral-500 hover:text-rose-300 px-1"
+                  onClick={() => setQtyPresets(qtyPresets.filter((_, j) => j !== i))}
+                  aria-label="Remove"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="number"
+            className={`${inputCls} w-28`}
+            placeholder="e.g. 500"
+            value={newQty}
+            onChange={(e) => setNewQty(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const v = parseInt(newQty);
+                if (v > 0 && !qtyPresets.includes(v)) { setQtyPresets([...qtyPresets, v]); setNewQty(""); }
+              }
+            }}
+          />
+          <button
+            className={btnSecondary}
+            onClick={() => {
+              const v = parseInt(newQty);
+              if (v > 0 && !qtyPresets.includes(v)) { setQtyPresets([...qtyPresets, v]); setNewQty(""); }
+            }}
+          >
+            Add
+          </button>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-neutral-300 mt-3">
+          <input
+            type="checkbox"
+            checked={allowCustomQty}
+            onChange={(e) => setAllowCustomQty(e.target.checked)}
+            className="accent-violet-500"
+          />
+          Allow custom quantity (customer can type their own)
+        </label>
       </div>
     </WidgetShell>
   );

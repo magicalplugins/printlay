@@ -77,6 +77,8 @@ export interface PricingProfile {
   vinyl_surcharges: Record<string, number> | null;
   finish_surcharges: Record<string, number> | null;
   quantity_breaks: QuantityBreak[] | null;
+  quantity_presets: number[] | null;
+  allow_custom_quantity: boolean;
   created_at: string;
 }
 export type PricingProfileInput = Omit<PricingProfile, "id" | "created_at">;
@@ -126,6 +128,8 @@ export interface Product {
   show_filters: boolean;
   show_ai_styles: boolean;
   show_hand_edit: boolean;
+  require_proof: boolean;
+  proof_fee: number;
   pricing_profile_id: string | null;
   created_at: string;
 }
@@ -156,6 +160,11 @@ export interface PrintOrder {
   amount_total: number;
   currency: string;
   status: "draft" | "paid" | "ready_to_print" | "printed";
+  proof_status: string | null;
+  proof_notes: string | null;
+  proof_history: Array<{ action: string; timestamp: string; by: string; message: string }> | null;
+  customer_email: string | null;
+  proof_token: string | null;
   output_r2_key: string | null;
   created_at: string;
 }
@@ -170,6 +179,9 @@ export const updateOrderStatus = (id: string, status: PrintOrder["status"]) =>
   });
 export const deleteOrder = (id: string) =>
   api<void>(`/api/widget/orders/${id}`, { method: "DELETE" });
+
+export const sendProof = (id: string) =>
+  api<PrintOrder>(`/api/widget/orders/${id}/send-proof`, { method: "POST" });
 
 // ---- Live preview ---------------------------------------------------------
 export const createPreviewSession = (product_id: string) =>

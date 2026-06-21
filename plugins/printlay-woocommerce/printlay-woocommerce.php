@@ -42,6 +42,7 @@ final class PrintLay_WooCommerce {
         require_once PRINTLAY_WC_PLUGIN_DIR . 'includes/class-printlay-product.php';
         require_once PRINTLAY_WC_PLUGIN_DIR . 'includes/class-printlay-frontend.php';
         require_once PRINTLAY_WC_PLUGIN_DIR . 'includes/class-printlay-cart.php';
+        require_once PRINTLAY_WC_PLUGIN_DIR . 'includes/class-printlay-order-status.php';
     }
 
     private function init_hooks(): void {
@@ -63,6 +64,7 @@ final class PrintLay_WooCommerce {
         PrintLay_Product::instance();
         PrintLay_Frontend::instance();
         PrintLay_Cart::instance();
+        PrintLay_Order_Status::instance();
     }
 
     public function load_textdomain(): void {

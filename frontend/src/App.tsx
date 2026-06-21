@@ -74,6 +74,7 @@ const WidgetPreview = lazyWithRetry(() => import("./pages/widget/WidgetPreview")
 // Standalone embeddable widget — no app shell or auth guard; authenticates with
 // a widget session token from the URL. Loaded in an iframe by stores + preview.
 const EmbedSticker = lazyWithRetry(() => import("./embed/EmbedSticker"));
+const ProofReview = lazyWithRetry(() => import("./pages/ProofReview"));
 
 export default function App() {
   return (
@@ -118,6 +119,9 @@ export default function App() {
                   shell — it runs inside an iframe and authenticates purely with
                   the widget session token in its URL. */}
               <Route path="/embed/sticker" element={<EmbedSticker />} />
+
+              {/* Public proof review page — accessed via unique token link */}
+              <Route path="/proof/:token" element={<ProofReview />} />
 
               <Route
                 path="/billing/success"

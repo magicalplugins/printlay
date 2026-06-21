@@ -27,6 +27,8 @@ class PrintLay_Cart {
         add_filter('woocommerce_cart_item_thumbnail', [$this, 'cart_item_thumbnail'], 10, 3);
         add_action('woocommerce_checkout_create_order_line_item', [$this, 'save_order_meta'], 10, 4);
         add_filter('woocommerce_add_cart_item_data', [$this, 'ensure_unique_cart_items'], 10, 3);
+        add_action('woocommerce_payment_complete', [$this, 'notify_printlay_paid']);
+        add_action('woocommerce_order_status_completed', [$this, 'notify_printlay_paid']);
     }
 
     /**
@@ -189,5 +191,38 @@ class PrintLay_Cart {
             $cart_item_data['unique_key'] = md5($cart_item_data['_printlay_design_ref'] . microtime());
         }
         return $cart_item_data;
+    }
+
+    /**
+     * Notify PrintLay that payment is complete for orders containing PrintLay items.
+     */
+    public function notify_printlay_paid(int $order_id): void {
+        $order = wc_get_order($order_id);
+        if (!$order) return;
+
+        $host = get_option('printlay_host', 'https://printlay.co.uk');
+        $api_key = get_option('printlay_api_key', '');
+        if (empty($api_key)) return;
+
+        foreach ($order->get_items() as $item) {
+            $design_ref = $item->get_meta('_printlay_design_ref');
+            if (empty($design_ref)) continue;
+
+            $url = trailingslashit($host) . 'api/v1/widget/orders/' . $design_ref . '/mark-paid';
+            wp_remote_post($url, [
+                'timeout' => 10,
+                'headers' => [
+                    'Content-Type'  => 'application/json',
+                    'Authorization' => 'Bearer ' . $api_key,
+                ],
+                'body' => wp_json_encode([
+                    'wc_order_id' => $order_id,
+                    'design_ref'  => $design_ref,
+                ]),
+            ]);
+
+            $order->update_meta_data('_printlay_design_ref', $design_ref);
+        }
+        $order->save();
     }
 }

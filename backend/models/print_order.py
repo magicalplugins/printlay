@@ -66,6 +66,25 @@ class PrintOrder(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     """draft | paid | ready_to_print | printed."""
 
+    proof_status: Mapped[Optional[str]] = mapped_column(
+        String(20), nullable=True
+    )
+    """null | awaiting_proof | proof_sent | proof_approved | proof_rejected."""
+
+    proof_notes: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
+    """Latest client rejection reason or admin notes."""
+
+    proof_history: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    """Audit trail: [{'action': str, 'timestamp': str, 'by': str, 'message': str}]."""
+
+    customer_email: Mapped[Optional[str]] = mapped_column(String(254), nullable=True)
+    """Email address for sending proof notifications to the end customer."""
+
+    proof_token: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True, index=True
+    )
+    """Unique token for the public proof approval/rejection page."""
+
     sheet_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("sticker_sheets.id", ondelete="SET NULL"),

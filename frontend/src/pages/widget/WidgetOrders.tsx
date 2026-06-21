@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import WidgetShell, { btnSecondary, emptyCls } from "./WidgetShell";
-import { deleteOrder, listOrders, PrintOrder, updateOrderStatus } from "../../api/widget";
+import { deleteOrder, listOrders, PrintOrder, sendProof, updateOrderStatus } from "../../api/widget";
 import { apiErrMessage } from "../../api/client";
 
 const STATUSES: { key: string; label: string }[] = [
@@ -10,6 +10,7 @@ const STATUSES: { key: string; label: string }[] = [
   { key: "ready_to_print", label: "Ready to print" },
   { key: "printed", label: "Printed" },
   { key: "paid", label: "Paid" },
+  { key: "awaiting_proof", label: "Awaiting proof" },
 ];
 
 type LineItem = {
@@ -59,11 +60,18 @@ function itemLabel(item: LineItem): string {
   return `${item.qty ?? 1}× ${size}`;
 }
 
-const STATUS_BADGE: Record<PrintOrder["status"], string> = {
+const STATUS_BADGE: Record<string, string> = {
   draft: "bg-neutral-500/15 text-neutral-300 border-neutral-500/30",
   paid: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   ready_to_print: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   printed: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+};
+
+const PROOF_BADGE: Record<string, string> = {
+  awaiting_proof: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  proof_sent: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+  proof_approved: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+  proof_rejected: "bg-rose-500/15 text-rose-300 border-rose-500/30",
 };
 
 export default function WidgetOrders() {
@@ -96,6 +104,15 @@ export default function WidgetOrders() {
     if (!confirm(`Delete order #${o.external_order_id}? This can't be undone.`)) return;
     try {
       await deleteOrder(o.id);
+      load(filter);
+    } catch (e) {
+      setErr(apiErrMessage(e));
+    }
+  };
+
+  const handleSendProof = async (o: PrintOrder) => {
+    try {
+      await sendProof(o.id);
       load(filter);
     } catch (e) {
       setErr(apiErrMessage(e));
@@ -187,13 +204,30 @@ export default function WidgetOrders() {
                   </td>
                   <td className="px-4 py-2.5">
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 text-[10px] uppercase tracking-widest rounded-full border ${STATUS_BADGE[o.status]}`}
+                      className={`inline-flex items-center px-2 py-0.5 text-[10px] uppercase tracking-widest rounded-full border ${STATUS_BADGE[o.status] || "bg-neutral-500/15 text-neutral-300 border-neutral-500/30"}`}
                     >
                       {o.status.replace(/_/g, " ")}
                     </span>
+                    {o.proof_status && (
+                      <span
+                        className={`ml-1.5 inline-flex items-center px-2 py-0.5 text-[10px] uppercase tracking-widest rounded-full border ${PROOF_BADGE[o.proof_status] || ""}`}
+                      >
+                        {o.proof_status.replace(/_/g, " ")}
+                      </span>
+                    )}
                   </td>
-                  <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                    {o.status === "draft" && (
+                  <td className="px-4 py-2.5 text-right whitespace-nowrap space-x-2">
+                    {o.proof_status === "awaiting_proof" && (
+                      <button className={btnSecondary} onClick={() => handleSendProof(o)}>
+                        Send proof
+                      </button>
+                    )}
+                    {o.proof_status === "proof_rejected" && (
+                      <button className={btnSecondary} onClick={() => handleSendProof(o)}>
+                        Re-send proof
+                      </button>
+                    )}
+                    {!o.proof_status && o.status === "draft" && (
                       <button className={btnSecondary} onClick={() => mark(o, "ready_to_print")}>
                         Send to print queue
                       </button>
@@ -212,7 +246,7 @@ export default function WidgetOrders() {
                       </button>
                     )}
                     <button
-                      className="ml-3 text-xs text-neutral-600 hover:text-rose-300"
+                      className="text-xs text-neutral-600 hover:text-rose-300"
                       onClick={() => remove(o)}
                     >
                       Delete

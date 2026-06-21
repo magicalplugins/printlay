@@ -48,6 +48,8 @@ const BLANK: ProductInput = {
   show_filters: true,
   show_ai_styles: false,
   show_hand_edit: false,
+  require_proof: false,
+  proof_fee: 0,
   pricing_profile_id: null,
 };
 
@@ -84,6 +86,8 @@ export default function WidgetProducts() {
         show_filters: p.show_filters ?? true,
         show_ai_styles: p.show_ai_styles ?? false,
         show_hand_edit: p.show_hand_edit ?? false,
+        require_proof: p.require_proof ?? false,
+        proof_fee: p.proof_fee ?? 0,
         pricing_profile_id: p.pricing_profile_id,
       },
     });
@@ -360,6 +364,35 @@ function ProductEditor({
           <p className="text-xs text-neutral-500 mt-1 ml-6">
             Let customers manually adjust the cut line with a brush tool.
           </p>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={d.require_proof ?? false}
+              onChange={(e) => setD({ ...d, require_proof: e.target.checked })}
+              className="accent-violet-600 w-4 h-4"
+            />
+            <span className={labelCls + " !mb-0"}>Require proof approval before printing</span>
+          </label>
+          <p className="text-xs text-neutral-500 mt-1 ml-6">
+            Customers choose to self-approve or request a manual proof review.
+          </p>
+          {(d.require_proof ?? false) && (
+            <div className="mt-2 ml-6">
+              <label className={labelCls}>Proof fee ({profiles.find((pr) => pr.id === d.pricing_profile_id)?.currency ?? "GBP"})</label>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                className={inputCls + " w-32"}
+                value={d.proof_fee ?? 0}
+                onChange={(e) => setD({ ...d, proof_fee: parseFloat(e.target.value) || 0 })}
+              />
+              <p className="text-xs text-neutral-500 mt-1">Flat fee added when customer requests manual proof.</p>
+            </div>
+          )}
         </div>
 
         <div>

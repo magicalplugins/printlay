@@ -18,7 +18,7 @@ import { FILTER_PRESETS, filterCss } from "../components/app/SlotDesigner";
 import { useMe } from "../auth/MeProvider";
 
 type Step = "upload" | "options" | "canvas" | "processing" | "preview" | "saving" | "done";
-type CutlineMode = "contour" | "rectangle" | "face" | "ellipse";
+type CutlineMode = "contour" | "contour_no_bg" | "rectangle" | "face" | "ellipse";
 type Precision = "tight" | "medium";
 
 export default function StickerEditor() {
@@ -105,8 +105,8 @@ export default function StickerEditor() {
   const handleProcess = useCallback(async () => {
     if (!file) return;
 
-    // For rectangle/keep-background, go to canvas editor instead
-    if (cutlineMode === "rectangle") {
+    // For rectangle/ellipse (Square/Circle), go to canvas editor instead
+    if (cutlineMode === "rectangle" || cutlineMode === "ellipse") {
       setStep("processing");
       setError(null);
       try {
@@ -375,6 +375,7 @@ export default function StickerEditor() {
           srcHeightPx={srcHeightPx}
           onGenerate={handleCanvasGenerate}
           onBack={() => setStep("options")}
+          defaultShape={cutlineMode === "ellipse" ? "circle" : "rectangle"}
         />
       )}
 
@@ -455,7 +456,41 @@ function OptionsStep({
         <legend className="px-2 text-xs uppercase tracking-widest text-neutral-500">
           Sticker type
         </legend>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <ModeCard
+            active={cutlineMode === "rectangle"}
+            onClick={() => setCutlineMode("rectangle")}
+            title="Square"
+            desc="Keep background — set custom dimensions & position image on canvas"
+            icon={
+              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="4" y="6" width="24" height="20" rx="4" strokeDasharray="3 2" />
+              </svg>
+            }
+          />
+          <ModeCard
+            active={cutlineMode === "ellipse"}
+            onClick={() => setCutlineMode("ellipse")}
+            title="Circle"
+            desc="Keep background — set custom dimensions with a circular cut"
+            icon={
+              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <ellipse cx="16" cy="16" rx="12" ry="9" strokeDasharray="3 2" />
+              </svg>
+            }
+          />
+          <ModeCard
+            active={cutlineMode === "contour_no_bg"}
+            onClick={() => setCutlineMode("contour_no_bg")}
+            title="Cut Around Image"
+            desc="Keep background — contour traces shape if transparent, else rectangle"
+            icon={
+              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <rect x="3" y="3" width="26" height="26" rx="2" strokeDasharray="3 2" />
+                <path d="M8 24 C10 18 14 10 24 8" strokeDasharray="2 2" opacity="0.5" />
+              </svg>
+            }
+          />
           <ModeCard
             active={cutlineMode === "contour"}
             onClick={() => setCutlineMode("contour")}
@@ -464,17 +499,6 @@ function OptionsStep({
             icon={
               <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
                 <path d="M16 4c-6 0-10 5-10 12s4 12 10 12 10-5 10-12S22 4 16 4z" strokeDasharray="3 2" />
-              </svg>
-            }
-          />
-          <ModeCard
-            active={cutlineMode === "ellipse"}
-            onClick={() => setCutlineMode("ellipse")}
-            title="Circle / Oval"
-            desc="Remove background and cut a clean circle or oval"
-            icon={
-              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <ellipse cx="16" cy="16" rx="12" ry="9" strokeDasharray="3 2" />
               </svg>
             }
           />
@@ -489,17 +513,6 @@ function OptionsStep({
                 <circle cx="13" cy="14" r="1" fill="currentColor" stroke="none" />
                 <circle cx="19" cy="14" r="1" fill="currentColor" stroke="none" />
                 <path d="M13 19c1.5 1.5 4.5 1.5 6 0" />
-              </svg>
-            }
-          />
-          <ModeCard
-            active={cutlineMode === "rectangle"}
-            onClick={() => setCutlineMode("rectangle")}
-            title="Keep background"
-            desc="Set custom dimensions & position image on canvas"
-            icon={
-              <svg viewBox="0 0 32 32" className="w-8 h-8" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <rect x="4" y="6" width="24" height="20" rx="4" strokeDasharray="3 2" />
               </svg>
             }
           />
@@ -629,6 +642,7 @@ function CanvasEditorStep({
   srcHeightPx,
   onGenerate,
   onBack,
+  defaultShape = "rectangle",
 }: {
   previewUrl: string;
   srcWidthPx: number;
@@ -645,12 +659,13 @@ function CanvasEditorStep({
     shape: "rectangle" | "circle";
   }) => void;
   onBack: () => void;
+  defaultShape?: "rectangle" | "circle";
 }) {
   const [canvasW, setCanvasW] = useState(100);
   const [canvasH, setCanvasH] = useState(100);
   const [cornerRadius, setCornerRadius] = useState(3);
   const [bleed, setBleed] = useState(3);
-  const [shape, setShape] = useState<"rectangle" | "circle">("rectangle");
+  const [shape, setShape] = useState<"rectangle" | "circle">(defaultShape);
 
   // Image positioning in mm relative to canvas top-left
   const srcAspect = srcWidthPx / (srcHeightPx || 1);

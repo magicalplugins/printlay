@@ -20,7 +20,16 @@ import {
 } from "../utils/timeSaved";
 
 type ViewMode = "grid" | "list";
+type SourceFilter = "all" | "job" | "sheet" | "dtf_sheet";
 const VIEW_KEY = "printlay.outputsView";
+const FILTER_KEY = "printlay.outputsFilter";
+
+const SOURCE_LABELS: Record<SourceFilter, string> = {
+  all: "All",
+  job: "Jobs",
+  sheet: "Sheets",
+  dtf_sheet: "DTF Sheets",
+};
 
 export default function Outputs() {
   const { me } = useMe();
@@ -34,6 +43,10 @@ export default function Outputs() {
   const [view, setView] = useState<ViewMode>(() => {
     try { return (localStorage.getItem(VIEW_KEY) as ViewMode) || "list"; }
     catch { return "list"; }
+  });
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(() => {
+    try { return (localStorage.getItem(FILTER_KEY) as SourceFilter) || "all"; }
+    catch { return "all"; }
   });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
@@ -86,6 +99,18 @@ export default function Outputs() {
     try { localStorage.setItem(VIEW_KEY, v); } catch {}
   }
 
+  function switchFilter(f: SourceFilter) {
+    setSourceFilter(f);
+    setSelected(new Set());
+    try { localStorage.setItem(FILTER_KEY, f); } catch {}
+  }
+
+  const filteredItems = useMemo(() => {
+    if (!items) return null;
+    if (sourceFilter === "all") return items;
+    return items.filter((o) => (o.source_type || "job") === sourceFilter);
+  }, [items, sourceFilter]);
+
   function toggleSelect(id: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -95,8 +120,8 @@ export default function Outputs() {
   }
 
   function toggleAll() {
-    if (!items) return;
-    setSelected((prev) => prev.size === items.length ? new Set() : new Set(items.map((o) => o.id)));
+    if (!filteredItems) return;
+    setSelected((prev) => prev.size === filteredItems.length ? new Set() : new Set(filteredItems.map((o) => o.id)));
   }
 
   async function onDownload(id: string) {
@@ -134,16 +159,18 @@ export default function Outputs() {
   }
 
   function tplForOutput(o: Output): Template | undefined {
+    if (!o.job_id) return undefined;
     const job = jobMap.get(o.job_id);
     if (!job) return undefined;
     return tplMap.get(job.template_id);
   }
 
   function jobForOutput(o: Output): Job | undefined {
+    if (!o.job_id) return undefined;
     return jobMap.get(o.job_id);
   }
 
-  const allSelected = !!items && items.length > 0 && selected.size === items.length;
+  const allSelected = !!filteredItems && filteredItems.length > 0 && selected.size === filteredItems.length;
   const someSelected = selected.size > 0;
 
   return (
@@ -160,6 +187,21 @@ export default function Outputs() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Source filter */}
+          <div className="flex items-center rounded-lg border border-neutral-800 p-0.5 bg-neutral-900/60">
+            {(Object.keys(SOURCE_LABELS) as SourceFilter[]).map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => switchFilter(f)}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
+                  sourceFilter === f ? "bg-neutral-700 text-white" : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                {SOURCE_LABELS[f]}
+              </button>
+            ))}
+          </div>
           {/* View toggle */}
           <div className="flex items-center rounded-lg border border-neutral-800 p-0.5 bg-neutral-900/60">
             <button
@@ -219,20 +261,22 @@ export default function Outputs() {
         </div>
       )}
 
-      {items === null ? (
+      {filteredItems === null ? (
         <div className="space-y-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="h-16 rounded-xl border border-neutral-800 bg-neutral-900/50 animate-pulse" />
           ))}
         </div>
-      ) : items.length === 0 ? (
+      ) : filteredItems.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-neutral-800 p-12 text-center text-neutral-500">
-          Nothing yet. Fill a job and click &quot;Generate PDF &rarr;&quot;.
+          {sourceFilter === "all"
+            ? <>Nothing yet. Fill a job and click &quot;Export PDF &rarr;&quot;.</>
+            : <>No {SOURCE_LABELS[sourceFilter].toLowerCase()} outputs yet.</>}
         </div>
       ) : view === "grid" ? (
         /* ── GRID VIEW ── */
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {items.map((o) => {
+          {filteredItems.map((o) => {
             const isSelected = selected.has(o.id);
             const tpl = tplForOutput(o);
             const job = jobForOutput(o);
@@ -319,7 +363,7 @@ export default function Outputs() {
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-900">
-              {items.map((o) => {
+              {filteredItems.map((o) => {
                 const isSelected = selected.has(o.id);
                 const tpl = tplForOutput(o);
                 const job = jobForOutput(o);

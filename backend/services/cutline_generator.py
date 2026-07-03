@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from shapely.geometry import Polygon
 from skimage.measure import find_contours
 
-CutlineMode = Literal["contour", "rectangle", "face", "circle", "ellipse"]
+CutlineMode = Literal["contour", "contour_no_bg", "rectangle", "face", "circle", "ellipse"]
 CutlinePrecision = Literal["tight", "medium"]
 
 
@@ -70,7 +70,7 @@ def generate_cutline(
     img = Image.open(io.BytesIO(rgba_bytes)).convert("RGBA")
 
     effective_border_mm = border_width_mm
-    if mode == "contour":
+    if mode in ("contour", "contour_no_bg"):
         face_extra_mm = _face_clearance_bonus_mm(img)
         if face_extra_mm > 0:
             effective_border_mm += face_extra_mm
@@ -105,6 +105,8 @@ def generate_cutline(
             subject_mask_override=head_mask,
         )
     else:
+        # "contour" and "contour_no_bg" both trace the subject outline.
+        # The difference is handled upstream (bg removal skipped for contour_no_bg).
         return _generate_contour_cutline(
             img, cut_offset_px, bleed_px, border_color, dpi, precision
         )

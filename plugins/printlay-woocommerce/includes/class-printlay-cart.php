@@ -29,6 +29,7 @@ class PrintLay_Cart {
         add_filter('woocommerce_add_cart_item_data', [$this, 'ensure_unique_cart_items'], 10, 3);
         add_action('woocommerce_payment_complete', [$this, 'notify_printlay_paid']);
         add_action('woocommerce_order_status_completed', [$this, 'notify_printlay_paid']);
+        add_filter('woocommerce_cart_item_quantity', [$this, 'lock_cart_quantity'], 10, 3);
     }
 
     /**
@@ -224,5 +225,20 @@ class PrintLay_Cart {
             $order->update_meta_data('_printlay_design_ref', $design_ref);
         }
         $order->save();
+    }
+
+    /**
+     * Replace quantity input with a fixed display for PrintLay cart items.
+     * The quantity is locked because pricing was calculated in the designer.
+     */
+    public function lock_cart_quantity(string $product_quantity, string $cart_item_key, array $cart_item): string {
+        if (!empty($cart_item['_printlay_design_ref'])) {
+            $qty = intval($cart_item['quantity']);
+            return sprintf(
+                '<span class="printlay-qty-locked" style="display:inline-block;padding:4px 12px;background:#f1f5f9;border-radius:6px;font-weight:600;font-size:14px;">%d</span>',
+                $qty
+            );
+        }
+        return $product_quantity;
     }
 }

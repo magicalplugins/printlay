@@ -47,6 +47,7 @@ const BLANK: PricingProfileInput = {
   quantity_breaks: [],
   quantity_presets: [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
   allow_custom_quantity: true,
+  extras_required: false,
 };
 
 type SurchargeRow = { key: string; value: number };
@@ -80,6 +81,7 @@ export default function WidgetPricing() {
         quantity_breaks: p.quantity_breaks,
         quantity_presets: p.quantity_presets ?? [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
         allow_custom_quantity: p.allow_custom_quantity ?? true,
+        extras_required: p.extras_required ?? false,
       },
     });
 
@@ -101,6 +103,7 @@ export default function WidgetPricing() {
         quantity_breaks: p.quantity_breaks,
         quantity_presets: p.quantity_presets ?? [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500],
         allow_custom_quantity: p.allow_custom_quantity ?? true,
+        extras_required: p.extras_required ?? false,
       },
     });
   };
@@ -314,11 +317,21 @@ function ProfileEditor({
       />
       <SurchargeEditor
         title="Finish surcharges"
-        hint="Named finishes with a fixed surcharge per metre. E.g. Laminate +1.50/m."
+        hint="Named extras with a fixed surcharge per metre. E.g. Speedy Turn-Around +5/m."
         rows={finishRows}
         setRows={setFinishRows}
         currency={d.currency}
       />
+      <div className="px-4 pb-3 -mt-3">
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={d.extras_required ?? false}
+            onChange={(e) => setD({ ...d, extras_required: e.target.checked })}
+          />
+          <span>Extras required (customer must select at least one)</span>
+        </label>
+      </div>
 
       <div className={`${card} mt-6`}>
         <div className="flex items-center justify-between mb-3">

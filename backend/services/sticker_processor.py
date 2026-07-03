@@ -90,13 +90,15 @@ def process_sticker(
     beautify_eyes: float = 0.0,
     beautify_tone: float = 0.0,
     corner_radius_frac: float | None = None,
+    skip_bg_removal: bool = False,
 ) -> StickerProcessResult:
     """Process an uploaded image into a sticker with cutline.
 
     Auto-detects whether background removal is needed. If the image
     already has transparency, skips removal and goes straight to cutline.
+    If skip_bg_removal is True, always keeps the original image as-is.
     """
-    if cutline_mode == "rectangle":
+    if cutline_mode in ("rectangle", "contour_no_bg") or skip_bg_removal:
         rgba_bytes = image_bytes
         used_method = None
         bg_type = "kept"

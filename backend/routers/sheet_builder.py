@@ -26,6 +26,7 @@ from backend.services.sheet_compositor import (
     SUB_SHEET_SIZES,
     auto_layout,
     compose_pdf,
+    resolve_sub_size,
 )
 
 router = APIRouter(prefix="/api/sheets", tags=["sheet-builder"])
@@ -551,66 +552,191 @@ def run_multi_auto_layout(
     gap = cfg.gap_mm
     margin = cfg.edge_margin_mm
 
-    for item in payload.items:
-        asset = (
-            db.query(Asset)
-            .filter(Asset.id == item.asset_id, Asset.user_id == user.id)
-            .one_or_none()
-        )
-        if not asset:
-            continue
+    # When sub-sheets are active, pack each item into its own sub-sheets
+    # within a unified grid (no two items share a sub-sheet).
+    _sub_size = resolve_sub_size(cfg)
+    if _sub_size:
+        sub_w, sub_h = _sub_size
+        padding = cfg.sub_sheet_padding_mm
+        sub_gap_val = cfg.sub_sheet_gap_mm
+        edge = cfg.edge_margin_mm
+        sticker_gap = cfg.gap_mm
 
-        native_w_mm = asset.width_pt / (72.0 / 25.4)
-        native_h_mm = asset.height_pt / (72.0 / 25.4)
+        available_for_subs = cfg.media_width_mm - 2 * edge
+        sub_cols = max(1, int((available_for_subs + sub_gap_val) / (sub_w + sub_gap_val)))
 
-        if item.width_mm and item.width_mm > 0 and native_w_mm > 0:
-            scale = item.width_mm / native_w_mm
-        elif item.height_mm and item.height_mm > 0 and native_h_mm > 0:
-            scale = item.height_mm / native_h_mm
-        else:
-            scale = 1.0
+        # Reserve space for title
+        title_offset = 0.0
+        if cfg.sub_sheet_title:
+            title_offset = max(cfg.sub_sheet_title_size_mm + 3.0, 3.0)
 
-        sw = native_w_mm * scale
-        sh = native_h_mm * scale
+        # Track which sub-sheet index we're filling across all items
+        global_sub_idx = 0
 
-        # Determine orientation
-        available_w = cfg.media_width_mm - 2 * margin
-        orient = item.orientation
-        if orient == "auto":
-            cols_h = max(1, int((available_w + gap) / (sw + gap)))
-            cols_v = max(1, int((available_w + gap) / (sh + gap)))
-            if cols_v > cols_h:
-                sw, sh = sh, sw
-        elif orient == "horizontal":
-            if sw > sh:
-                sw, sh = sh, sw
-        elif orient == "vertical":
-            if sh > sw:
-                sw, sh = sh, sw
+        for item in payload.items:
+            asset = (
+                db.query(Asset)
+                .filter(Asset.id == item.asset_id, Asset.user_id == user.id)
+                .one_or_none()
+            )
+            if not asset:
+                continue
 
-        cols = max(1, int((available_w + gap) / (sw + gap)))
-        rows_needed = math.ceil(item.quantity / cols)
-        rotation = 90 if (sw != native_w_mm * scale) else 0
+            native_w_mm = asset.width_pt / (72.0 / 25.4)
+            native_h_mm = asset.height_pt / (72.0 / 25.4)
 
-        idx = 0
-        for row in range(rows_needed):
-            for col in range(cols):
-                if idx >= item.quantity:
-                    break
-                x = margin + col * (sw + gap)
-                y = y_offset + row * (sh + gap)
-                all_placements.append({
-                    "asset_id": str(asset.id),
-                    "x_mm": round(x, 2),
-                    "y_mm": round(y, 2),
-                    "rotation_deg": rotation,
-                    "scale": round(scale, 4),
-                })
-                idx += 1
+            if item.width_mm and item.width_mm > 0 and native_w_mm > 0:
+                scale = item.width_mm / native_w_mm
+            elif item.height_mm and item.height_mm > 0 and native_h_mm > 0:
+                scale = item.height_mm / native_h_mm
+            else:
+                scale = 1.0
 
-        y_offset += rows_needed * (sh + gap)
+            sw = native_w_mm * scale
+            sh = native_h_mm * scale
 
-    total_height = y_offset + margin
+            usable_w = sub_w - 2 * padding
+            usable_h = sub_h - 2 * padding - title_offset
+
+            # Orient sticker
+            ori = item.orientation
+            if ori == "auto":
+                cols_h = max(1, int((usable_w + sticker_gap) / (sw + sticker_gap)))
+                rows_h = max(1, int((usable_h + sticker_gap) / (sh + sticker_gap)))
+                cols_v = max(1, int((usable_w + sticker_gap) / (sh + sticker_gap)))
+                rows_v = max(1, int((usable_h + sticker_gap) / (sw + sticker_gap)))
+                if cols_v * rows_v > cols_h * rows_h:
+                    sw, sh = sh, sw
+            elif ori == "horizontal":
+                if sw > sh:
+                    sw, sh = sh, sw
+            elif ori == "vertical":
+                if sh > sw:
+                    sw, sh = sh, sw
+
+            stickers_per_col = max(1, int((usable_w + sticker_gap) / (sw + sticker_gap)))
+            stickers_per_row = max(1, int((usable_h + sticker_gap) / (sh + sticker_gap)))
+            per_sub = stickers_per_col * stickers_per_row
+
+            sub_sheets_needed = math.ceil(item.quantity / per_sub)
+
+            # Block dimensions for alignment
+            block_w = stickers_per_col * sw + (stickers_per_col - 1) * sticker_gap
+
+            sticker_idx = 0
+            for s in range(sub_sheets_needed):
+                sub_cell = global_sub_idx + s
+                sub_row = sub_cell // sub_cols
+                sub_col = sub_cell % sub_cols
+
+                sub_x = edge + sub_col * (sub_w + sub_gap_val)
+                sub_y = edge + sub_row * (sub_h + sub_gap_val)
+
+                remaining = min(per_sub, item.quantity - sticker_idx)
+                actual_rows = math.ceil(remaining / stickers_per_col)
+                actual_block_h = actual_rows * sh + (actual_rows - 1) * sticker_gap
+
+                # Horizontal alignment
+                align_h = cfg.sticker_align_h
+                if align_h == "center":
+                    offset_x = padding + (usable_w - block_w) / 2
+                elif align_h == "right":
+                    offset_x = padding + (usable_w - block_w)
+                else:
+                    offset_x = padding
+
+                # Vertical alignment
+                align_v = cfg.sticker_align_v
+                if align_v == "center":
+                    offset_y = padding + title_offset + (usable_h - actual_block_h) / 2
+                elif align_v == "bottom":
+                    offset_y = padding + title_offset + (usable_h - actual_block_h)
+                else:
+                    offset_y = padding + title_offset
+
+                for r in range(stickers_per_row):
+                    for c in range(stickers_per_col):
+                        if sticker_idx >= item.quantity:
+                            break
+                        x = sub_x + offset_x + c * (sw + sticker_gap)
+                        y = sub_y + offset_y + r * (sh + sticker_gap)
+                        all_placements.append({
+                            "asset_id": str(asset.id),
+                            "x_mm": round(x, 2),
+                            "y_mm": round(y, 2),
+                            "rotation_deg": 90 if (sw != native_w_mm * scale) else 0,
+                            "scale": round(scale, 4),
+                        })
+                        sticker_idx += 1
+                    if sticker_idx >= item.quantity:
+                        break
+
+            global_sub_idx += sub_sheets_needed
+
+        # Calculate total height from the number of sub-sheet rows used
+        total_sub_rows = math.ceil(global_sub_idx / sub_cols) if global_sub_idx > 0 else 1
+        total_height = edge + total_sub_rows * (sub_h + sub_gap_val) - sub_gap_val + edge
+    else:
+        for item in payload.items:
+            asset = (
+                db.query(Asset)
+                .filter(Asset.id == item.asset_id, Asset.user_id == user.id)
+                .one_or_none()
+            )
+            if not asset:
+                continue
+
+            native_w_mm = asset.width_pt / (72.0 / 25.4)
+            native_h_mm = asset.height_pt / (72.0 / 25.4)
+
+            if item.width_mm and item.width_mm > 0 and native_w_mm > 0:
+                scale = item.width_mm / native_w_mm
+            elif item.height_mm and item.height_mm > 0 and native_h_mm > 0:
+                scale = item.height_mm / native_h_mm
+            else:
+                scale = 1.0
+
+            sw = native_w_mm * scale
+            sh = native_h_mm * scale
+
+            # Determine orientation
+            available_w = cfg.media_width_mm - 2 * margin
+            orient = item.orientation
+            if orient == "auto":
+                cols_h = max(1, int((available_w + gap) / (sw + gap)))
+                cols_v = max(1, int((available_w + gap) / (sh + gap)))
+                if cols_v > cols_h:
+                    sw, sh = sh, sw
+            elif orient == "horizontal":
+                if sw > sh:
+                    sw, sh = sh, sw
+            elif orient == "vertical":
+                if sh > sw:
+                    sw, sh = sh, sw
+
+            cols = max(1, int((available_w + gap) / (sw + gap)))
+            rows_needed = math.ceil(item.quantity / cols)
+            rotation = 90 if (sw != native_w_mm * scale) else 0
+
+            idx = 0
+            for row in range(rows_needed):
+                for col in range(cols):
+                    if idx >= item.quantity:
+                        break
+                    x = margin + col * (sw + gap)
+                    y = y_offset + row * (sh + gap)
+                    all_placements.append({
+                        "asset_id": str(asset.id),
+                        "x_mm": round(x, 2),
+                        "y_mm": round(y, 2),
+                        "rotation_deg": rotation,
+                        "scale": round(scale, 4),
+                    })
+                    idx += 1
+
+            y_offset += rows_needed * (sh + gap)
+
+        total_height = y_offset + margin
     sheet.placements = all_placements
     sheet.media_height_mm = total_height
     db.commit()
@@ -646,11 +772,8 @@ def pack_sheet(
     Uses a simple bottom-left shelf algorithm that respects item sizes.
     Returns new placements without saving, so the frontend can animate.
     """
-    sheet = db.query(StickerSheet).filter_by(
-        id=sheet_id, user_id=auth.user_id
-    ).first()
-    if not sheet:
-        raise HTTPException(404, "Sheet not found")
+    user = _resolve_user(db, auth)
+    sheet = _own_sheet(db, user, sheet_id)
 
     placements = sheet.placements or []
     if not placements:
@@ -778,18 +901,32 @@ def export_sheet_pdf(
 
     pdf_bytes = compose_pdf(cfg, placements_typed, asset_pdfs, sheet.media_height_mm)
 
-    r2_key = f"users/{user.id}/sheets/{sheet.id}/output.pdf"
+    output_id = uuid.uuid4()
+    from datetime import datetime, timezone
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    name = f"{sheet.name} — {timestamp}.pdf"
+    r2_key = f"users/{user.id}/sheets/{sheet.id}/outputs/{output_id}.pdf"
     storage.put_bytes(r2_key, pdf_bytes, content_type="application/pdf")
     sheet.output_r2_key = r2_key
+
+    from backend.models.output import Output as OutputModel
+    out = OutputModel(
+        id=output_id,
+        user_id=user.id,
+        job_id=None,
+        sheet_id=sheet.id,
+        source_type="dtf_sheet" if getattr(sheet, "sheet_type", "sticker") == "dtf" else "sheet",
+        name=name,
+        r2_key=r2_key,
+        file_size=len(pdf_bytes),
+        slots_filled=len(sheet.placements),
+        slots_total=len(sheet.placements),
+        status="ready",
+    )
+    db.add(out)
     db.commit()
 
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f'attachment; filename="{sheet.name}.pdf"',
-        },
-    )
+    return {"id": str(output_id), "name": name, "file_size": len(pdf_bytes)}
 
 
 def _parse_cut_contour(raw: str | None) -> list[tuple[float, float]] | None:

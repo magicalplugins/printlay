@@ -12,11 +12,14 @@ import {
 } from "./widgetClient";
 
 const CUT_STYLE_LABELS: Record<string, string> = {
-  die_cut: "Die-cut",
-  face: "Face",
-  keep_bg: "Keep background",
   square: "Square",
-  circle: "Circle / Oval",
+  circle: "Circle",
+  cut_around: "Cut Around Image",
+  bg_removal: "Background Removal",
+  face: "Face Sticker",
+  // Legacy keys
+  die_cut: "Background Removal",
+  keep_bg: "Square",
 };
 
 type Step = "loading" | "error" | "upload" | "design" | "done";
@@ -106,7 +109,7 @@ function UploadStep({
 }) {
   const styles = config.enabled_cut_styles.length
     ? config.enabled_cut_styles
-    : ["die_cut"];
+    : ["bg_removal"];
   const [cutStyle, setCutStyle] = useState(styles[0]);
   const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -123,11 +126,17 @@ function UploadStep({
 
   const create = async () => {
     if (!file) return;
+    // For Square/Circle: store file and go straight to design step
+    if (cutStyle === "square" || cutStyle === "circle") {
+      sessionStore.file = file;
+      sessionStore.cutStyle = cutStyle;
+      onProcessed(null as any);
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       const r = await client.process(file, cutStyle);
-      // Stash the latest result + chosen style for the design step.
       sessionStore.result = r;
       sessionStore.cutStyle = cutStyle;
       onProcessed(r);
@@ -199,9 +208,10 @@ function UploadStep({
 // --------------------------------------------------------------------------- //
 // Design + options + live price
 // --------------------------------------------------------------------------- //
-const sessionStore: { result: ProcessResult | null; cutStyle: string } = {
+const sessionStore: { result: ProcessResult | null; cutStyle: string; file: File | null } = {
   result: null,
-  cutStyle: "die_cut",
+  cutStyle: "bg_removal",
+  file: null,
 };
 
 function DesignStep({
@@ -216,19 +226,70 @@ function DesignStep({
   const [result, setResult] = useState<ProcessResult | null>(sessionStore.result);
   const [cutStyle, setCutStyle] = useState(sessionStore.cutStyle);
   const [filterId, setFilterId] = useState("none");
-  // `tighten` = the offset the server has actually rendered; `tightenLocal` =
-  // the live slider value. The difference drives an instant client-side cut-line
-  // offset so the line grows/shrinks as you drag, before the server catches up.
   const [tighten, setTighten] = useState(0);
   const [tightenLocal, setTightenLocal] = useState(0);
-  // Rounded-corner radius for the Keep-background (rectangle) cut. Fraction
-  // of half the short side: 0.01 = almost square, 1.0 = fully round end.
   const CORNER_MIN = 0.01;
   const [cornerRadius, setCornerRadius] = useState(CORNER_MIN);
   const [busy, setBusy] = useState(false);
   const [aiStyling, setAiStyling] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
   const [editingCutline, setEditingCutline] = useState(false);
+
+  // --- Canvas state for square/circle (image positioning) ---
+  const isCanvasStyle = cutStyle === "square" || cutStyle === "circle";
+  const canvasShape = cutStyle === "circle" ? "circle" : "rectangle";
+  const file = sessionStore.file;
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [naturalW, setNaturalW] = useState(1);
+  const [naturalH, setNaturalH] = useState(1);
+  const bleedDefault = config.bleed_mm ?? 3.0;
+  const [canvasBleed, setCanvasBleed] = useState(bleedDefault);
+  const [canvasCornerRadius, setCanvasCornerRadius] = useState(3.0);
+  const [imgX, setImgX] = useState(0);
+  const [imgY, setImgY] = useState(0);
+  const [imgW, setImgW] = useState(100);
+  const [imgH, setImgH] = useState(100);
+  const [canvasDragging, setCanvasDragging] = useState(false);
+  const [canvasDragStart, setCanvasDragStart] = useState<{ x: number; y: number; ix: number; iy: number } | null>(null);
+  const canvasElRef = useRef<HTMLCanvasElement>(null);
+  const [loadedImg, setLoadedImg] = useState<HTMLImageElement | null>(null);
+  const [canvasProcessed, setCanvasProcessed] = useState(false);
+
+  // Load image for canvas styles
+  useEffect(() => {
+    if (!isCanvasStyle || !file) return;
+    const url = URL.createObjectURL(file);
+    setImgUrl(url);
+    const img = new Image();
+    img.onload = () => {
+      setNaturalW(img.width);
+      setNaturalH(img.height);
+      const aspect = img.width / img.height;
+      const canW = 100;
+      const canH = 100;
+      if (aspect > 1) {
+        setImgW(canW);
+        setImgH(canW / aspect);
+        setImgX(0);
+        setImgY((canH - canW / aspect) / 2);
+      } else {
+        setImgH(canH);
+        setImgW(canH * aspect);
+        setImgX((canW - canH * aspect) / 2);
+        setImgY(0);
+      }
+    };
+    img.src = url;
+    return () => URL.revokeObjectURL(url);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCanvasStyle, file]);
+
+  useEffect(() => {
+    if (!imgUrl) return;
+    const im = new Image();
+    im.onload = () => setLoadedImg(im);
+    im.src = imgUrl;
+  }, [imgUrl]);
 
   // Natural aspect of the processed design; the customer scales by longest side.
   const aspect = result && result.height_mm > 0 ? result.width_mm / result.height_mm : 1;
@@ -247,13 +308,195 @@ function DesignStep({
   const allowCustom = config.allow_custom_size !== false || presets.length === 0;
   // -1 = custom (slider); >=0 = index into presets.
   const [sizeSel, setSizeSel] = useState<number>(presets.length ? 0 : -1);
-  const [longestMm, setLongestMm] = useState(() => {
+  // Width in mm (slider controls this directly); height derived from aspect.
+  const [widthMm, setWidthMm] = useState(() => {
     const raw = clamp(presets.length ? presets[0] : naturalLongest);
     return Math.round(raw / 5) * 5 || 5;
   });
+  // For canvas styles, height is independent (square stickers can be non-square)
+  const [heightMm, setHeightMm] = useState(() => {
+    const raw = clamp(presets.length ? presets[0] : 100);
+    return Math.round(raw / 5) * 5 || 5;
+  });
+
+  // Canvas rendering for square/circle preview
+  const canvasTotalW = widthMm + 2 * canvasBleed;
+  const canvasTotalH = heightMm + 2 * canvasBleed;
+  const canvasDisplayPx = 280;
+  const canvasScale = canvasDisplayPx / Math.max(canvasTotalW, canvasTotalH);
+  const cDW = canvasTotalW * canvasScale;
+  const cDH = canvasTotalH * canvasScale;
+
+  useEffect(() => {
+    if (!isCanvasStyle || naturalW <= 1) return;
+    const ratio = naturalW / naturalH;
+    if (ratio > 1) {
+      setImgW(widthMm);
+      setImgH(widthMm / ratio);
+      setImgX(0);
+      setImgY((heightMm - widthMm / ratio) / 2);
+    } else {
+      setImgH(heightMm);
+      setImgW(heightMm * ratio);
+      setImgX((widthMm - heightMm * ratio) / 2);
+      setImgY(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widthMm, heightMm]);
+
+  useEffect(() => {
+    if (!isCanvasStyle) return;
+    const c = canvasElRef.current;
+    if (!c || !loadedImg) return;
+    c.width = cDW * 2;
+    c.height = cDH * 2;
+    c.style.width = `${cDW}px`;
+    c.style.height = `${cDH}px`;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(2, 2);
+
+    const r = canvasCornerRadius * canvasScale;
+
+    const roundedPath = (x: number, y: number, w: number, h: number, radius: number) => {
+      const rr = Math.min(radius, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.lineTo(x + w - rr, y);
+      ctx.arcTo(x + w, y, x + w, y + rr, rr);
+      ctx.lineTo(x + w, y + h - rr);
+      ctx.arcTo(x + w, y + h, x + w - rr, y + h, rr);
+      ctx.lineTo(x + rr, y + h);
+      ctx.arcTo(x, y + h, x, y + h - rr, rr);
+      ctx.lineTo(x, y + rr);
+      ctx.arcTo(x, y, x + rr, y, rr);
+      ctx.closePath();
+    };
+
+    ctx.fillStyle = "#e5e7eb";
+    ctx.fillRect(0, 0, cDW, cDH);
+
+    const sx = canvasBleed * canvasScale;
+    const sy = canvasBleed * canvasScale;
+    const sw = widthMm * canvasScale;
+    const sh = heightMm * canvasScale;
+
+    ctx.fillStyle = "#ffffff";
+    if (canvasShape === "circle") {
+      ctx.beginPath();
+      ctx.ellipse(sx + sw / 2, sy + sh / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      roundedPath(sx, sy, sw, sh, r);
+      ctx.fill();
+    }
+
+    const ix = (canvasBleed + imgX) * canvasScale;
+    const iy = (canvasBleed + imgY) * canvasScale;
+    const iw = imgW * canvasScale;
+    const ih = imgH * canvasScale;
+    ctx.drawImage(loadedImg, ix, iy, iw, ih);
+
+    // Bleed overlay (semi-transparent outside cut area)
+    ctx.fillStyle = "rgba(229, 231, 235, 0.45)";
+    ctx.beginPath();
+    ctx.rect(0, 0, cDW, cDH);
+    if (canvasShape === "circle") {
+      ctx.ellipse(sx + sw / 2, sy + sh / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2);
+    } else {
+      roundedPath(sx, sy, sw, sh, r);
+    }
+    ctx.fill("evenodd");
+
+    // Blue dashed cut line
+    ctx.strokeStyle = "#2684ff";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    if (canvasShape === "circle") {
+      ctx.beginPath();
+      ctx.ellipse(sx + sw / 2, sy + sh / 2, sw / 2, sh / 2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      roundedPath(sx, sy, sw, sh, r);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }, [isCanvasStyle, loadedImg, widthMm, heightMm, imgX, imgY, imgW, imgH, canvasBleed, canvasScale, canvasShape, canvasCornerRadius, cDW, cDH]);
+
+  const canvasCenterH = () => setImgX((widthMm - imgW) / 2);
+  const canvasCenterV = () => setImgY((heightMm - imgH) / 2);
+  const canvasCenterBoth = () => { setImgX((widthMm - imgW) / 2); setImgY((heightMm - imgH) / 2); };
+  const canvasScaleUp = () => {
+    const ratio = naturalW / naturalH;
+    const newW = imgW * 1.1;
+    const newH = newW / ratio;
+    setImgX(imgX - (newW - imgW) / 2);
+    setImgY(imgY - (newH - imgH) / 2);
+    setImgW(newW);
+    setImgH(newH);
+  };
+  const canvasScaleDown = () => {
+    const ratio = naturalW / naturalH;
+    const newW = Math.max(10, imgW * 0.9);
+    const newH = newW / ratio;
+    setImgX(imgX - (newW - imgW) / 2);
+    setImgY(imgY - (newH - imgH) / 2);
+    setImgW(newW);
+    setImgH(newH);
+  };
+  const onCanvasMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setCanvasDragging(true);
+    setCanvasDragStart({ x: e.clientX, y: e.clientY, ix: imgX, iy: imgY });
+  };
+  const onCanvasMouseMove = (e: React.MouseEvent) => {
+    if (!canvasDragging || !canvasDragStart) return;
+    setImgX(canvasDragStart.ix + (e.clientX - canvasDragStart.x) / canvasScale);
+    setImgY(canvasDragStart.iy + (e.clientY - canvasDragStart.y) / canvasScale);
+  };
+  const onCanvasMouseUp = () => setCanvasDragging(false);
+  const onCanvasTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    setCanvasDragging(true);
+    setCanvasDragStart({ x: t.clientX, y: t.clientY, ix: imgX, iy: imgY });
+  };
+  const onCanvasTouchMove = (e: React.TouchEvent) => {
+    if (!canvasDragging || !canvasDragStart) return;
+    const t = e.touches[0];
+    setImgX(canvasDragStart.ix + (t.clientX - canvasDragStart.x) / canvasScale);
+    setImgY(canvasDragStart.iy + (t.clientY - canvasDragStart.y) / canvasScale);
+  };
+
+  const processCanvasDesign = async () => {
+    if (!file) return;
+    setBusy(true);
+    setPriceErr(null);
+    try {
+      const r = await client.processCanvas(file, {
+        canvasWidthMm: widthMm,
+        canvasHeightMm: heightMm,
+        imgXMm: imgX,
+        imgYMm: imgY,
+        imgWidthMm: imgW,
+        imgHeightMm: imgH,
+        cornerRadiusMm: canvasCornerRadius,
+        bleedMm: canvasBleed,
+        shape: canvasShape as "rectangle" | "circle",
+      });
+      sessionStore.result = r;
+      setResult(r);
+      setCanvasProcessed(true);
+      return r;
+    } catch (e) {
+      setPriceErr(e instanceof WidgetApiError ? e.detail : "Processing failed.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const [vinyl, setVinyl] = useState<string | null>(config.vinyl_types[0]?.key ?? null);
-  const [finish, setFinish] = useState<string | null>(config.finishes[0]?.key ?? null);
+  const [finish, setFinish] = useState<string | null>(config.extras_required ? (config.finishes[0]?.key ?? null) : null);
   const [quantity, setQuantity] = useState(() => {
     const presets = config.quantity_presets ?? [];
     return presets.length > 0 ? presets[0] : 50;
@@ -271,13 +514,16 @@ function DesignStep({
   const [pricing, setPricing] = useState(false);
   const [priceErr, setPriceErr] = useState<string | null>(null);
 
-  // Derive width/height (mm) from the chosen longest side, preserving aspect.
+  // Derive height from width using aspect ratio (width / height).
   const dims = useMemo(() => {
-    const longSide = clamp(longestMm);
-    if (aspect >= 1) return { width_mm: longSide, height_mm: clamp(longSide / aspect) };
-    return { width_mm: clamp(longSide * aspect), height_mm: longSide };
+    if (isCanvasStyle) {
+      return { width_mm: clamp(widthMm), height_mm: clamp(heightMm) };
+    }
+    const w = clamp(widthMm);
+    const h = clamp(Math.round(w / aspect));
+    return { width_mm: w, height_mm: h };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [longestMm, aspect, config.min_size_mm, config.max_size_mm]);
+  }, [widthMm, heightMm, aspect, config.min_size_mm, config.max_size_mm, isCanvasStyle]);
 
   const regen = useCallback(
     async (next: {
@@ -386,6 +632,11 @@ function DesignStep({
     if (!estimate) return;
     setBusy(true);
     try {
+      // For canvas styles, process the image first if not yet done
+      if (isCanvasStyle && !canvasProcessed) {
+        const r = await processCanvasDesign();
+        if (!r) { setBusy(false); return; }
+      }
       const proofInfo = config.require_proof && proofChoice === "manual"
         ? { proof_requested: true, customer_email: customerEmail, proof_note: proofNote }
         : { proof_requested: false };
@@ -436,24 +687,54 @@ function DesignStep({
   return (
     <div className="psw-grid">
       <div className="psw-card psw-preview-col">
-        <div className={`psw-preview ${busy ? "is-busy" : ""}`}>
-          {result && (
-            <CutPreview
-              key={result.border_url}
-              borderUrl={result.border_url}
-              points={result.cutline_points}
-              committedTighten={tighten}
-              liveTighten={tightenLocal}
-              widthMm={result.width_mm}
-              heightMm={result.height_mm}
-              cutStyle={cutStyle}
-              liveCornerRadius={cornerRadius}
-            />
-          )}
-          {busy && <div className="psw-spin" />}
-        </div>
+        {isCanvasStyle ? (
+          <>
+            <div className="psw-canvas-wrap">
+              <p className="psw-hint">Drag the image to position. Blue line = cut line, grey = bleed.</p>
+              <canvas
+                ref={canvasElRef}
+                style={{ width: cDW, height: cDH, cursor: canvasDragging ? "grabbing" : "grab", display: "block", margin: "0 auto", borderRadius: 8 }}
+                onMouseDown={onCanvasMouseDown}
+                onMouseMove={onCanvasMouseMove}
+                onMouseUp={onCanvasMouseUp}
+                onMouseLeave={onCanvasMouseUp}
+                onTouchStart={onCanvasTouchStart}
+                onTouchMove={onCanvasTouchMove}
+                onTouchEnd={() => setCanvasDragging(false)}
+              />
+            </div>
+            <div className="psw-field">
+              <div className="psw-btn-row" style={{ justifyContent: "center" }}>
+                <button className="psw-btn-small" onClick={canvasScaleUp}>+ Scale Up</button>
+                <button className="psw-btn-small" onClick={canvasScaleDown}>− Scale Down</button>
+                <button className="psw-btn-small" onClick={canvasCenterH}>Center H</button>
+                <button className="psw-btn-small" onClick={canvasCenterV}>Center V</button>
+                <button className="psw-btn-small psw-btn-active" onClick={canvasCenterBoth}>Center Both</button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className={`psw-preview ${busy ? "is-busy" : ""}`}>
+              {result && (
+                <CutPreview
+                  key={result.border_url}
+                  borderUrl={result.border_url}
+                  points={result.cutline_points}
+                  committedTighten={tighten}
+                  liveTighten={tightenLocal}
+                  widthMm={result.width_mm}
+                  heightMm={result.height_mm}
+                  cutStyle={cutStyle}
+                  liveCornerRadius={cornerRadius}
+                />
+              )}
+              {busy && <div className="psw-spin" />}
+            </div>
+          </>
+        )}
 
-        {config.show_filters !== false && (
+        {config.show_filters !== false && !isCanvasStyle && (
         <div className="psw-field">
           <label className="psw-label">Filter</label>
           <div className="psw-filmstrip">
@@ -475,7 +756,7 @@ function DesignStep({
         </div>
         )}
 
-        {config.show_ai_styles && (
+        {config.show_ai_styles && !isCanvasStyle && (
         <div className="psw-field">
           <label className="psw-label">AI Style</label>
           <div className="psw-ai-styles">
@@ -539,7 +820,7 @@ function DesignStep({
 
         <div className="psw-field">
           <div className="psw-label-row">
-            <label className="psw-label">Size (longest side)</label>
+            <label className="psw-label">Size (width)</label>
             <span className="psw-dim">{fmtPair(dims.width_mm, dims.height_mm, unit)}</span>
           </div>
           {presets.length > 0 && (
@@ -551,7 +832,9 @@ function DesignStep({
                   className={`psw-chip ${sizeSel === i ? "is-active" : ""}`}
                   onClick={() => {
                     setSizeSel(i);
-                    setLongestMm(Math.round(clamp(mm)));
+                    const val = Math.round(clamp(mm) / 5) * 5;
+                    setWidthMm(val);
+                    if (isCanvasStyle) setHeightMm(val);
                   }}
                 >
                   {fmtLen(mm, unit)}
@@ -568,18 +851,49 @@ function DesignStep({
               )}
             </div>
           )}
-          {sizeSel === -1 && (
+          {sizeSel === -1 && !isCanvasStyle && (
             <input
               type="range"
               min={config.min_size_mm}
               max={config.max_size_mm}
               step={5}
-              value={longestMm}
-              onChange={(e) => setLongestMm(Math.round(parseInt(e.target.value, 10) / 5) * 5)}
+              value={widthMm}
+              onChange={(e) => setWidthMm(Math.round(parseInt(e.target.value, 10) / 5) * 5)}
             />
+          )}
+          {sizeSel === -1 && isCanvasStyle && (
+            <div className="psw-dim-row" style={{ marginTop: 6 }}>
+              <div className="psw-input-group">
+                <span className="psw-input-label">Width ({unit})</span>
+                <input type="number" className="psw-num-input"
+                  value={unit === "cm" ? Math.round(widthMm / 10 * 10) / 10 : widthMm}
+                  min={unit === "cm" ? config.min_size_mm / 10 : config.min_size_mm}
+                  max={unit === "cm" ? config.max_size_mm / 10 : config.max_size_mm}
+                  step={unit === "cm" ? 0.5 : 5}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setWidthMm(clamp(unit === "cm" ? v * 10 : v));
+                  }}
+                />
+              </div>
+              <div className="psw-input-group">
+                <span className="psw-input-label">Height ({unit})</span>
+                <input type="number" className="psw-num-input"
+                  value={unit === "cm" ? Math.round(heightMm / 10 * 10) / 10 : heightMm}
+                  min={unit === "cm" ? config.min_size_mm / 10 : config.min_size_mm}
+                  max={unit === "cm" ? config.max_size_mm / 10 : config.max_size_mm}
+                  step={unit === "cm" ? 0.5 : 5}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setHeightMm(clamp(unit === "cm" ? v * 10 : v));
+                  }}
+                />
+              </div>
+            </div>
           )}
         </div>
 
+        {cutStyle !== "square" && cutStyle !== "circle" && (
         <div className="psw-field">
           <div className="psw-label-row">
             <label className="psw-label">Cut line</label>
@@ -607,8 +921,9 @@ function DesignStep({
             <span>Tighter</span>
           </div>
         </div>
+        )}
 
-        {config.show_hand_edit && result && (cutStyle === "die_cut" || cutStyle === "face" || cutStyle === "contour") && (
+        {config.show_hand_edit && result && (cutStyle === "bg_removal" || cutStyle === "die_cut" || cutStyle === "face" || cutStyle === "cut_around") && (
         <div className="psw-field">
           <button
             type="button"
@@ -621,7 +936,7 @@ function DesignStep({
         </div>
         )}
 
-        {cutStyle === "keep_bg" && (
+        {(cutStyle === "keep_bg" || cutStyle === "square") && !isCanvasStyle && (
           <div className="psw-field">
             <div className="psw-label-row">
               <label className="psw-label">Corner radius</label>
@@ -645,29 +960,79 @@ function DesignStep({
           </div>
         )}
 
+        {isCanvasStyle && canvasShape === "rectangle" && (
+          <div className="psw-field">
+            <div className="psw-label-row">
+              <label className="psw-label">Corner radius</label>
+              <span className="psw-dim">{canvasCornerRadius} mm</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={Math.min(widthMm, heightMm) / 2}
+              step={0.5}
+              value={canvasCornerRadius}
+              onChange={(e) => setCanvasCornerRadius(Number(e.target.value))}
+            />
+            <div className="psw-hint-row">
+              <span>Square</span>
+              <span>Round</span>
+            </div>
+          </div>
+        )}
+
+        {isCanvasStyle && (
+          <div className="psw-field">
+            <div className="psw-label-row">
+              <label className="psw-label">Bleed</label>
+              <span className="psw-dim">{canvasBleed} mm</span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={10}
+              step={0.5}
+              value={canvasBleed}
+              onChange={(e) => setCanvasBleed(Number(e.target.value))}
+            />
+          </div>
+        )}
+
         {config.vinyl_types.length > 0 && (
           <div className="psw-field">
             <label className="psw-label">Material</label>
-            <select value={vinyl ?? ""} onChange={(e) => setVinyl(e.target.value)}>
+            <div className="psw-option-btns">
               {config.vinyl_types.map((v) => (
-                <option key={v.key} value={v.key}>
+                <button
+                  key={v.key}
+                  type="button"
+                  className={`psw-option-btn${vinyl === v.key ? " psw-option-active" : ""}`}
+                  onClick={() => setVinyl(v.key)}
+                >
                   {v.label}
-                </option>
+                  {(v.surcharge ?? 0) > 0 && <span className="psw-surcharge">+{money(v.surcharge!)}</span>}
+                </button>
               ))}
-            </select>
+            </div>
           </div>
         )}
 
         {config.finishes.length > 0 && (
           <div className="psw-field">
-            <label className="psw-label">Finish</label>
-            <select value={finish ?? ""} onChange={(e) => setFinish(e.target.value)}>
+            <label className="psw-label">Extras</label>
+            <div className="psw-extras-list">
               {config.finishes.map((v) => (
-                <option key={v.key} value={v.key}>
-                  {v.label}
-                </option>
+                <label key={v.key} className={`psw-extra-item${finish === v.key ? " psw-extra-active" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={finish === v.key}
+                    onChange={() => setFinish(finish === v.key ? null : v.key)}
+                  />
+                  <span className="psw-extra-label">{v.label}</span>
+                  {(v.surcharge ?? 0) > 0 && <span className="psw-surcharge">+{money(v.surcharge!)}</span>}
+                </label>
               ))}
-            </select>
+            </div>
           </div>
         )}
 
@@ -1023,7 +1388,7 @@ function CutPreview({
 
     // Live corner-radius for keep_bg: regenerate the rounded rect from the
     // bounding box of the current polygon with the live radius fraction.
-    if (cutStyle === "keep_bg" && liveCornerRadius !== undefined && pts.length > 2) {
+    if ((cutStyle === "keep_bg" || cutStyle === "square") && liveCornerRadius !== undefined && pts.length > 2) {
       let minX = 1, minY = 1, maxX = 0, maxY = 0;
       for (const [px, py] of pts) {
         if (px < minX) minX = px;
@@ -1435,7 +1800,7 @@ html,body{margin:0;padding:0;overflow-x:hidden;width:100%}
 .psw-centered.is-error{color:#be123c}
 .psw-card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;max-width:560px;margin:0 auto}
 .psw-grid{display:grid;grid-template-columns:1fr;gap:16px;max-width:920px;margin:0 auto}
-@media(min-width:760px){.psw-grid{grid-template-columns:1fr 320px}}
+@media(min-width:760px){.psw-grid{grid-template-columns:1fr 380px}}
 @media(max-width:759px){.psw-root{padding:10px}.psw-card{max-width:100%;width:100%;border-radius:12px;padding:14px}.psw-grid{gap:10px}.psw-preview-col{overflow:hidden}}
 .psw-h1{font-size:20px;font-weight:700;margin:0 0 4px}
 .psw-sub{color:#64748b;font-size:14px;margin:0 0 16px}
@@ -1453,6 +1818,18 @@ html,body{margin:0;padding:0;overflow-x:hidden;width:100%}
 .psw-chip{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:7px 14px;font-size:13px;cursor:pointer;color:#334155}
 .psw-chip.is-active{background:#0f172a;color:#fff;border-color:#0f172a}
 .psw-chip:disabled{opacity:.5;cursor:default}
+.psw-option-btns{display:flex;flex-wrap:wrap;gap:8px}
+.psw-option-btn{border:1px solid #e2e8f0;background:#fff;border-radius:10px;padding:9px 16px;font-size:13px;font-weight:500;cursor:pointer;color:#334155;transition:border-color .15s,background .15s}
+.psw-option-btn:hover{border-color:#8b5cf6;background:#faf5ff}
+.psw-option-active{border-color:#8b5cf6;background:#f5f3ff;color:#6d28d9;font-weight:600}
+.psw-surcharge{font-size:11px;color:#6d28d9;margin-left:4px;font-weight:600}
+.psw-extras-list{display:flex;flex-direction:column;gap:8px}
+.psw-extra-item{display:flex;align-items:center;gap:10px;border:1px solid #e2e8f0;border-radius:10px;padding:10px 14px;cursor:pointer;transition:border-color .15s,background .15s}
+.psw-extra-item:hover{border-color:#8b5cf6;background:#faf5ff}
+.psw-extra-active{border-color:#8b5cf6;background:#f5f3ff}
+.psw-extra-item input[type=checkbox]{accent-color:#8b5cf6;width:16px;height:16px;margin:0}
+.psw-extra-label{flex:1;font-size:13px;font-weight:500;color:#334155}
+.psw-extra-active .psw-extra-label{color:#6d28d9;font-weight:600}
 .psw-btn-primary{margin-top:20px;width:100%;background:#0f172a;color:#fff;border:0;border-radius:12px;padding:13px;font-size:15px;font-weight:600;cursor:pointer}
 .psw-btn-primary:disabled{opacity:.45;cursor:default}
 .psw-err{color:#be123c;font-size:13px;margin-top:12px}
@@ -1579,4 +1956,26 @@ html,body{margin:0;padding:0;overflow-x:hidden;width:100%}
 .psw-proof-details{margin-top:10px;display:flex;flex-direction:column;gap:8px}
 .psw-proof-email,.psw-proof-note{border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:14px;width:100%;font-family:inherit}
 .psw-proof-email:focus,.psw-proof-note:focus{outline:none;border-color:#8b5cf6}
+.psw-canvas-wrap{margin:12px 0;display:flex;flex-direction:column;align-items:center}
+.psw-btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.psw-btn-small{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:500;cursor:pointer}
+.psw-btn-small:hover{background:#e2e8f0}
+.psw-btn-active{background:#6d28d9;color:#fff;border-color:#6d28d9}
+.psw-btn-active:hover{background:#5b21b6}
+.psw-btn-secondary{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:12px;padding:11px 16px;font-size:14px;font-weight:500;cursor:pointer;flex:1}
+.psw-btn-secondary:hover{background:#e2e8f0}
+.psw-fieldset{border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;margin:12px 0}
+.psw-legend{font-size:11px;text-transform:uppercase;letter-spacing:0.05em;color:#64748b;padding:0 6px;font-weight:600}
+.psw-dim-row{display:flex;gap:12px}
+.psw-input-group{flex:1;display:flex;flex-direction:column;gap:4px}
+.psw-input-label{font-size:12px;color:#64748b;font-weight:500}
+.psw-num-input{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font-size:15px;font-weight:500;color:#0f172a;background:#f8fafc;font-family:inherit;outline:none;transition:border-color 0.15s}
+.psw-num-input:focus{border-color:#8b5cf6;background:#fff}
+.psw-num-input[readonly]{background:#f1f5f9;color:#64748b}
+.psw-slider-row{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.psw-slider-label{font-size:12px;color:#64748b;font-weight:500}
+.psw-range{width:100%;accent-color:#8b5cf6}
+.psw-hint{font-size:12px;color:#94a3b8;margin:0 0 8px;text-align:center}
+.psw-error{color:#be123c;font-size:13px;margin-top:8px}
+@media(max-width:480px){.psw-dim-row{flex-direction:column;gap:8px}.psw-btn-row{justify-content:center}}
 `;

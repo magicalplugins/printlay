@@ -19,14 +19,15 @@ export interface ProductConfig {
   size_presets: { width_mm: number; height_mm: number }[];
   allow_custom_size: boolean;
   corner_radius: number;
-  vinyl_types: { key: string; label: string }[];
-  finishes: { key: string; label: string }[];
+  vinyl_types: { key: string; label: string; surcharge?: number }[];
+  finishes: { key: string; label: string; surcharge?: number }[];
   bleed_mm: number;
   safe_mm: number;
   currency: string;
   show_filters?: boolean;
   show_ai_styles?: boolean;
   show_hand_edit?: boolean;
+  extras_required?: boolean;
   require_proof?: boolean;
   proof_fee?: number;
   quantity_presets?: number[];
@@ -114,6 +115,38 @@ export class WidgetClient {
     form.append("cut_style", cutStyle);
     form.append("filter_id", filterId);
     return fetch("/api/v1/widget/process", {
+      method: "POST",
+      headers: this.headers(false),
+      body: form,
+    }).then((r) => this.handle<ProcessResult>(r));
+  }
+
+  processCanvas(
+    file: File,
+    opts: {
+      canvasWidthMm: number;
+      canvasHeightMm: number;
+      imgXMm: number;
+      imgYMm: number;
+      imgWidthMm: number;
+      imgHeightMm: number;
+      cornerRadiusMm: number;
+      bleedMm: number;
+      shape: "rectangle" | "circle";
+    }
+  ) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("canvas_width_mm", String(opts.canvasWidthMm));
+    form.append("canvas_height_mm", String(opts.canvasHeightMm));
+    form.append("img_x_mm", String(opts.imgXMm));
+    form.append("img_y_mm", String(opts.imgYMm));
+    form.append("img_width_mm", String(opts.imgWidthMm));
+    form.append("img_height_mm", String(opts.imgHeightMm));
+    form.append("corner_radius_mm", String(opts.cornerRadiusMm));
+    form.append("bleed_mm", String(opts.bleedMm));
+    form.append("shape", opts.shape);
+    return fetch("/api/v1/widget/process-canvas", {
       method: "POST",
       headers: this.headers(false),
       body: form,

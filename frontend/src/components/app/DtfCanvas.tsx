@@ -37,6 +37,7 @@ interface Props {
   selectedId: string | null;
   mirrorPreview?: boolean;
   zoom?: number;
+  gapMm?: number;
 }
 
 const SNAP_THRESHOLD_MM = 2;
@@ -56,6 +57,7 @@ export default function DtfCanvas({
   selectedId,
   mirrorPreview,
   zoom = 1,
+  gapMm = 3,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [dragState, setDragState] = useState<{
@@ -194,15 +196,15 @@ export default function DtfCanvas({
       for (const item of items) {
         if (item.id === id) continue;
         const overlap =
-          x < item.x_mm + item.w_mm &&
-          x + w > item.x_mm &&
-          y < item.y_mm + item.h_mm &&
-          y + h > item.y_mm;
+          x < item.x_mm + item.w_mm + gapMm &&
+          x + w + gapMm > item.x_mm &&
+          y < item.y_mm + item.h_mm + gapMm &&
+          y + h + gapMm > item.y_mm;
         if (overlap) return true;
       }
       return false;
     },
-    [items]
+    [items, gapMm]
   );
 
   // Push item to nearest non-overlapping position
@@ -330,14 +332,17 @@ export default function DtfCanvas({
 
   return (
     <div
-      className="relative rounded-xl border border-neutral-700 overflow-auto bg-neutral-900"
-      style={{ transform: mirrorPreview ? "scaleX(-1)" : undefined, maxHeight: "75vh" }}
+      className="relative w-full min-w-0 rounded-xl border border-neutral-700 overflow-visible bg-neutral-900 print-canvas-area"
+      style={{ transform: mirrorPreview ? "scaleX(-1)" : undefined }}
     >
       <svg
         ref={svgRef}
         viewBox={`${-RULER_SIZE} ${-RULER_SIZE} ${sheetWidthMm + RULER_SIZE} ${sheetHeightMm + RULER_SIZE}`}
         className="block select-none"
-        style={{ width: `${zoom * 100}%`, minWidth: "100%", height: "auto" }}
+        style={{
+          width: `${zoom * 100}%`,
+          height: "auto",
+        }}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
@@ -428,7 +433,7 @@ export default function DtfCanvas({
               stroke="#818cf8"
               strokeWidth={0.4}
               strokeDasharray="1.5 1.5"
-              className="pointer-events-none animate-pulse"
+              className="pointer-events-none"
               opacity={0.8}
             />
           ) : (
@@ -441,34 +446,11 @@ export default function DtfCanvas({
               stroke="#818cf8"
               strokeWidth={0.4}
               strokeDasharray="1.5 1.5"
-              className="pointer-events-none animate-pulse"
+              className="pointer-events-none"
               opacity={0.8}
             />
           )
         )}
-
-        {/* Snap intersection dots */}
-        {snapLines.length >= 2 && (() => {
-          const xLines = snapLines.filter(l => l.axis === "x");
-          const yLines = snapLines.filter(l => l.axis === "y");
-          const dots: React.ReactNode[] = [];
-          for (const xl of xLines) {
-            for (const yl of yLines) {
-              dots.push(
-                <circle
-                  key={`dot-${xl.pos}-${yl.pos}`}
-                  cx={xl.pos}
-                  cy={yl.pos}
-                  r={1.2}
-                  fill="#818cf8"
-                  className="pointer-events-none animate-ping"
-                  opacity={0.9}
-                />
-              );
-            }
-          }
-          return dots;
-        })()}
       </svg>
     </div>
   );

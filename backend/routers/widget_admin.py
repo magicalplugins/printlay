@@ -42,12 +42,11 @@ from backend.services import entitlements, merchant_keys, widget_origins
 
 router = APIRouter(prefix="/api/widget", tags=["widget-admin"])
 
-DEFAULT_CUT_STYLES = ["die_cut", "face", "square", "circle"]
+DEFAULT_CUT_STYLES = ["square", "circle", "cut_around", "bg_removal", "face"]
 
-# Cut styles are constrained by the chosen design experience: a cut-out product
-# only does contour/face cuts, a shaped (canvas) product only does geometric
-# artboard shapes (rectangle/oval are reached via the in-designer unlock).
-CUTOUT_CUT_STYLES = ["die_cut", "face", "keep_bg"]
+# All 5 styles are available for cutout products. Canvas (shaped designer)
+# products use square/circle only.
+CUTOUT_CUT_STYLES = ["square", "circle", "cut_around", "bg_removal", "face"]
 CANVAS_CUT_STYLES = ["square", "circle"]
 
 
@@ -223,6 +222,7 @@ class PricingProfileIn(BaseModel):
     quantity_breaks: list | None = None
     quantity_presets: list[int] | None = None
     allow_custom_quantity: bool = True
+    extras_required: bool = False
 
 
 class PricingProfileOut(PricingProfileIn):
@@ -247,6 +247,7 @@ def _profile_out(p: PricingProfile) -> PricingProfileOut:
         quantity_breaks=p.quantity_breaks,
         quantity_presets=getattr(p, "quantity_presets", None),
         allow_custom_quantity=getattr(p, "allow_custom_quantity", True),
+        extras_required=getattr(p, "extras_required", False),
         created_at=p.created_at,
     )
 
@@ -390,11 +391,14 @@ def _product_out(p: Product) -> ProductOut:
 
 
 def _clean_cut_styles(styles: list[str] | None, designer: str) -> list[str] | None:
-    """Keep only the cut styles valid for the chosen design experience."""
+    """Keep only the cut styles valid for the chosen design experience.
+    Migrates legacy keys (die_cut → bg_removal, keep_bg → square)."""
+    LEGACY_MAP = {"die_cut": "bg_removal", "keep_bg": "square"}
     allowed = _allowed_cut_styles(designer)
     if styles is None:
         return None
-    cleaned = [s for s in styles if s in allowed]
+    migrated = [LEGACY_MAP.get(s, s) for s in styles]
+    cleaned = list(dict.fromkeys(s for s in migrated if s in allowed))
     return cleaned or None
 
 

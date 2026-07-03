@@ -53,17 +53,23 @@ from backend.routers.sticker import (
 
 router = APIRouter(prefix="/api/v1/widget", tags=["widget"])
 
-DEFAULT_CUT_STYLES = ["die_cut", "face", "keep_bg", "square", "circle"]
+DEFAULT_CUT_STYLES = ["square", "circle", "cut_around", "bg_removal", "face", "die_cut", "keep_bg"]
 DEFAULT_QTY_PRESETS = [10, 30, 50, 100, 200, 300, 500, 750, 1000, 2500]
 
 # Widget cut-style → cutline_generator mode.
 _CUT_STYLE_TO_MODE = {
-    "die_cut": "contour",
-    "face": "face",
-    "keep_bg": "rectangle",  # cut-out: keep the uploaded image, rectangle cut line
     "square": "rectangle",
     "circle": "ellipse",
+    "cut_around": "contour",
+    "bg_removal": "contour",
+    "face": "face",
+    # Legacy aliases (backwards compat)
+    "die_cut": "contour",
+    "keep_bg": "rectangle",
 }
+
+# Styles that skip background removal (image kept as-is).
+_SKIP_BG_REMOVAL = {"square", "circle", "cut_around", "keep_bg"}
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -263,6 +269,7 @@ class ProductConfig(BaseModel):
     show_filters: bool = True
     show_ai_styles: bool = False
     show_hand_edit: bool = False
+    extras_required: bool = False
     require_proof: bool = False
     proof_fee: float = 0.0
     quantity_presets: list[int] = []
@@ -282,24 +289,45 @@ def _pricing_profile(db: Session, product: Product) -> PricingProfile | None:
 def _product_config(product: Product, profile: PricingProfile | None) -> ProductConfig:
     styles = product.enabled_cut_styles or DEFAULT_CUT_STYLES
 
-    # Only include materials/finishes that exist in the linked profile
+    # Include materials/finishes: use product selection if set, otherwise
+    # default to ALL from the pricing profile so they always appear.
+    # Attach surcharge amounts so the frontend can display "+£X".
+    vinyl_surcharges = (profile.vinyl_surcharges or {}) if profile else {}
+    finish_surcharges = (profile.finish_surcharges or {}) if profile else {}
+
     vinyl_types = product.vinyl_types or []
     finishes = product.finishes or []
     if profile:
-        valid_vinyl_keys = set((profile.vinyl_surcharges or {}).keys())
-        valid_finish_keys = set((profile.finish_surcharges or {}).keys())
-        if valid_vinyl_keys:
+        valid_vinyl_keys = set(vinyl_surcharges.keys())
+        valid_finish_keys = set(finish_surcharges.keys())
+        if vinyl_types:
             vinyl_types = [v for v in vinyl_types if v.get("key") in valid_vinyl_keys]
-        if valid_finish_keys:
+        elif valid_vinyl_keys:
+            vinyl_types = [{"key": k, "label": k} for k in sorted(valid_vinyl_keys)]
+        if finishes:
             finishes = [f for f in finishes if f.get("key") in valid_finish_keys]
+        elif valid_finish_keys:
+            finishes = [{"key": k, "label": k} for k in sorted(valid_finish_keys)]
+
+    # Attach surcharge to each option
+    for v in vinyl_types:
+        v["surcharge"] = vinyl_surcharges.get(v["key"], 0)
+    for f in finishes:
+        f["surcharge"] = finish_surcharges.get(f["key"], 0)
+
+    # Migrate legacy cut style keys to new ones
+    _LEGACY_STYLE_MAP = {"die_cut": "bg_removal", "keep_bg": "square"}
+    migrated = list(dict.fromkeys(
+        _LEGACY_STYLE_MAP.get(s, s) for s in styles if s in _CUT_STYLE_TO_MODE
+    ))
 
     return ProductConfig(
         id=str(product.id),
         name=product.name,
         mode="flexible",
         designer=getattr(product, "designer", "cutout") or "cutout",
-        enabled_cut_styles=[s for s in styles if s in DEFAULT_CUT_STYLES] or DEFAULT_CUT_STYLES,
-        min_size_mm=product.min_size_mm,
+        enabled_cut_styles=migrated or DEFAULT_CUT_STYLES[:5],
+        min_size_mm=max(10.0, product.min_size_mm),
         max_size_mm=product.max_size_mm,
         size_presets=getattr(product, "size_presets", None) or [],
         allow_custom_size=getattr(product, "allow_custom_size", True),
@@ -312,6 +340,7 @@ def _product_config(product: Product, profile: PricingProfile | None) -> Product
         show_filters=getattr(product, "show_filters", True),
         show_ai_styles=getattr(product, "show_ai_styles", False),
         show_hand_edit=getattr(product, "show_hand_edit", False),
+        extras_required=getattr(profile, "extras_required", False) if profile else False,
         require_proof=getattr(product, "require_proof", False),
         proof_fee=getattr(product, "proof_fee", 0.0),
         quantity_presets=(profile.quantity_presets if profile and profile.quantity_presets else DEFAULT_QTY_PRESETS),
@@ -481,8 +510,14 @@ def _process_response(prefix: str, result, session_token_sid: str) -> ProcessRes
 
 
 def _validate_cut_style(product: Product, cut_style: str) -> str:
-    allowed = product.enabled_cut_styles or DEFAULT_CUT_STYLES
-    if cut_style not in _CUT_STYLE_TO_MODE or cut_style not in allowed:
+    _LEGACY_STYLE_MAP = {"die_cut": "bg_removal", "keep_bg": "square"}
+    raw_allowed = product.enabled_cut_styles or DEFAULT_CUT_STYLES
+    # Accept both new and legacy keys
+    allowed_new = set(raw_allowed) | {_LEGACY_STYLE_MAP.get(s, s) for s in raw_allowed}
+    # Also map legacy incoming keys
+    _REVERSE_MAP = {"bg_removal": "die_cut", "square": "keep_bg"}
+    allowed_new |= {_REVERSE_MAP.get(s, s) for s in raw_allowed}
+    if cut_style not in _CUT_STYLE_TO_MODE or cut_style not in allowed_new:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"Cut style '{cut_style}' is not available for this product",
@@ -491,13 +526,13 @@ def _validate_cut_style(product: Product, cut_style: str) -> str:
 
 
 def _charge_bg_quota_if_needed(
-    db: Session, ctx: "WidgetSessionContext", raw: bytes, mode: str
+    db: Session, ctx: "WidgetSessionContext", raw: bytes, mode: str, cut_style: str
 ) -> None:
     """Count an AI background removal against the merchant's monthly quota when
-    the chosen mode actually removes the background. The geometric "rectangle"
-    (Keep-background) mode keeps the upload as-is, and transparent/solid-colour
-    images don't need the paid AI model, so none of those are charged."""
-    if mode == "rectangle":
+    the chosen mode actually removes the background. Styles in _SKIP_BG_REMOVAL
+    keep the upload as-is, and transparent/solid-colour images don't need the
+    paid AI model, so none of those are charged."""
+    if cut_style in _SKIP_BG_REMOVAL:
         return
     from backend.services.bg_removal import detect_background
 
@@ -544,23 +579,26 @@ def process(
     raw = normalise_orientation(raw)
 
     # Count AI background removals against the merchant's monthly quota (they
-    # pay for the widget). Keep-background ("rectangle") keeps the upload as-is.
-    _charge_bg_quota_if_needed(db, ctx, raw, mode)
+    # pay for the widget). Styles in _SKIP_BG_REMOVAL keep the upload as-is.
+    _charge_bg_quota_if_needed(db, ctx, raw, mode, cut_style)
 
     prefix = _prefix(ctx.merchant_id, ctx.session.id)
     storage.put_bytes(f"{prefix}/source.png", raw, file.content_type or "image/png")
+
+    force_skip_bg = cut_style in _SKIP_BG_REMOVAL
 
     with _heavy_job_slot("widget-process"):
         try:
             result = do_process(
                 image_bytes=raw,
-                removal_method=None,  # process_sticker auto-detects + picks method
+                removal_method=None,
                 border_width_mm=2.0,
                 bleed_mm=ctx.product.bleed_mm,
                 cutline_mode=mode,
                 cutline_precision="medium",
                 filter_id=filter_id,
                 corner_radius_frac=corner_radius if mode == "rectangle" else None,
+                skip_bg_removal=force_skip_bg,
             )
         except FaceNotFoundError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
@@ -572,6 +610,174 @@ def process(
     db.commit()
 
     return _process_response(prefix, result, ctx.session.token)
+
+
+# --------------------------------------------------------------------------- #
+# 3b) Process Canvas — Square/Circle with user-positioned image
+# --------------------------------------------------------------------------- #
+
+
+@router.post("/process-canvas", response_model=ProcessResponse)
+def process_canvas(
+    file: UploadFile = File(...),
+    canvas_width_mm: float = Form(100),
+    canvas_height_mm: float = Form(100),
+    img_x_mm: float = Form(0),
+    img_y_mm: float = Form(0),
+    img_width_mm: float = Form(0),
+    img_height_mm: float = Form(0),
+    corner_radius_mm: float = Form(3.0),
+    bleed_mm: float = Form(3.0),
+    shape: str = Form("rectangle"),
+    ctx: WidgetSessionContext = Depends(get_widget_session),
+    db: Session = Depends(get_db),
+):
+    """Process a sticker with user-positioned image on a canvas.
+    Used for Square and Circle cut styles where the customer drags/resizes."""
+    import io
+    import math
+
+    from PIL import Image
+
+    raw = file.file.read()
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "File too large (max 25 MB)")
+
+    from backend.services.bg_removal import normalise_orientation
+    raw = normalise_orientation(raw)
+
+    prefix = _prefix(ctx.merchant_id, ctx.session.id)
+    storage.put_bytes(f"{prefix}/source.png", raw, file.content_type or "image/png")
+
+    dpi = 300
+    mm_to_px = dpi / 25.4
+
+    canvas_w_px = max(1, int(round(canvas_width_mm * mm_to_px)))
+    canvas_h_px = max(1, int(round(canvas_height_mm * mm_to_px)))
+    bleed_px = int(round(bleed_mm * mm_to_px))
+
+    src_img = Image.open(io.BytesIO(raw)).convert("RGBA")
+
+    if img_width_mm and img_height_mm:
+        img_w_px = max(1, int(round(img_width_mm * mm_to_px)))
+        img_h_px = max(1, int(round(img_height_mm * mm_to_px)))
+    else:
+        img_w_px = canvas_w_px
+        img_h_px = canvas_h_px
+
+    resized = src_img.resize((img_w_px, img_h_px), Image.LANCZOS)
+
+    img_x_px = int(round(img_x_mm * mm_to_px))
+    img_y_px = int(round(img_y_mm * mm_to_px))
+
+    total_w = canvas_w_px + 2 * bleed_px
+    total_h = canvas_h_px + 2 * bleed_px
+
+    pad = max(img_w_px, img_h_px, total_w, total_h)
+    mid_w = total_w + 2 * pad
+    mid_h = total_h + 2 * pad
+    mid = Image.new("RGBA", (mid_w, mid_h), (255, 255, 255, 255))
+
+    img_dst_x = pad + bleed_px + img_x_px
+    img_dst_y = pad + bleed_px + img_y_px
+    mid.paste(resized, (img_dst_x, img_dst_y), mask=resized.split()[3])
+
+    crop_x = pad
+    crop_y = pad
+    canvas = mid.crop((crop_x, crop_y, crop_x + total_w, crop_y + total_h)).copy()
+
+    from backend.services.cutline_generator import _rounded_rect_points
+
+    cut_x1 = bleed_px
+    cut_y1 = bleed_px
+    cut_x2 = bleed_px + canvas_w_px
+    cut_y2 = bleed_px + canvas_h_px
+
+    if shape == "circle":
+        cx = (cut_x1 + cut_x2) / 2
+        cy = (cut_y1 + cut_y2) / 2
+        rx = (cut_x2 - cut_x1) / 2
+        ry = (cut_y2 - cut_y1) / 2
+        segments = 48
+        points_px = []
+        for i in range(segments):
+            angle = 2 * math.pi * i / segments
+            px = cx + rx * math.cos(angle)
+            py = cy + ry * math.sin(angle)
+            points_px.append((px, py))
+    else:
+        corner_px = int(round(corner_radius_mm * mm_to_px))
+        points_px = _rounded_rect_points(cut_x1, cut_y1, cut_x2, cut_y2, corner_px)
+
+    px_to_pt = 72.0 / dpi
+    points_pt = [(x * px_to_pt, y * px_to_pt) for x, y in points_px]
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="PNG")
+    canvas_bytes = buf.getvalue()
+
+    width_pt = total_w * px_to_pt
+    height_pt = total_h * px_to_pt
+    width_mm = width_pt * 25.4 / 72.0
+    height_mm = height_pt * 25.4 / 72.0
+
+    from backend.services.sticker_processor import _render_preview as _rp
+    from backend.services.cutline_generator import CutlineResult
+
+    cutline_result = CutlineResult(
+        points_px=points_px,
+        points_pt=points_pt,
+        width_px=total_w,
+        height_px=total_h,
+        width_pt=width_pt,
+        height_pt=height_pt,
+        border_image=canvas_bytes,
+    )
+    preview_png = _rp(cutline_result)
+
+    storage.put_bytes(f"{prefix}/preview.png", preview_png, "image/png")
+    storage.put_bytes(f"{prefix}/border.png", canvas_bytes, "image/png")
+    storage.put_bytes(f"{prefix}/cutout.png", canvas_bytes, "image/png")
+
+    import json
+    cutline_payload = {
+        "points_px": [list(p) for p in points_px],
+        "points_pt": [list(p) for p in points_pt],
+        "width_px": total_w,
+        "height_px": total_h,
+        "width_pt": width_pt,
+        "height_pt": height_pt,
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+        "work_dpi": dpi,
+        "mode": "rectangle" if shape != "circle" else "ellipse",
+    }
+    storage.put_bytes(
+        f"{prefix}/cutline.json",
+        json.dumps(cutline_payload).encode("utf-8"),
+        "application/json",
+    )
+
+    cut_style = "square" if shape != "circle" else "circle"
+    ctx.session.params = {"cut_style": cut_style, "filter_id": "none"}
+    db.commit()
+
+    preview_url = storage.presigned_get(f"{prefix}/preview.png", expires_in=3600)
+    border_url = storage.presigned_get(f"{prefix}/border.png", expires_in=3600)
+
+    return ProcessResponse(
+        preview_url=preview_url,
+        border_url=border_url,
+        cutout_url=border_url,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        bg_type="kept",
+        removal_method=None,
+        session_id=ctx.session.token,
+        cutline_points=[[x / total_w, y / total_h] for x, y in points_px],
+        img_w_px=total_w,
+        img_h_px=total_h,
+    )
 
 
 # --------------------------------------------------------------------------- #

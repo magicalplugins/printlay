@@ -160,17 +160,10 @@ export function packSheet(sheetId: string) {
   return api<PackResult>(`/api/sheets/${sheetId}/pack`, { method: "POST" });
 }
 
-export async function exportSheetPdf(sheetId: string): Promise<Blob> {
-  const { getSupabase } = await import("../auth/supabase");
-  const supabase = await getSupabase().catch(() => null);
-  const headers: Record<string, string> = { Accept: "application/pdf" };
-  if (supabase) {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.access_token) headers["Authorization"] = `Bearer ${session.access_token}`;
-  }
-  const res = await fetch(`/api/sheets/${sheetId}/export`, { method: "POST", headers });
-  if (!res.ok) throw new Error(`Export failed: ${res.status}`);
-  return res.blob();
+export async function exportSheetPdf(sheetId: string): Promise<{ id: string; name: string; file_size: number }> {
+  return api<{ id: string; name: string; file_size: number }>(`/api/sheets/${sheetId}/export`, {
+    method: "POST",
+  });
 }
 
 export async function exportSheetSvg(sheetId: string): Promise<Blob> {

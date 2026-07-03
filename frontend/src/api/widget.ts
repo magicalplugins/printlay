@@ -1,23 +1,27 @@
 import { api } from "./client";
 
-// Cut styles available to a sticker product.
+// Cut styles available to a sticker product (ordered for display).
 export const CUT_STYLES = [
-  { key: "die_cut", label: "Die-cut (around subject)" },
-  { key: "face", label: "Face cut" },
-  { key: "keep_bg", label: "Keep background (cut around image)" },
-  { key: "square", label: "Square / rounded" },
-  { key: "circle", label: "Circle / oval" },
+  { key: "square", label: "Square" },
+  { key: "circle", label: "Circle" },
+  { key: "cut_around", label: "Cut Around Image" },
+  { key: "bg_removal", label: "Background Removal" },
+  { key: "face", label: "Face Sticker" },
 ] as const;
 
 export type CutStyle = (typeof CUT_STYLES)[number]["key"];
 
-// Which cut styles each design experience allows. Cut-out products do contour
-// and face cuts, plus "keep background" (a rectangle cut around the uploaded
-// image, no background removal); shaped (canvas) products do geometric artboard
-// shapes (rectangle/oval are reached via the in-designer unlock toggle).
+// All 5 styles are available for cutout products. Canvas (shaped designer)
+// products use square/circle only.
 export const CUT_STYLES_BY_DESIGNER: Record<"cutout" | "canvas", CutStyle[]> = {
-  cutout: ["die_cut", "face", "keep_bg"],
+  cutout: ["square", "circle", "cut_around", "bg_removal", "face"],
   canvas: ["square", "circle"],
+};
+
+// Legacy key mapping for backwards compatibility with existing products.
+export const LEGACY_STYLE_MAP: Record<string, CutStyle> = {
+  die_cut: "bg_removal",
+  keep_bg: "square",
 };
 
 // ---- API keys -------------------------------------------------------------
@@ -79,6 +83,7 @@ export interface PricingProfile {
   quantity_breaks: QuantityBreak[] | null;
   quantity_presets: number[] | null;
   allow_custom_quantity: boolean;
+  extras_required: boolean;
   created_at: string;
 }
 export type PricingProfileInput = Omit<PricingProfile, "id" | "created_at">;

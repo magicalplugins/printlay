@@ -2,7 +2,9 @@ import { api } from "./client";
 
 export type Output = {
   id: string;
-  job_id: string;
+  job_id: string | null;
+  sheet_id: string | null;
+  source_type: "job" | "sheet" | "dtf_sheet";
   name: string;
   file_size: number;
   slots_filled: number;

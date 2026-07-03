@@ -2,13 +2,267 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   Theme System — CSS Variables
+   Three modes: dark (default), light, liquid (glassmorphism)
+   ========================================================================== */
+
 @layer base {
   html,
   body,
   #root {
     height: 100%;
   }
+
+  /* Dark (default) */
+  :root,
+  .dark {
+    --th-bg: #0a0a0a;
+    --th-surface: #171717;
+    --th-surface-raised: #1f1f1f;
+    --th-text: #fafafa;
+    --th-text-secondary: #a3a3a3;
+    --th-muted: #737373;
+    --th-border: #262626;
+    --th-border-hover: #404040;
+    --th-active: #292524;
+    --th-hover: #1c1917;
+    --th-nav-active-bg: #262626;
+    --th-nav-text: #a3a3a3;
+    --th-nav-active-text: #ffffff;
+    --th-header-bg: rgba(10, 10, 10, 0.8);
+    --th-header-border: #1a1a1a;
+    --th-footer-border: #1a1a1a;
+    --th-input-bg: #171717;
+    --th-input-border: #262626;
+    --th-card-bg: #171717;
+    --th-card-border: #262626;
+  }
+
+  /* Light */
+  .light {
+    --th-bg: #ffffff;
+    --th-surface: #f8fafc;
+    --th-surface-raised: #ffffff;
+    --th-text: #0f172a;
+    --th-text-secondary: #475569;
+    --th-muted: #64748b;
+    --th-border: #e2e8f0;
+    --th-border-hover: #cbd5e1;
+    --th-active: #f1f5f9;
+    --th-hover: #f8fafc;
+    --th-nav-active-bg: #f1f5f9;
+    --th-nav-text: #475569;
+    --th-nav-active-text: #0f172a;
+    --th-header-bg: rgba(255, 255, 255, 0.85);
+    --th-header-border: #e2e8f0;
+    --th-footer-border: #e2e8f0;
+    --th-input-bg: #ffffff;
+    --th-input-border: #e2e8f0;
+    --th-card-bg: #ffffff;
+    --th-card-border: #e2e8f0;
+  }
+
+  /* Liquid (glassmorphism) */
+  .liquid {
+    --th-bg: hsl(0 0% 8%);
+    --th-surface: hsla(0, 0%, 100%, 0.06);
+    --th-surface-raised: hsla(0, 0%, 100%, 0.1);
+    --th-text: hsl(0 0% 97%);
+    --th-text-secondary: hsl(0 0% 75%);
+    --th-muted: hsl(0 0% 55%);
+    --th-border: hsla(0, 0%, 100%, 0.1);
+    --th-border-hover: hsla(0, 0%, 100%, 0.18);
+    --th-active: hsla(0, 0%, 100%, 0.1);
+    --th-hover: hsla(0, 0%, 100%, 0.06);
+    --th-nav-active-bg: hsla(0, 0%, 100%, 0.1);
+    --th-nav-text: hsl(0 0% 70%);
+    --th-nav-active-text: hsl(0 0% 97%);
+    --th-header-bg: hsla(0, 0%, 8%, 0.6);
+    --th-header-border: hsla(0, 0%, 100%, 0.08);
+    --th-footer-border: hsla(0, 0%, 100%, 0.08);
+    --th-input-bg: hsla(0, 0%, 100%, 0.08);
+    --th-input-border: hsla(0, 0%, 100%, 0.12);
+    --th-card-bg: hsla(0, 0%, 100%, 0.06);
+    --th-card-border: hsla(0, 0%, 100%, 0.1);
+    --liquid-gradient-from: var(--scheme-from, hsl(220, 35%, 20%));
+    --liquid-gradient-via: var(--scheme-via, hsl(220, 25%, 12%));
+    --liquid-gradient-to: var(--scheme-to, hsl(220, 20%, 6%));
+  }
 }
+
+/* Liquid colour scheme gradients */
+.scheme-emerald { --scheme-from: hsl(160,40%,22%); --scheme-via: hsl(160,30%,13%); --scheme-to: hsl(160,20%,7%); }
+.scheme-blue    { --scheme-from: hsl(220,45%,25%); --scheme-via: hsl(220,35%,14%); --scheme-to: hsl(220,25%,7%); }
+.scheme-purple  { --scheme-from: hsl(270,40%,24%); --scheme-via: hsl(270,30%,14%); --scheme-to: hsl(270,20%,7%); }
+.scheme-rose    { --scheme-from: hsl(340,40%,22%); --scheme-via: hsl(340,30%,13%); --scheme-to: hsl(340,20%,7%); }
+.scheme-amber   { --scheme-from: hsl(35,45%,22%);  --scheme-via: hsl(35,30%,13%);  --scheme-to: hsl(35,20%,7%); }
+.scheme-slate   { --scheme-from: hsl(220,15%,22%); --scheme-via: hsl(220,12%,13%); --scheme-to: hsl(220,8%,7%); }
+
+/* Liquid glassmorphism body gradient */
+.liquid body {
+  background: linear-gradient(145deg, var(--liquid-gradient-from), var(--liquid-gradient-via) 50%, var(--liquid-gradient-to));
+  background-attachment: fixed;
+}
+
+/* Liquid glassmorphism effects on structural elements */
+.liquid header {
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  transform: translateZ(0);
+}
+
+/* Utility classes mapping to theme variables */
+@layer utilities {
+  .bg-th-bg { background-color: var(--th-bg); }
+  .bg-th-surface { background-color: var(--th-surface); }
+  .bg-th-surface-raised { background-color: var(--th-surface-raised); }
+  .bg-th-active { background-color: var(--th-active); }
+  .bg-th-hover { background-color: var(--th-hover); }
+  .bg-th-header { background-color: var(--th-header-bg); }
+  .bg-th-card { background-color: var(--th-card-bg); }
+  .bg-th-input { background-color: var(--th-input-bg); }
+  .text-th-text { color: var(--th-text); }
+  .text-th-secondary { color: var(--th-text-secondary); }
+  .text-th-muted { color: var(--th-muted); }
+  .text-th-nav { color: var(--th-nav-text); }
+  .text-th-nav-active { color: var(--th-nav-active-text); }
+  .border-th-border { border-color: var(--th-border); }
+  .border-th-border-hover { border-color: var(--th-border-hover); }
+  .border-th-header { border-color: var(--th-header-border); }
+  .border-th-footer { border-color: var(--th-footer-border); }
+  .border-th-card { border-color: var(--th-card-border); }
+  .border-th-input { border-color: var(--th-input-border); }
+}
+
+/* App-wide base body background */
+body, #root {
+  background-color: var(--th-bg);
+  color: var(--th-text);
+  transition: background-color 0.2s, color 0.2s;
+}
+/* In liquid mode, #root must be transparent so body gradient shows */
+.liquid #root {
+  background-color: transparent;
+}
+
+/* ==========================================================================
+   Light/Liquid mode overrides for hardcoded Tailwind dark classes.
+   These remap common bg/text/border patterns so existing pages look correct
+   without needing per-file edits. Canvas/print areas are excluded.
+   ========================================================================== */
+
+/* Background overrides */
+.light .bg-neutral-950,
+.light .bg-neutral-950\/80 { background-color: #ffffff !important; }
+.light .bg-neutral-900,
+.light .bg-neutral-900\/50,
+.light .bg-neutral-900\/60 { background-color: #f8fafc !important; }
+.light .bg-neutral-800 { background-color: #f1f5f9 !important; }
+.light .bg-neutral-700 { background-color: #e2e8f0 !important; }
+.light .bg-black\/70 { background-color: rgba(0,0,0,0.3) !important; }
+
+/* Text overrides */
+.light .text-white { color: #0f172a !important; }
+.light .text-neutral-100,
+.light .text-neutral-200 { color: #1e293b !important; }
+.light .text-neutral-300 { color: #334155 !important; }
+.light .text-neutral-400 { color: #475569 !important; }
+.light .text-neutral-500 { color: #64748b !important; }
+.light .text-neutral-600 { color: #64748b !important; }
+
+/* Border overrides */
+.light .border-neutral-900,
+.light .border-neutral-800 { border-color: #e2e8f0 !important; }
+.light .border-neutral-700 { border-color: #cbd5e1 !important; }
+.light .border-neutral-600 { border-color: #cbd5e1 !important; }
+
+/* Input overrides */
+.light input, .light textarea, .light select {
+  color: #0f172a;
+}
+.light input::placeholder, .light textarea::placeholder {
+  color: #94a3b8;
+}
+
+/* Hover state text */
+.light .hover\:text-white:hover { color: #0f172a !important; }
+.light .hover\:bg-neutral-900:hover { background-color: #f1f5f9 !important; }
+.light .hover\:border-neutral-600:hover { border-color: #94a3b8 !important; }
+
+/* Theme dropdown must stay dark in all modes */
+.theme-dropdown .text-white,
+.light .theme-dropdown .text-white { color: #ffffff !important; }
+.theme-dropdown .text-neutral-300,
+.light .theme-dropdown .text-neutral-300 { color: #d1d5db !important; }
+.theme-dropdown .text-neutral-400,
+.light .theme-dropdown .text-neutral-400 { color: #9ca3af !important; }
+.light .theme-dropdown .hover\:text-white:hover { color: #ffffff !important; }
+.light .theme-dropdown .bg-white\/10 { background-color: rgba(255,255,255,0.1) !important; }
+.light .theme-dropdown .hover\:bg-white\/5:hover { background-color: rgba(255,255,255,0.05) !important; }
+.light .theme-dropdown .border-white\/10 { border-color: rgba(255,255,255,0.1) !important; }
+
+/* Download/action buttons stay visible */
+.light .bg-violet-600,
+.light .bg-violet-500,
+.light .bg-rose-600 { color: #ffffff !important; }
+
+/* Exclude print canvas areas from all light overrides */
+.light .print-canvas-area,
+.light .print-canvas-area * {
+  color: inherit;
+  background-color: inherit;
+  border-color: inherit;
+}
+.light .print-canvas-area .bg-neutral-950 { background-color: #0a0a0a !important; }
+.light .print-canvas-area .bg-neutral-900 { background-color: #171717 !important; }
+.light .print-canvas-area .text-white { color: #fafafa !important; }
+.light .print-canvas-area .text-neutral-400 { color: #a3a3a3 !important; }
+.light .print-canvas-area .text-neutral-500 { color: #737373 !important; }
+.light .print-canvas-area .border-neutral-800 { border-color: #262626 !important; }
+.light .print-canvas-area .border-neutral-700 { border-color: #404040 !important; }
+
+/* Print canvas areas must always stay dark regardless of theme */
+.print-canvas-area,
+[data-print-canvas] {
+  --th-bg: #0a0a0a;
+  --th-surface: #171717;
+  --th-text: #fafafa;
+  --th-border: #262626;
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Liquid mode: make hardcoded backgrounds semi-transparent so gradient shows
+   ========================================================================== */
+.liquid .bg-neutral-950:not(.print-canvas-area):not(.print-canvas-area *),
+.liquid .bg-neutral-950\/80:not(.print-canvas-area):not(.print-canvas-area *) {
+  background-color: hsla(0, 0%, 5%, 0.4) !important;
+}
+.liquid .bg-neutral-900:not(.print-canvas-area):not(.print-canvas-area *),
+.liquid .bg-neutral-900\/50:not(.print-canvas-area):not(.print-canvas-area *),
+.liquid .bg-neutral-900\/60:not(.print-canvas-area):not(.print-canvas-area *) {
+  background-color: hsla(0, 0%, 8%, 0.45) !important;
+}
+.liquid .bg-neutral-800:not(.print-canvas-area):not(.print-canvas-area *) {
+  background-color: hsla(0, 0%, 12%, 0.5) !important;
+}
+.liquid .bg-neutral-700:not(.print-canvas-area):not(.print-canvas-area *) {
+  background-color: hsla(0, 0%, 18%, 0.5) !important;
+}
+
+/* Liquid border softening */
+.liquid .border-neutral-900:not(.print-canvas-area):not(.print-canvas-area *),
+.liquid .border-neutral-800:not(.print-canvas-area):not(.print-canvas-area *) {
+  border-color: hsla(0, 0%, 100%, 0.08) !important;
+}
+.liquid .border-neutral-700:not(.print-canvas-area):not(.print-canvas-area *) {
+  border-color: hsla(0, 0%, 100%, 0.12) !important;
+}
+
+/* Liquid: exclude print canvas areas */
+.liquid .print-canvas-area .bg-neutral-950 { background-color: #0a0a0a !important; }
+.liquid .print-canvas-area .bg-neutral-900 { background-color: #171717 !important; }
 
 /*
  * Article typography for rendered Markdown (marketing content engine).
@@ -124,4 +378,31 @@
 .article-content h2 + p,
 .article-content h3 + p {
   margin-top: 0.65rem;
+}
+
+/* Force scrollbars always visible (Windows users without trackpad) */
+.scrollbar-always {
+  overflow: auto;
+}
+.scrollbar-always::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scrollbar-always::-webkit-scrollbar-track {
+  background: rgb(23 23 23);
+  border-radius: 5px;
+}
+.scrollbar-always::-webkit-scrollbar-thumb {
+  background: rgb(64 64 64);
+  border-radius: 5px;
+  border: 2px solid rgb(23 23 23);
+}
+.scrollbar-always::-webkit-scrollbar-thumb:hover {
+  background: rgb(100 100 100);
+}
+@supports not selector(::-webkit-scrollbar) {
+  .scrollbar-always {
+    scrollbar-width: auto;
+    scrollbar-color: rgb(64 64 64) rgb(23 23 23);
+  }
 }

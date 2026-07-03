@@ -217,7 +217,7 @@ def process_sticker(
     needs_ai = False
     removal_method: RemovalMethod | None = None
 
-    if cutline_mode == "rectangle" or method == "none":
+    if cutline_mode in ("rectangle", "contour_no_bg") or method == "none":
         removal_method = None
     else:
         bg_type = detect_background(raw)
@@ -256,7 +256,7 @@ def process_sticker(
                 removal_method=removal_method,
                 border_width_mm=border_width_mm,
                 bleed_mm=bleed_mm,
-                cutline_mode=cutline_mode if cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour",
+                cutline_mode=cutline_mode if cutline_mode in ("contour", "contour_no_bg", "rectangle", "face", "circle", "ellipse") else "contour",
                 cutline_precision=cutline_precision if cutline_precision in ("tight", "medium") else "medium",
                 filter_id=filter_id,
                 beautify_smooth=max(0.0, min(1.0, beautify_smooth)),
@@ -546,7 +546,7 @@ def regenerate_sticker(
     except Exception:
         work_dpi = 300.0
 
-    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour"
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "contour_no_bg", "rectangle", "face", "circle", "ellipse") else "contour"
     precision = body.cutline_precision if body.cutline_precision in ("tight", "medium") else "medium"
 
     from backend.services.cutline_generator import FaceNotFoundError
@@ -754,7 +754,7 @@ def ai_style_sticker(
     # Replace the session cutout so later edits build on the stylized art.
     storage.put_bytes(f"{prefix}/cutout.png", new_cutout, "image/png")
 
-    mode = body.cutline_mode if body.cutline_mode in ("contour", "rectangle", "face", "circle", "ellipse") else "contour"
+    mode = body.cutline_mode if body.cutline_mode in ("contour", "contour_no_bg", "rectangle", "face", "circle", "ellipse") else "contour"
 
     from backend.services.cutline_generator import FaceNotFoundError
     from backend.services.sticker_processor import regenerate_cutline

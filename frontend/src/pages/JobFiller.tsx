@@ -1162,10 +1162,10 @@ export default function JobFiller() {
                 }
               >
                 {generating
-                  ? "Generating…"
+                  ? "Exporting…"
                   : includeCutLines
-                  ? `Generate PDF + cut →`
-                  : `Generate PDF →`}
+                  ? `Export PDF + cut →`
+                  : `Export PDF →`}
               </button>
             </>
           )}
@@ -1454,7 +1454,7 @@ export default function JobFiller() {
             </div>
           )}
 
-          {/* Colour swaps - applied at Generate PDF time. Sits below the
+          {/* Colour swaps - applied at Export PDF time. Sits below the
               catalogue picker because by the time you're tweaking colours
               your assets are already chosen and queued. */}
           <JobColorsPanel
@@ -1537,10 +1537,10 @@ export default function JobFiller() {
               className="w-full h-12 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-sm font-semibold text-white disabled:opacity-40 shadow-lg shadow-violet-500/20"
             >
               {generating
-                ? "Generating…"
+                ? "Exporting…"
                 : includeCutLines
-                ? `Generate PDF + cut (${queuedQty}/${totalSlots})`
-                : `Generate PDF (${queuedQty}/${totalSlots})`}
+                ? `Export PDF + cut (${queuedQty}/${totalSlots})`
+                : `Export PDF (${queuedQty}/${totalSlots})`}
             </button>
           )}
         </div>
@@ -1938,7 +1938,7 @@ function SortableQueueRow({
       ref={setNodeRef}
       style={style}
       data-queue-row-key={row.key}
-      className={`flex items-center gap-2 rounded-xl border bg-neutral-950/50 px-2 py-2 transition ${
+      className={`rounded-xl border bg-neutral-950/50 px-2 py-2 transition ${
         isDragging
           ? "border-violet-500 shadow-lg shadow-violet-500/30"
           : highlighted
@@ -1946,36 +1946,11 @@ function SortableQueueRow({
           : "border-neutral-800"
       }`}
     >
-      <button
-        {...attributes}
-        {...listeners}
-        className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 h-11 w-8 flex items-center justify-center -ml-1"
-        aria-label="Drag to reorder (long-press on touch)"
-        title="Drag to reorder"
-        // Only the grip handle disables native touch scroll, so once the
-        // user lands on it the long-press drag is unambiguous. Everywhere
-        // else on the row, the page can still scroll normally.
-        style={{ touchAction: "none" }}
-      >
-        <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor">
-          <circle cx="3" cy="4" r="1.6" />
-          <circle cx="3" cy="10" r="1.6" />
-          <circle cx="3" cy="16" r="1.6" />
-          <circle cx="11" cy="4" r="1.6" />
-          <circle cx="11" cy="10" r="1.6" />
-          <circle cx="11" cy="16" r="1.6" />
-        </svg>
-      </button>
-      <RowThumbnailButton
-        asset={row.asset}
-        pageIndex={row.pageIndex}
-        rotationDeg={row.rotationDeg}
-        onCustomize={onCustomize}
-      />
+      {/* Row 1: Full-width title */}
       <button
         type="button"
         onClick={onLocate}
-        className={`flex-1 min-w-0 text-left rounded-md -mx-1 px-1.5 py-1 transition group/locate ${
+        className={`w-full text-left rounded-md px-1.5 py-1 mb-1.5 transition group/locate ${
           highlighted
             ? "bg-violet-500/10"
             : "hover:bg-violet-500/5"
@@ -1989,7 +1964,7 @@ function SortableQueueRow({
           title={row.asset.name}
         >
           <span className="text-neutral-500 font-mono shrink-0">{index}.</span>
-          <span className="line-clamp-2 break-words">{row.asset.name}</span>
+          <span className="break-words">{row.asset.name}</span>
         </div>
         <div className="text-[11px] text-neutral-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
           <span>{row.asset.job_id ? "Uploaded" : "Catalogue"}</span>
@@ -2009,9 +1984,6 @@ function SortableQueueRow({
             }`}
             aria-hidden
           >
-            {/* Map-pin glyph - communicates "find this on the layout" without
-                stealing horizontal space when the row is at rest. Goes solid
-                violet while the row is the active highlight target. */}
             <svg
               width="10"
               height="10"
@@ -2031,6 +2003,31 @@ function SortableQueueRow({
           </span>
         </div>
       </button>
+      {/* Row 2: Controls */}
+      <div className="flex items-center gap-2">
+      <button
+        {...attributes}
+        {...listeners}
+        className="cursor-grab active:cursor-grabbing text-neutral-600 hover:text-neutral-300 h-11 w-8 flex items-center justify-center -ml-1"
+        aria-label="Drag to reorder (long-press on touch)"
+        title="Drag to reorder"
+        style={{ touchAction: "none" }}
+      >
+        <svg width="14" height="20" viewBox="0 0 14 20" fill="currentColor">
+          <circle cx="3" cy="4" r="1.6" />
+          <circle cx="3" cy="10" r="1.6" />
+          <circle cx="3" cy="16" r="1.6" />
+          <circle cx="11" cy="4" r="1.6" />
+          <circle cx="11" cy="10" r="1.6" />
+          <circle cx="11" cy="16" r="1.6" />
+        </svg>
+      </button>
+      <RowThumbnailButton
+        asset={row.asset}
+        pageIndex={row.pageIndex}
+        rotationDeg={row.rotationDeg}
+        onCustomize={onCustomize}
+      />
       <PagePicker
         asset={row.asset}
         pageIndex={row.pageIndex}
@@ -2082,6 +2079,7 @@ function SortableQueueRow({
           <path d="M3 5h10M6 5V3.5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1V5M5 5l.5 8a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1L11 5" />
         </svg>
       </button>
+      </div>
     </li>
   );
 }

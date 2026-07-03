@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AutoLayoutResult,
   CutterPreset,
@@ -33,6 +33,7 @@ import DtfCanvas, {
 const MM_TO_PX = 2; // scale factor for canvas rendering at default zoom
 
 export default function SheetBuilder() {
+  const navigate = useNavigate();
   // Data
   const [sheets, setSheets] = useState<StickerSheet[] | null>(null);
   const [activeSheet, setActiveSheet] = useState<StickerSheet | null>(null);
@@ -96,6 +97,7 @@ export default function SheetBuilder() {
   const [gangQueue, setGangQueue] = useState<GangQueueItem[]>([]);
   const [gangDragOver, setGangDragOver] = useState(false);
   const [gangUploading, setGangUploading] = useState(false);
+  const [subSheetNotice, setSubSheetNotice] = useState<string | null>(null);
   // Catalogue picker state
   const [catPickerOpen, setCatPickerOpen] = useState(false);
   const [catPickerCat, setCatPickerCat] = useState<{ id: string; name: string } | null>(null);
@@ -212,6 +214,35 @@ export default function SheetBuilder() {
 
   async function handleMultiAutoLayout() {
     if (!activeSheet || gangQueue.length === 0) return;
+    setSubSheetNotice(null);
+
+    // Validate sticker fits inside sub-sheet (if configured)
+    const subKey = activeSheet.sub_sheet_size;
+    if (subKey) {
+      const sizes: Record<string, { w: number; h: number }> = {
+        a5: { w: 148, h: 210 },
+        a4: { w: 210, h: 297 },
+        a3: { w: 297, h: 420 },
+      };
+      const sub = subKey === "custom"
+        ? (activeSheet.sub_sheet_custom_w_mm && activeSheet.sub_sheet_custom_h_mm
+            ? { w: activeSheet.sub_sheet_custom_w_mm, h: activeSheet.sub_sheet_custom_h_mm }
+            : null)
+        : sizes[subKey] ?? null;
+      if (sub) {
+        const padding = activeSheet.sub_sheet_padding_mm ?? 5;
+        const usableW = sub.w - 2 * padding;
+        const usableH = sub.h - 2 * padding;
+        const tooLarge = gangQueue.find((g) => g.widthMm > usableW || g.heightMm > usableH);
+        if (tooLarge) {
+          setErr(
+            `Artwork "${tooLarge.asset.name}" (${tooLarge.widthMm}×${tooLarge.heightMm}mm) exceeds the sub-sheet usable area (${Math.round(usableW)}×${Math.round(usableH)}mm after padding). Reduce the sticker size or choose a larger sub-sheet.`
+          );
+          return;
+        }
+      }
+    }
+
     try {
       await updateSheet(activeSheet.id, activeSheet);
       const items: MultiAssetItem[] = gangQueue.map((g) => ({
@@ -236,6 +267,33 @@ export default function SheetBuilder() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
   const [_panOffset] = useState({ x: 0, y: 0 });
+
+  // Hydrate gang queue from existing placements when opening a sheet
+  const hydratedSheetRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeSheet || !activeSheet.placements || activeSheet.placements.length === 0) return;
+    if (hydratedSheetRef.current === activeSheet.id) return;
+    if (assets.length === 0) return;
+    hydratedSheetRef.current = activeSheet.id;
+
+    const grouped: Record<string, { asset: Asset; count: number; scale: number }> = {};
+    for (const p of activeSheet.placements) {
+      if (!grouped[p.asset_id]) {
+        const asset = assets.find((a) => a.id === p.asset_id);
+        if (!asset) continue;
+        grouped[p.asset_id] = { asset, count: 0, scale: p.scale || 1 };
+      }
+      grouped[p.asset_id].count++;
+    }
+
+    const items: GangQueueItem[] = Object.entries(grouped).map(([, { asset, count, scale }]) => {
+      const ptToMm = 25.4 / 72;
+      const wMm = Math.round(asset.width_pt * ptToMm * scale * 10) / 10;
+      const hMm = Math.round(asset.height_pt * ptToMm * scale * 10) / 10;
+      return { id: asset.id, asset, qty: count, widthMm: wMm, heightMm: hMm, expanded: false };
+    });
+    if (items.length > 0) setGangQueue(items);
+  }, [activeSheet?.id, activeSheet?.placements, assets]);
 
   // Mobile: settings panel slides in/out as a drawer
   const [panelOpen, setPanelOpen] = useState(false);
@@ -401,28 +459,28 @@ export default function SheetBuilder() {
   const [dtfUploading, setDtfUploading] = useState(false);
   const [dtfZoom, setDtfZoom] = useState(1);
   const [dtfOverflowMsg, setDtfOverflowMsg] = useState<string | null>(null);
+  const dtfFileInputRef = useRef<HTMLInputElement>(null);
 
-  const dtfHandleDrop = useCallback(
-    async (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setDtfDragOver(false);
-      if (!activeSheet) return;
+  const dtfUploadFiles = useCallback(
+    async (files: File[]) => {
+      if (!activeSheet || files.length === 0) return;
 
-      const files = Array.from(e.dataTransfer.files).filter((f) =>
-        f.type.startsWith("image/") || f.name.endsWith(".pdf") ||
-        /\.(png|jpe?g|gif|webp|svg)$/i.test(f.name)
+      const accepted = files.filter(
+        (f) =>
+          f.type.startsWith("image/") ||
+          f.type === "application/pdf" ||
+          f.name.endsWith(".pdf") ||
+          /\.(png|jpe?g|gif|webp|svg)$/i.test(f.name)
       );
-      if (files.length === 0) return;
+      if (accepted.length === 0) return;
 
-      if (files.length > 10) {
-        setErr("Maximum 10 files at once. Please drop fewer files.");
+      if (accepted.length > 10) {
+        setErr("Maximum 10 files at once. Please choose fewer files.");
         return;
       }
 
       setDtfUploading(true);
       try {
-        // Find or create a category for DTF uploads
         const cats = await listCategories();
         let dtfCat = cats.find((c) => c.name === "DTF Uploads");
         if (!dtfCat) {
@@ -430,10 +488,9 @@ export default function SheetBuilder() {
           dtfCat = await createCategory("DTF Uploads");
         }
 
-        // Upload sequentially to avoid overwhelming the server
         let uploaded = 0;
         let failed = 0;
-        for (const file of files) {
+        for (const file of accepted) {
           try {
             const asset = await uploadAsset(dtfCat.id, file, file.name);
             setAssets((prev) => [...prev, asset]);
@@ -454,6 +511,51 @@ export default function SheetBuilder() {
       }
     },
     [activeSheet, dtfAddArtwork]
+  );
+
+  const dtfUploadRef = useRef(dtfUploadFiles);
+  useEffect(() => { dtfUploadRef.current = dtfUploadFiles; }, [dtfUploadFiles]);
+
+  const dtfHandleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDtfDragOver(false);
+      await dtfUploadRef.current(Array.from(e.dataTransfer.files));
+    },
+    []
+  );
+
+  const dtfHandleFileInputChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      e.target.value = "";
+      await dtfUploadRef.current(files);
+    },
+    []
+  );
+
+  const dtfOpenFilePicker = useCallback(() => {
+    dtfFileInputRef.current?.click();
+  }, []);
+
+  const addFromCatalogue = useCallback(
+    (asset: Asset) => {
+      if (activeSheet?.sheet_type === "dtf") {
+        dtfAddArtwork(asset, 1);
+      } else {
+        gangAddAsset(asset);
+      }
+    },
+    [activeSheet?.sheet_type, dtfAddArtwork]
+  );
+
+  const catalogueExcludeIds = useMemo(
+    () =>
+      activeSheet?.sheet_type === "sticker"
+        ? gangQueue.map((g) => g.asset.id)
+        : [],
+    [activeSheet?.sheet_type, gangQueue]
   );
 
   const dtfDuplicateItem = useCallback(
@@ -606,14 +708,40 @@ export default function SheetBuilder() {
     });
   }, [activeSheet]);
 
+  const [savingDtf, setSavingDtf] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
   const dtfSave = useCallback(async () => {
     if (!activeSheet) return;
     const placements = dtfItemsToplacements(dtfItems);
+    setSavingDtf(true);
+    setSaveMsg(null);
     try {
-      const updated = await updateSheet(activeSheet.id, { placements });
+      const payload: Record<string, unknown> = {
+        name: activeSheet.name,
+        media_width_mm: activeSheet.media_width_mm,
+        media_height_mm: activeSheet.media_height_mm,
+        mode: activeSheet.mode || "roll",
+        gap_mm: activeSheet.gap_mm ?? 3,
+        edge_margin_mm: activeSheet.edge_margin_mm ?? 5,
+        sheet_type: activeSheet.sheet_type || "dtf",
+        mirror_output: activeSheet.mirror_output ?? false,
+        show_crop_marks: activeSheet.show_crop_marks ?? false,
+        placements,
+      };
+      if (activeSheet.sub_sheet_size) payload.sub_sheet_size = activeSheet.sub_sheet_size;
+      if (activeSheet.sub_sheet_custom_w_mm) payload.sub_sheet_custom_w_mm = activeSheet.sub_sheet_custom_w_mm;
+      if (activeSheet.sub_sheet_custom_h_mm) payload.sub_sheet_custom_h_mm = activeSheet.sub_sheet_custom_h_mm;
+      if (activeSheet.max_zone_length_mm) payload.max_zone_length_mm = activeSheet.max_zone_length_mm;
+      if (activeSheet.registration_type) payload.registration_type = activeSheet.registration_type;
+      const updated = await updateSheet(activeSheet.id, payload as any);
       setActiveSheet(updated);
+      setSaveMsg("Layout saved");
+      setTimeout(() => setSaveMsg(null), 3000);
     } catch (e) {
       setErr(String(e));
+    } finally {
+      setSavingDtf(false);
     }
   }, [activeSheet, dtfItems]);
 
@@ -992,13 +1120,8 @@ export default function SheetBuilder() {
     setExporting(true);
     try {
       await updateSheet(activeSheet.id, activeSheet);
-      const blob = await exportSheetPdf(activeSheet.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${activeSheet.name}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const result = await exportSheetPdf(activeSheet.id);
+      navigate(`/app/outputs?highlight=${result.id}`);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -1377,9 +1500,37 @@ export default function SheetBuilder() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+    <div className="flex flex-col h-[calc(100vh-3.5rem)] min-h-0 max-w-full overflow-x-hidden">
+      {/* Settings changed popup (viewport-centered modal) */}
+      {subSheetNotice && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50">
+          <div className="bg-neutral-900 border border-amber-600/60 rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4 text-center">
+            <div className="text-amber-400 text-lg font-semibold mb-2">Sheet settings changed</div>
+            <p className="text-neutral-300 text-sm mb-5">
+              {subSheetNotice}
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                onClick={() => {
+                  setSubSheetNotice(null);
+                  handleMultiAutoLayout();
+                }}
+                className="rounded-md bg-violet-600 hover:bg-violet-500 text-white px-4 py-2 text-sm font-medium"
+              >
+                Fill / Update Sheet
+              </button>
+              <button
+                onClick={() => setSubSheetNotice(null)}
+                className="rounded-md bg-neutral-700 hover:bg-neutral-600 text-neutral-300 px-4 py-2 text-sm font-medium"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Top bar */}
-      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-neutral-800 bg-neutral-950/80">
+      <div className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-neutral-800 bg-neutral-950/80 min-w-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             onClick={() => setActiveSheet(null)}
@@ -1402,12 +1553,15 @@ export default function SheetBuilder() {
           {activeSheet?.sheet_type === "dtf" && (
             <button
               onClick={dtfSave}
-              disabled={dtfItems.length === 0}
+              disabled={dtfItems.length === 0 || savingDtf}
               className="rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white px-3 sm:px-4 py-1.5 text-sm font-medium"
             >
-              <span className="sm:hidden">Save</span>
-              <span className="hidden sm:inline">Save Layout</span>
+              <span className="sm:hidden">{savingDtf ? "…" : "Save"}</span>
+              <span className="hidden sm:inline">{savingDtf ? "Saving…" : "Save Layout"}</span>
             </button>
+          )}
+          {saveMsg && (
+            <span className="text-xs text-emerald-400 font-medium animate-pulse">{saveMsg}</span>
           )}
           <button
             onClick={handleExport}
@@ -1449,19 +1603,32 @@ export default function SheetBuilder() {
         </div>
       </div>
 
-      <div className="relative flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden min-h-0 min-w-0">
         {/* Canvas area */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-auto bg-neutral-950 flex items-start justify-center p-3 sm:p-6"
+          className={`flex-1 min-w-0 overflow-y-auto bg-neutral-950 flex items-start justify-center p-2 sm:p-6 scrollbar-always print-canvas-area ${
+            activeSheet?.sheet_type === "dtf"
+              ? "overflow-x-auto"
+              : "overflow-x-hidden"
+          }`}
+          style={{ scrollbarGutter: "stable" }}
         >
           {activeSheet?.sheet_type === "dtf" ? (
             <div
-              className={`w-full max-w-4xl relative ${dtfDragOver ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-neutral-950" : ""}`}
+              className={`w-full ${dtfZoom > 1 ? "" : "sm:max-w-4xl"} min-w-0 relative ${dtfDragOver ? "ring-2 ring-emerald-400 ring-offset-2 ring-offset-neutral-950" : ""}`}
               onDragOver={(e) => { e.preventDefault(); setDtfDragOver(true); }}
               onDragLeave={() => setDtfDragOver(false)}
               onDrop={dtfHandleDrop}
             >
+              <input
+                ref={dtfFileInputRef}
+                type="file"
+                accept="image/*,application/pdf,.pdf,.png,.jpg,.jpeg,.webp,.gif,.svg"
+                multiple
+                className="hidden"
+                onChange={dtfHandleFileInputChange}
+              />
               {/* Drop overlay */}
               {dtfDragOver && (
                 <div className="absolute inset-0 z-10 rounded-xl bg-emerald-500/10 border-2 border-dashed border-emerald-400 flex items-center justify-center pointer-events-none">
@@ -1473,13 +1640,20 @@ export default function SheetBuilder() {
                   <span className="text-white text-sm animate-pulse">Uploading…</span>
                 </div>
               )}
-              {dtfItems.length === 0 && !dtfDragOver && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[1]">
-                  <div className="text-center">
-                    <p className="text-neutral-400 text-sm">Drag and drop image files here</p>
-                    <p className="text-neutral-500 text-xs mt-1">PNG, JPG, or PDF</p>
+              {dtfItems.length === 0 && !dtfDragOver && !dtfUploading && (
+                <button
+                  type="button"
+                  onClick={dtfOpenFilePicker}
+                  className="absolute inset-0 z-[2] flex items-center justify-center rounded-xl border-0 bg-transparent select-none touch-manipulation"
+                  style={{ WebkitUserSelect: "none", WebkitTouchCallout: "none" }}
+                  aria-label="Choose photos from your device"
+                >
+                  <div className="text-center px-4 pointer-events-none">
+                    <p className="text-neutral-300 text-sm font-medium">Tap to choose photos</p>
+                    <p className="text-neutral-500 text-xs mt-1 hidden sm:block">or drag and drop PNG, JPG, or PDF</p>
+                    <p className="text-neutral-500 text-xs mt-1 sm:hidden">Take a photo or pick from your library</p>
                   </div>
-                </div>
+                </button>
               )}
               <DtfCanvas
                 items={dtfItems}
@@ -1492,23 +1666,8 @@ export default function SheetBuilder() {
                 selectedId={dtfSelectedId}
                 mirrorPreview={activeSheet.mirror_output}
                 zoom={dtfZoom}
+                gapMm={activeSheet.gap_mm}
               />
-              {/* DTF zoom controls */}
-              <div className="mt-2 flex items-center justify-center gap-1">
-                {[1, 2, 3].map((level) => (
-                  <button
-                    key={level}
-                    onClick={() => setDtfZoom(level)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
-                      dtfZoom === level
-                        ? "bg-emerald-600 text-white"
-                        : "bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
-                    }`}
-                  >
-                    {level === 1 ? "Fit" : `${level}×`}
-                  </button>
-                ))}
-              </div>
               {/* Overflow warning */}
               {dtfOverflowMsg && (
                 <div className="mt-2 rounded-lg bg-amber-900/60 border border-amber-600/50 px-3 py-2 text-xs text-amber-200 text-center">
@@ -1516,7 +1675,15 @@ export default function SheetBuilder() {
                 </div>
               )}
               {/* DTF toolbar */}
-              <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <div className="mt-3 flex items-center gap-2 flex-wrap max-w-full">
+                <button
+                  type="button"
+                  onClick={dtfOpenFilePicker}
+                  disabled={dtfUploading}
+                  className="rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white px-3 py-2 text-sm font-medium transition sm:hidden"
+                >
+                  Add photos
+                </button>
                 <button
                   onClick={dtfAutoPack}
                   disabled={packing || dtfItems.length === 0}
@@ -1573,33 +1740,74 @@ export default function SheetBuilder() {
           )}
         </div>
 
-        {/* Floating zoom controls (mobile-friendly) */}
-        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 lg:left-4 lg:translate-x-0 flex items-center gap-1 rounded-full bg-neutral-900/90 border border-neutral-700 px-1.5 py-1 shadow-lg backdrop-blur z-20">
+        {/* Floating zoom controls — hidden on mobile (pinch-to-zoom instead) */}
+        <div className="hidden sm:flex absolute bottom-3 left-1/2 -translate-x-1/2 lg:left-4 lg:translate-x-0 items-center gap-1 rounded-full bg-neutral-900/90 border border-neutral-700 px-1.5 py-1 shadow-lg backdrop-blur z-20">
           <button
-            onClick={() => setZoom((z) => clampZoom(z - 0.1))}
+            onClick={() => {
+              if (activeSheet?.sheet_type === "dtf") {
+                setDtfZoom((z) => Math.max(1, Math.min(5, +(z - 0.1).toFixed(2))));
+              } else {
+                setZoom((z) => clampZoom(z - 0.1));
+              }
+            }}
             className="w-8 h-8 rounded-full text-white hover:bg-neutral-700 flex items-center justify-center text-lg leading-none"
             aria-label="Zoom out"
           >
             −
           </button>
+          <input
+            type="range"
+            min={1}
+            max={4}
+            step={0.05}
+            value={activeSheet?.sheet_type === "dtf" ? dtfZoom : zoom}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value);
+              if (activeSheet?.sheet_type === "dtf") {
+                setDtfZoom(v);
+              } else {
+                setZoom(v);
+              }
+            }}
+            className="w-20 h-1.5 accent-violet-500 cursor-pointer"
+          />
           <button
-            onClick={fitToWidth}
-            className="px-2 min-w-[3.5rem] text-xs text-neutral-300 hover:text-white tabular-nums"
-            title="Fit to width"
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            onClick={() => setZoom((z) => clampZoom(z + 0.1))}
+            onClick={() => {
+              if (activeSheet?.sheet_type === "dtf") {
+                setDtfZoom((z) => Math.max(1, Math.min(5, +(z + 0.1).toFixed(2))));
+              } else {
+                setZoom((z) => clampZoom(z + 0.1));
+              }
+            }}
             className="w-8 h-8 rounded-full text-white hover:bg-neutral-700 flex items-center justify-center text-lg leading-none"
             aria-label="Zoom in"
           >
             +
           </button>
           <button
-            onClick={fitToWidth}
-            className="ml-0.5 px-2 h-8 rounded-full text-xs text-violet-300 hover:bg-neutral-700"
+            onClick={() => {
+              if (activeSheet?.sheet_type === "dtf") {
+                setDtfZoom(1);
+              } else {
+                fitToWidth();
+              }
+            }}
+            className="ml-0.5 px-2 h-7 rounded-full text-xs text-violet-300 hover:bg-neutral-700 flex items-center"
             title="Fit to width"
+          >
+            {activeSheet?.sheet_type === "dtf"
+              ? `${Math.round(dtfZoom * 100)}%`
+              : `${Math.round(zoom * 100)}%`}
+          </button>
+          <button
+            onClick={() => {
+              if (activeSheet?.sheet_type === "dtf") {
+                setDtfZoom(1);
+              } else {
+                fitToWidth();
+              }
+            }}
+            className="ml-0.5 px-2 h-7 rounded-full text-xs text-neutral-400 hover:text-white hover:bg-neutral-700"
           >
             Fit
           </button>
@@ -1651,6 +1859,24 @@ export default function SheetBuilder() {
               }}
             />
           )}
+          {activeSheet?.sheet_type === "dtf" && (
+            <Panel title="Add from catalogue" defaultOpen>
+              <SheetCataloguePicker
+                categories={categories}
+                catPickerOpen={catPickerOpen}
+                setCatPickerOpen={setCatPickerOpen}
+                catPickerCat={catPickerCat}
+                setCatPickerCat={setCatPickerCat}
+                catPickerAssets={catPickerAssets}
+                catPickerSearch={catPickerSearch}
+                setCatPickerSearch={setCatPickerSearch}
+                onExpand={() => setCatPickerExpanded(true)}
+                onSelectAsset={addFromCatalogue}
+                excludeAssetIds={catalogueExcludeIds}
+                hideWhenExpanded={catPickerExpanded}
+              />
+            </Panel>
+          )}
           {/* Mobile close header */}
           <div className="lg:hidden flex items-center justify-between mb-2 -mt-1">
             <span className="text-sm font-semibold text-white">Sheet Tools</span>
@@ -1687,7 +1913,7 @@ export default function SheetBuilder() {
                               alt=""
                             />
                           )}
-                          <span className="flex-1 text-sm text-white truncate">
+                          <span className="flex-1 text-sm text-white truncate" title={item.asset.name}>
                             {item.asset.name}
                           </span>
                           <span className="text-xs text-neutral-400">×{item.qty}</span>
@@ -1748,107 +1974,41 @@ export default function SheetBuilder() {
                   </div>
                 )}
                 {/* Catalogue picker (category → thumbnails) */}
-                <div>
-                  <button
-                    onClick={() => setCatPickerOpen(!catPickerOpen)}
-                    className="w-full flex items-center justify-between rounded-lg border border-neutral-700 bg-neutral-800/60 px-3 py-2.5 text-sm text-neutral-200 hover:border-neutral-500 transition"
-                  >
-                    <span>Choose from catalogue</span>
-                    <span className="text-neutral-500">{catPickerOpen ? "−" : "+"}</span>
-                  </button>
-                  {catPickerOpen && !catPickerExpanded && (
-                    <div className="mt-2 space-y-2">
-                      {!catPickerCat ? (
-                        <>
-                          <div className="flex gap-2">
-                            <input
-                              type="search"
-                              value={catPickerSearch}
-                              onChange={(e) => setCatPickerSearch(e.target.value)}
-                              placeholder="Search categories…"
-                              className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
-                            />
-                            <button
-                              onClick={() => setCatPickerExpanded(true)}
-                              className="shrink-0 rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
-                              title="Full screen"
-                            >
-                              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-                                <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
-                            </button>
-                          </div>
-                          {categories.length === 0 ? (
-                            <div className="text-xs text-neutral-500">Loading…</div>
-                          ) : (
-                            <ul className="overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800 max-h-52">
-                              {categories
-                                .filter((c) => !catPickerSearch || c.name.toLowerCase().includes(catPickerSearch.toLowerCase()))
-                                .map((c) => (
-                                  <li key={c.id}>
-                                    <button
-                                      onClick={() => setCatPickerCat(c)}
-                                      className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
-                                    >
-                                      <span>{c.name}</span>
-                                      <span className="text-neutral-600 group-hover:text-neutral-300">→</span>
-                                    </button>
-                                  </li>
-                                ))}
-                            </ul>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between text-sm">
-                            <button onClick={() => setCatPickerCat(null)} className="text-neutral-400 hover:text-white">
-                              ← Categories
-                            </button>
-                            <div className="flex items-center gap-2">
-                              <span className="text-neutral-500 text-xs truncate max-w-[120px]">{catPickerCat.name}</span>
-                              <button
-                                onClick={() => setCatPickerExpanded(true)}
-                                className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
-                                title="Full screen"
-                              >
-                                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
-                                  <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-                                </svg>
-                              </button>
-                            </div>
-                          </div>
-                          {catPickerAssets === null ? (
-                            <div className="text-xs text-neutral-500">Loading…</div>
-                          ) : catPickerAssets.length === 0 ? (
-                            <div className="text-xs text-neutral-500">Empty category.</div>
-                          ) : (
-                            <div className="overflow-y-auto max-h-64">
-                              <div className="grid grid-cols-3 gap-2">
-                                {catPickerAssets
-                                  .filter((a) => !gangQueue.find((g) => g.asset.id === a.id))
-                                  .map((a) => (
-                                    <button
-                                      key={a.id}
-                                      onClick={() => { gangAddAsset(a); }}
-                                      className="rounded-lg border border-neutral-800 bg-white overflow-hidden hover:border-violet-500 active:scale-95 transition-all"
-                                      title={a.name}
-                                      style={{ height: 72 }}
-                                    >
-                                      {(a.preview_url || a.thumbnail_url) ? (
-                                        <img src={a.preview_url ?? a.thumbnail_url ?? ""} alt={a.name} className="w-full h-full object-contain p-1" draggable={false} />
-                                      ) : (
-                                        <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400">{a.name}</div>
-                                      )}
-                                    </button>
-                                  ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
+                <SheetCataloguePicker
+                  categories={categories}
+                  catPickerOpen={catPickerOpen}
+                  setCatPickerOpen={setCatPickerOpen}
+                  catPickerCat={catPickerCat}
+                  setCatPickerCat={setCatPickerCat}
+                  catPickerAssets={catPickerAssets}
+                  catPickerSearch={catPickerSearch}
+                  setCatPickerSearch={setCatPickerSearch}
+                  onExpand={() => setCatPickerExpanded(true)}
+                  onSelectAsset={addFromCatalogue}
+                  excludeAssetIds={catalogueExcludeIds}
+                  hideWhenExpanded={catPickerExpanded}
+                />
+                {activeSheet.sub_sheet_size && gangQueue.length > 0 && (() => {
+                  const sizes: Record<string, { w: number; h: number }> = {
+                    a5: { w: 148, h: 210 }, a4: { w: 210, h: 297 }, a3: { w: 297, h: 420 },
+                  };
+                  const sub = activeSheet.sub_sheet_size === "custom"
+                    ? (activeSheet.sub_sheet_custom_w_mm && activeSheet.sub_sheet_custom_h_mm
+                        ? { w: activeSheet.sub_sheet_custom_w_mm, h: activeSheet.sub_sheet_custom_h_mm }
+                        : null)
+                    : sizes[activeSheet.sub_sheet_size] ?? null;
+                  if (!sub) return null;
+                  const padding = activeSheet.sub_sheet_padding_mm ?? 5;
+                  const usableW = sub.w - 2 * padding;
+                  const usableH = sub.h - 2 * padding;
+                  const tooLarge = gangQueue.filter((g) => g.widthMm > usableW || g.heightMm > usableH);
+                  if (tooLarge.length === 0) return null;
+                  return (
+                    <div className="rounded-md bg-red-900/40 border border-red-600/50 px-3 py-2 text-xs text-red-300">
+                      {tooLarge.map((g) => g.asset.name).join(", ")} too large for sub-sheet ({Math.round(usableW)}×{Math.round(usableH)}mm usable). Reduce size or choose a larger sub-sheet.
                     </div>
-                  )}
-                </div>
+                  );
+                })()}
                 <button
                   onClick={handleMultiAutoLayout}
                   disabled={gangQueue.length === 0}
@@ -1878,11 +2038,12 @@ export default function SheetBuilder() {
                   min={0}
                   step={0.5}
                   value={activeSheet.gap_mm}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setActiveSheet((s) =>
                       s ? { ...s, gap_mm: Number(e.target.value) } : null
-                    )
-                  }
+                    );
+                    if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to match the new settings.");
+                  }}
                   className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                 />
               </SettingRow>
@@ -1892,20 +2053,21 @@ export default function SheetBuilder() {
                   min={0}
                   step={0.5}
                   value={activeSheet.edge_margin_mm}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setActiveSheet((s) =>
                       s
                         ? { ...s, edge_margin_mm: Number(e.target.value) }
                         : null
-                    )
-                  }
+                    );
+                    if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to match the new settings.");
+                  }}
                   className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                 />
               </SettingRow>
               <SettingRow label="Sub-sheet size">
                 <select
                   value={activeSheet.sub_sheet_size ?? ""}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setActiveSheet((s) =>
                       s
                         ? {
@@ -1914,8 +2076,9 @@ export default function SheetBuilder() {
                             show_crop_marks: !!e.target.value,
                           }
                         : null
-                    )
-                  }
+                    );
+                    setSubSheetNotice("Your artwork needs to be re-arranged to fit the new sub-sheet configuration.");
+                  }}
                   className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
                 >
                   <option value="">None (full roll)</option>
@@ -1980,13 +2143,14 @@ export default function SheetBuilder() {
                       min={0}
                       step={0.5}
                       value={activeSheet.sub_sheet_gap_mm ?? 5}
-                      onChange={(e) =>
+                      onChange={(e) => {
                         setActiveSheet((s) =>
                           s
                             ? { ...s, sub_sheet_gap_mm: Number(e.target.value) }
                             : null
-                        )
-                      }
+                        );
+                        if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to fit the new sub-sheet configuration.");
+                      }}
                       className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                     />
                   </SettingRow>
@@ -1996,7 +2160,7 @@ export default function SheetBuilder() {
                       min={0}
                       step={0.5}
                       value={activeSheet.sub_sheet_padding_mm ?? 5}
-                      onChange={(e) =>
+                      onChange={(e) => {
                         setActiveSheet((s) =>
                           s
                             ? {
@@ -2004,8 +2168,9 @@ export default function SheetBuilder() {
                                 sub_sheet_padding_mm: Number(e.target.value),
                               }
                             : null
-                        )
-                      }
+                        );
+                        if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to fit the new sub-sheet configuration.");
+                      }}
                       className="w-20 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white text-right"
                     />
                   </SettingRow>
@@ -2023,12 +2188,51 @@ export default function SheetBuilder() {
                       className="rounded"
                     />
                   </SettingRow>
+                  <div>
+                    <label className="block text-xs text-neutral-400 mb-1">
+                      Sticker alignment
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={activeSheet.sticker_align_h ?? "center"}
+                        onChange={(e) => {
+                          setActiveSheet((s) =>
+                            s
+                              ? { ...s, sticker_align_h: e.target.value }
+                              : null
+                          );
+                          if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to match the new settings.");
+                        }}
+                        className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                      >
+                        <option value="left">Left</option>
+                        <option value="center">Centre</option>
+                        <option value="right">Right</option>
+                      </select>
+                      <select
+                        value={activeSheet.sticker_align_v ?? "top"}
+                        onChange={(e) => {
+                          setActiveSheet((s) =>
+                            s
+                              ? { ...s, sticker_align_v: e.target.value }
+                              : null
+                          );
+                          if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to match the new settings.");
+                        }}
+                        className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
+                      >
+                        <option value="top">Top</option>
+                        <option value="center">Middle</option>
+                        <option value="bottom">Bottom</option>
+                      </select>
+                    </div>
+                  </div>
                 </>
               )}
               <SettingRow label="Registration">
                 <select
                   value={activeSheet.registration_type ?? ""}
-                  onChange={(e) =>
+                  onChange={(e) => {
                     setActiveSheet((s) =>
                       s
                         ? {
@@ -2036,8 +2240,9 @@ export default function SheetBuilder() {
                             registration_type: e.target.value || null,
                           }
                         : null
-                    )
-                  }
+                    );
+                    if (gangQueue.length > 0) setSubSheetNotice("Your artwork needs to be re-arranged to match the new settings.");
+                  }}
                   className="w-full rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
                 >
                   <option value="">None</option>
@@ -2073,51 +2278,6 @@ export default function SheetBuilder() {
             </div>
           </Panel>
           )}
-
-          {/* Spot Colours */}
-          <Panel title="Spot Colours">
-            <div className="space-y-3">
-              <SpotColourRow
-                label="Cut lines"
-                value={activeSheet.spot_color_cutlines ?? "CutContour"}
-                spots={userSpots}
-                onChange={(v) =>
-                  setActiveSheet((s) =>
-                    s ? { ...s, spot_color_cutlines: v } : null
-                  )
-                }
-              />
-              <SpotColourRow
-                label="Sub-sheet outlines"
-                value={activeSheet.spot_color_subsheets ?? "#00FF00"}
-                spots={userSpots}
-                onChange={(v) =>
-                  setActiveSheet((s) =>
-                    s ? { ...s, spot_color_subsheets: v } : null
-                  )
-                }
-              />
-              <SpotColourRow
-                label="Marks (reg + crop)"
-                value={activeSheet.spot_color_marks ?? "#000000"}
-                spots={userSpots}
-                onChange={(v) =>
-                  setActiveSheet((s) =>
-                    s ? { ...s, spot_color_marks: v } : null
-                  )
-                }
-              />
-              <p className="text-[10px] text-neutral-500">
-                Pick any colour (becomes custom) or select a spot name.{" "}
-                <a
-                  href="/app/settings?tab=preferences"
-                  className="text-violet-400 hover:underline"
-                >
-                  Manage spots →
-                </a>
-              </p>
-            </div>
-          </Panel>
 
           {/* Sub-sheet Design (only when sub-sheet selected) */}
           {activeSheet.sub_sheet_size && (
@@ -2221,45 +2381,6 @@ export default function SheetBuilder() {
                     </div>
                   </>
                 )}
-
-                {/* Sticker alignment */}
-                <div>
-                  <label className="block text-xs text-neutral-400 mb-1">
-                    Sticker alignment
-                  </label>
-                  <div className="flex gap-2">
-                    <select
-                      value={activeSheet.sticker_align_h ?? "center"}
-                      onChange={(e) =>
-                        setActiveSheet((s) =>
-                          s
-                            ? { ...s, sticker_align_h: e.target.value }
-                            : null
-                        )
-                      }
-                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
-                    >
-                      <option value="left">Left</option>
-                      <option value="center">Centre</option>
-                      <option value="right">Right</option>
-                    </select>
-                    <select
-                      value={activeSheet.sticker_align_v ?? "top"}
-                      onChange={(e) =>
-                        setActiveSheet((s) =>
-                          s
-                            ? { ...s, sticker_align_v: e.target.value }
-                            : null
-                        )
-                      }
-                      className="flex-1 rounded bg-neutral-800 border border-neutral-700 px-2 py-1 text-sm text-white"
-                    >
-                      <option value="top">Top</option>
-                      <option value="center">Middle</option>
-                      <option value="bottom">Bottom</option>
-                    </select>
-                  </div>
-                </div>
 
                 {/* Background image upload */}
                 <div>
@@ -2444,6 +2565,51 @@ export default function SheetBuilder() {
             </Panel>
           )}
 
+          {/* Spot Colours */}
+          <Panel title="Spot Colours">
+            <div className="space-y-3">
+              <SpotColourRow
+                label="Cut lines"
+                value={activeSheet.spot_color_cutlines ?? "CutContour"}
+                spots={userSpots}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_cutlines: v } : null
+                  )
+                }
+              />
+              <SpotColourRow
+                label="Sub-sheet outlines"
+                value={activeSheet.spot_color_subsheets ?? "#00FF00"}
+                spots={userSpots}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_subsheets: v } : null
+                  )
+                }
+              />
+              <SpotColourRow
+                label="Marks (reg + crop)"
+                value={activeSheet.spot_color_marks ?? "#000000"}
+                spots={userSpots}
+                onChange={(v) =>
+                  setActiveSheet((s) =>
+                    s ? { ...s, spot_color_marks: v } : null
+                  )
+                }
+              />
+              <p className="text-[10px] text-neutral-500">
+                Pick any colour (becomes custom) or select a spot name.{" "}
+                <a
+                  href="/app/settings?tab=preferences"
+                  className="text-violet-400 hover:underline"
+                >
+                  Manage spots →
+                </a>
+              </p>
+            </div>
+          </Panel>
+
           {/* Cutter preset */}
           {presets.length > 0 && (
             <Panel title="Cutter Preset">
@@ -2578,11 +2744,11 @@ export default function SheetBuilder() {
                 ) : (
                   <div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2">
                     {catPickerAssets
-                      .filter((a) => !gangQueue.find((g) => g.asset.id === a.id))
+                      .filter((a) => !catalogueExcludeIds.includes(a.id))
                       .map((a) => (
                         <button
                           key={a.id}
-                          onClick={() => { gangAddAsset(a); setCatPickerExpanded(false); }}
+                          onClick={() => { addFromCatalogue(a); setCatPickerExpanded(false); }}
                           className="rounded-lg border border-neutral-800 bg-white overflow-hidden hover:border-violet-500 active:scale-95 transition-all"
                           title={a.name}
                           style={{ height: 110 }}
@@ -3045,6 +3211,148 @@ function _drawRegMarksPreview(
 }
 
 // ---------------------------------------------------------------------------
+// Catalogue picker — shared by sticker and DTF sheet builders
+// ---------------------------------------------------------------------------
+
+function SheetCataloguePicker({
+  categories,
+  catPickerOpen,
+  setCatPickerOpen,
+  catPickerCat,
+  setCatPickerCat,
+  catPickerAssets,
+  catPickerSearch,
+  setCatPickerSearch,
+  onExpand,
+  onSelectAsset,
+  excludeAssetIds = [],
+  hideWhenExpanded = false,
+}: {
+  categories: { id: string; name: string }[];
+  catPickerOpen: boolean;
+  setCatPickerOpen: (open: boolean) => void;
+  catPickerCat: { id: string; name: string } | null;
+  setCatPickerCat: (cat: { id: string; name: string } | null) => void;
+  catPickerAssets: Asset[] | null;
+  catPickerSearch: string;
+  setCatPickerSearch: (q: string) => void;
+  onExpand: () => void;
+  onSelectAsset: (asset: Asset) => void;
+  excludeAssetIds?: string[];
+  hideWhenExpanded?: boolean;
+}) {
+  const visibleAssets =
+    catPickerAssets?.filter((a) => !excludeAssetIds.includes(a.id)) ?? [];
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setCatPickerOpen(!catPickerOpen)}
+        className="w-full flex items-center justify-between rounded-lg border border-neutral-700 bg-neutral-800/60 px-3 py-2.5 text-sm text-neutral-200 hover:border-neutral-500 transition"
+      >
+        <span>Choose from catalogue</span>
+        <span className="text-neutral-500">{catPickerOpen ? "−" : "+"}</span>
+      </button>
+      {catPickerOpen && !hideWhenExpanded && (
+        <div className="mt-2 space-y-2">
+          {!catPickerCat ? (
+            <>
+              <div className="flex gap-2">
+                <input
+                  type="search"
+                  value={catPickerSearch}
+                  onChange={(e) => setCatPickerSearch(e.target.value)}
+                  placeholder="Search categories…"
+                  className="flex-1 rounded-md border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm outline-none focus:border-neutral-600"
+                />
+                <button
+                  type="button"
+                  onClick={onExpand}
+                  className="shrink-0 rounded-md border border-neutral-700 bg-neutral-900 px-2.5 py-2 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+                  title="Full screen"
+                >
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                    <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </button>
+              </div>
+              {categories.length === 0 ? (
+                <div className="text-xs text-neutral-500">Loading…</div>
+              ) : (
+                <ul className="overflow-y-auto divide-y divide-neutral-800/60 rounded-lg border border-neutral-800 max-h-52">
+                  {categories
+                    .filter((c) => !catPickerSearch || c.name.toLowerCase().includes(catPickerSearch.toLowerCase()))
+                    .map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => setCatPickerCat(c)}
+                          className="w-full text-left px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800/60 flex items-center justify-between group"
+                        >
+                          <span>{c.name}</span>
+                          <span className="text-neutral-600 group-hover:text-neutral-300">→</span>
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-sm">
+                <button type="button" onClick={() => setCatPickerCat(null)} className="text-neutral-400 hover:text-white">
+                  ← Categories
+                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-neutral-500 text-xs truncate max-w-[120px]">{catPickerCat.name}</span>
+                  <button
+                    type="button"
+                    onClick={onExpand}
+                    className="rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-400 hover:text-neutral-200 hover:border-neutral-500 transition"
+                    title="Full screen"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden>
+                      <path d="M9 1h4v4M5 13H1V9M8 6l5-5M6 8l-5 5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              {catPickerAssets === null ? (
+                <div className="text-xs text-neutral-500">Loading…</div>
+              ) : visibleAssets.length === 0 ? (
+                <div className="text-xs text-neutral-500">Empty category.</div>
+              ) : (
+                <div className="overflow-y-auto max-h-64">
+                  <div className="grid grid-cols-3 gap-2">
+                    {visibleAssets.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => onSelectAsset(a)}
+                        className="rounded-lg border border-neutral-800 bg-white overflow-hidden hover:border-violet-500 active:scale-95 transition-all"
+                        title={a.name}
+                        style={{ height: 72 }}
+                      >
+                        {(a.preview_url || a.thumbnail_url) ? (
+                          <img src={a.preview_url ?? a.thumbnail_url ?? ""} alt={a.name} className="w-full h-full object-contain p-1" draggable={false} />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400">{a.name}</div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // DTF Layers Panel — shows placed items with duplicate/remove controls
 // ---------------------------------------------------------------------------
 
@@ -3101,7 +3409,7 @@ function DtfLayersPanel({
       </div>
 
       <p className="text-[11px] text-neutral-500 leading-relaxed">
-        Drag files onto the canvas to add artwork
+        Drag files onto the canvas or pick from your catalogue below.
       </p>
 
       {grouped.length === 0 && (
@@ -3135,7 +3443,7 @@ function DtfLayersPanel({
                   />
                 )}
                 <div className="flex-1 min-w-0">
-                  <div className="text-xs text-neutral-200 truncate">{asset.name}</div>
+                  <div className="text-xs text-neutral-200 truncate" title={asset.name}>{asset.name}</div>
                   <div className="text-[10px] text-neutral-500 mt-0.5">
                     {Math.round(item.w_mm)}×{Math.round(item.h_mm)} mm
                     {(() => {

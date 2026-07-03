@@ -128,6 +128,11 @@ class PricingProfile(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     """When True, a 'Custom quantity' radio option is also available."""
 
+    extras_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    """When True, the customer must select at least one extra/finish."""
+
     def __repr__(self) -> str:
         return f"<PricingProfile {self.name} user={self.user_id}>"
 

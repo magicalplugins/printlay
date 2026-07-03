@@ -14,6 +14,7 @@ import {
   CUT_STYLES_BY_DESIGNER,
   CutStyle,
   DesignerMode,
+  LEGACY_STYLE_MAP,
   PricingProfile,
   Product,
   ProductInput,
@@ -32,8 +33,8 @@ const BLANK: ProductInput = {
   name: "Custom stickers",
   is_active: true,
   designer: "cutout",
-  enabled_cut_styles: ["die_cut", "face", "keep_bg"],
-  min_size_mm: 20,
+  enabled_cut_styles: ["square", "circle", "cut_around", "bg_removal", "face"],
+  min_size_mm: 10,
   max_size_mm: 300,
   size_presets: [],
   allow_custom_size: true,
@@ -66,14 +67,17 @@ export default function WidgetProducts() {
     listPricingProfiles().then(setProfiles).catch(() => setProfiles([]));
   }, []);
 
-  const startEdit = (p: Product) =>
+  const startEdit = (p: Product) => {
+    const migratedStyles = p.enabled_cut_styles.map(
+      (s) => (LEGACY_STYLE_MAP[s] as CutStyle) || s
+    ).filter((s, i, arr) => arr.indexOf(s) === i);
     setEditing({
       id: p.id,
       data: {
         name: p.name,
         is_active: p.is_active,
         designer: p.designer,
-        enabled_cut_styles: p.enabled_cut_styles,
+        enabled_cut_styles: migratedStyles,
         min_size_mm: p.min_size_mm,
         max_size_mm: p.max_size_mm,
         size_presets: p.size_presets ?? [],
@@ -91,6 +95,7 @@ export default function WidgetProducts() {
         pricing_profile_id: p.pricing_profile_id,
       },
     });
+  };
 
   const remove = async (p: Product) => {
     if (!confirm(`Delete "${p.name}"?`)) return;

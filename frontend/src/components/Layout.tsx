@@ -13,6 +13,7 @@ import ImpersonationBanner from "./app/ImpersonationBanner";
 import SupportAccessModal from "./app/SupportAccessModal";
 import TrialBanner from "./app/TrialBanner";
 import UpdateBanner from "./app/UpdateBanner";
+import ThemeToggle from "./ThemeToggle";
 
 const NAV = [
   { to: "/app", label: "Dashboard", end: true },
@@ -77,9 +78,9 @@ export default function Layout() {
     <div className="min-h-full flex flex-col">
       <UpdateBanner />
       <ImpersonationBanner />
-      <header className="border-b border-neutral-900 bg-neutral-950/80 backdrop-blur sticky top-0 z-30">
+      <header className="border-b border-th-header bg-th-header backdrop-blur sticky top-0 z-30">
         <div className="max-w-7xl mx-auto flex items-center gap-4 sm:gap-8 px-3 sm:px-6 h-14">
-          <Link to="/app" className="font-bold tracking-tight text-base sm:text-lg">
+          <Link to="/app" className="font-bold tracking-tight text-base sm:text-lg text-th-text">
             Printlay
           </Link>
 
@@ -93,8 +94,8 @@ export default function Layout() {
                 className={({ isActive }) =>
                   `rounded-md px-3 py-1.5 transition ${
                     isActive
-                      ? "bg-neutral-800 text-white"
-                      : "text-neutral-400 hover:text-white"
+                      ? "bg-th-active text-th-nav-active"
+                      : "text-th-nav hover:text-th-text"
                   }`
                 }
               >
@@ -107,8 +108,8 @@ export default function Layout() {
                 className={({ isActive }) =>
                   `rounded-md px-3 py-1.5 transition ${
                     isActive
-                      ? "bg-neutral-800 text-white"
-                      : "text-neutral-400 hover:text-white"
+                      ? "bg-th-active text-th-nav-active"
+                      : "text-th-nav hover:text-th-text"
                   }`
                 }
               >
@@ -132,14 +133,15 @@ export default function Layout() {
             )}
           </nav>
 
-          {/* Right cluster: email + sign-out on desktop, hamburger on mobile. */}
+          {/* Right cluster: theme toggle + email + sign-out on desktop, hamburger on mobile. */}
           <div className="ml-auto flex items-center gap-3 text-sm">
-            <span className="text-neutral-500 hidden lg:inline truncate max-w-[200px]">
+            <ThemeToggle />
+            <span className="text-th-muted hidden lg:inline truncate max-w-[200px]">
               {session?.user.email}
             </span>
             <button
               onClick={onSignOut}
-              className="hidden md:inline-flex rounded-md border border-neutral-800 px-3 py-1.5 text-neutral-300 hover:border-neutral-600 hover:text-white"
+              className="hidden md:inline-flex rounded-md border border-th-border px-3 py-1.5 text-th-secondary hover:border-th-border-hover hover:text-th-text"
             >
               Sign out
             </button>
@@ -148,7 +150,7 @@ export default function Layout() {
                 bit of physicality - costs nothing, reads as "modern". */}
             <button
               onClick={() => setDrawerOpen((v) => !v)}
-              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-neutral-800 text-neutral-300 hover:border-neutral-600 hover:text-white active:bg-neutral-900"
+              className="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-th-border text-th-secondary hover:border-th-border-hover hover:text-th-text active:bg-th-active"
               aria-label={drawerOpen ? "Close menu" : "Open menu"}
               aria-expanded={drawerOpen}
               aria-controls="mobile-menu"
@@ -194,12 +196,12 @@ export default function Layout() {
       <TrialBanner />
       <LockedBar />
 
-      <main className="flex-1">
+      <main className="flex-1 min-w-0 max-w-full overflow-x-hidden">
         <Outlet />
       </main>
 
-      <footer className="border-t border-neutral-900 mt-auto">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500">
+      <footer className="border-t border-th-footer mt-auto">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-2 text-xs text-th-muted">
           <span>© {new Date().getFullYear()} Printlay</span>
           <NavLink
             to="/app/affiliate"
@@ -294,7 +296,7 @@ function MobileMenu({
         role="dialog"
         aria-modal="true"
         aria-label="Main menu"
-        className={`md:hidden fixed top-14 right-0 bottom-0 z-30 w-full sm:max-w-sm bg-neutral-950 border-l border-neutral-900 shadow-2xl flex flex-col transition-transform duration-200 ease-out ${
+        className={`md:hidden fixed top-14 right-0 bottom-0 z-30 w-full sm:max-w-sm bg-th-surface border-l border-th-border shadow-2xl flex flex-col transition-transform duration-200 ease-out ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
@@ -309,8 +311,8 @@ function MobileMenu({
               className={({ isActive }) =>
                 `flex items-center justify-between rounded-xl px-4 py-3.5 text-base transition ${
                   isActive
-                    ? "bg-neutral-900 text-white border border-neutral-800"
-                    : "text-neutral-300 hover:bg-neutral-900 hover:text-white"
+                    ? "bg-th-active text-th-text border border-th-border"
+                    : "text-th-secondary hover:bg-th-hover hover:text-th-text"
                 }`
               }
             >
@@ -320,7 +322,7 @@ function MobileMenu({
                 height="14"
                 viewBox="0 0 14 14"
                 aria-hidden
-                className="text-neutral-600"
+                className="text-th-muted"
               >
                 <path
                   d="M5 3l4 4-4 4"

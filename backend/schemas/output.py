@@ -9,7 +9,9 @@ class OutputOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    job_id: uuid.UUID
+    job_id: uuid.UUID | None = None
+    sheet_id: uuid.UUID | None = None
+    source_type: str = "job"
     name: str
     file_size: int
     slots_filled: int

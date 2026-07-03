@@ -103,15 +103,12 @@ function schedule() {
 function start() {
   if (started) return;
   started = true;
-  // Hydrate previous session's hash so we don't re-flag the same deploy.
-  try {
-    const cached = sessionStorage.getItem(STORAGE_KEY);
-    if (cached) state.current = cached;
-  } catch {}
+  // Don't hydrate from sessionStorage — always establish the current build
+  // from the server on first tick. This avoids false "outdated" banners when
+  // the user manually refreshes after a deploy.
   void tick().then(schedule);
   window.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-      // Check immediately on focus to catch deploys that happened while away.
       void tick().then(schedule);
     } else {
       schedule();

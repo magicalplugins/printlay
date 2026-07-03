@@ -16,12 +16,22 @@ class Output(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    job_id: Mapped[uuid.UUID] = mapped_column(
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("jobs.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
+    sheet_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sticker_sheets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="job", server_default="job"
+    )
+    """'job', 'sheet', or 'dtf_sheet'."""
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     r2_key: Mapped[str] = mapped_column(String(512), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
